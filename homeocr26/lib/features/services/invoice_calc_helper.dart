@@ -1,6 +1,6 @@
 /// Bill totals matching Cash/Credit Tax Invoice (website) behaviour.
 ///
-/// Line: prefer Unit P when set, otherwise Qty × Mrp, then line Dis (%).
+/// Line: Qty × Mrp (gross), then line Dis (%). Unit P is display-only.
 /// Bill discount: Percentage of line subtotal, or fixed Amount.
 /// GST MINUS: amounts are tax-inclusive (tax extracted).
 /// GST PLUS / IGST: tax added on exclusive base.
@@ -16,17 +16,18 @@ class InvoiceCalcHelper {
     required double expenseAmt,
   }) {
     var lineDiscTotal = 0.0;
+    var grossSubtotal = 0.0;
     final nets = <({double net, double taxPct})>[];
 
     for (final line in lines) {
       final qty = line.qty;
-      if (qty <= 0 && line.mrp <= 0 && line.unitP <= 0) continue;
+      if (qty <= 0 || line.mrp <= 0) continue;
 
-      final unit = line.unitP > 0 ? line.unitP : line.mrp;
-      final gross = qty * unit;
+      final gross = qty * line.mrp;
       final lineDisc =
           line.discountPercent > 0 ? gross * line.discountPercent / 100.0 : 0.0;
       final net = (gross - lineDisc).clamp(0.0, double.infinity);
+      grossSubtotal += gross;
       lineDiscTotal += lineDisc;
       nets.add((net: net, taxPct: line.taxPercent.clamp(0.0, 100.0)));
     }
@@ -75,8 +76,8 @@ class InvoiceCalcHelper {
     final total = untaxed + taxAmount + expense;
 
     return InvoiceCalcResult(
-      // Website middle column: line total before bill-level discount.
-      subtotal: _r2(linesSubtotal),
+      // Website: Qty × Mrp before line / bill discounts.
+      subtotal: _r2(grossSubtotal),
       discountTotal: _r2(discountTotal),
       tax: _r2(taxAmount),
       taxAmount: _r2(taxAmount),

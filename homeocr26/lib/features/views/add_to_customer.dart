@@ -1,8 +1,10 @@
 import 'dart:math';
-import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
@@ -10,6 +12,7 @@ import 'package:provider/provider.dart';
 import '../../viewModels/customer_med_viewModel.dart';
 import '../../models/qr_model.dart';
 import '../services/invoice_helper.dart';
+import '../services/label_ocr_service.dart';
 import '../widgets/invoice_prefix_field.dart';
 import '../widgets/show_dialog_custom.dart';
 import '../widgets/system_safe.dart';
@@ -72,6 +75,7 @@ class AddToCustomerPage extends StatefulWidget {
 
 class _AddToCustomerPageState extends State<AddToCustomerPage> {
   MobileScannerController cameraController = MobileScannerController();
+  final ImagePicker _labelImagePicker = ImagePicker();
 
   bool hasPermission = false;
   String medicineName = "";
@@ -80,6 +84,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
   TextEditingController requiredQtyController = TextEditingController();
   TextEditingController invoicePrefixController = TextEditingController();
   bool _fetchInProgress = false;
+  bool _labelOcrInProgress = false;
 
   bool get _invoiceLocked =>
       (widget.lockedInvoiceNumber ?? '').trim().isNotEmpty;
@@ -113,15 +118,16 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       requestCamera();
       final model = Provider.of<CustomerMedViewmodel>(context, listen: false);
-      model.resetQr();
+      model.resetAllScan();
     });
   }
 
   Future<void> refreshScanner({bool keepInvoice = false}) async {
     final model = Provider.of<CustomerMedViewmodel>(context, listen: false);
-    model.resetQr();
+    model.resetAllScan();
     requiredQtyController.clear();
     _fetchInProgress = false;
+    _labelOcrInProgress = false;
     if (!keepInvoice && !_invoiceLocked) {
       invoicePrefixController.clear();
     }
@@ -152,11 +158,109 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     }
   }
 
-  bool _isScanSuccessful(CustomerMedViewmodel model) {
+  bool _isQrScanSuccessful(CustomerMedViewmodel model) {
     return model.qrValue.isNotEmpty &&
         !model.qrFetchLoading &&
         model.qrFetchError.isEmpty &&
         model.qrResponse?.result?.data != null;
+  }
+
+  bool _isLabelScanSuccessful(CustomerMedViewmodel model) {
+    return model.labelScanActive && !model.labelNotFound;
+  }
+
+  bool _isScanSuccessful(CustomerMedViewmodel model) {
+    return _isQrScanSuccessful(model) || _isLabelScanSuccessful(model);
+  }
+
+  Future<void> _scanLabelFromCamera() async {
+    if (_labelOcrInProgress) return;
+
+    setState(() => _labelOcrInProgress = true);
+    final model = Provider.of<CustomerMedViewmodel>(context, listen: false);
+    model.resetQr();
+
+    var restartScanner = false;
+    try {
+      restartScanner = cameraController.value.isRunning;
+      if (restartScanner) {
+        await cameraController.stop();
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+      }
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Photograph the physical medicine label (not a phone screen).',
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+
+      final photo = await _labelImagePicker.pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.rear,
+        imageQuality: 90,
+      );
+
+      if (!mounted) return;
+      if (photo == null) return;
+
+      final bytes = await photo.readAsBytes();
+      if (bytes.isEmpty) {
+        if (!mounted) return;
+        await StatusDialog.show(
+          context: context,
+          title: 'Scan label',
+          message: 'Could not read the photo. Please try again.',
+          type: StatusType.info,
+        );
+        return;
+      }
+
+      final text = await LabelOcrService.recognizeImageBytes(bytes);
+      if (!mounted) return;
+
+      if (text.trim().isEmpty) {
+        await StatusDialog.show(
+          context: context,
+          title: 'Scan label',
+          message:
+              'No text found on the label. Move closer, improve lighting, and try again.',
+          type: StatusType.info,
+        );
+        return;
+      }
+
+      await model.applyLabelOcrText(context, text);
+      if (mounted && _isLabelScanSuccessful(model)) {
+        restartScanner = false;
+        await cameraController.stop();
+      }
+    } catch (e, s) {
+      if (kDebugMode) debugPrint('label OCR: $e\n$s');
+      if (mounted) {
+        await StatusDialog.show(
+          context: context,
+          title: 'Scan failed',
+          message: 'Could not read the label. Try again with better lighting.',
+          type: StatusType.error,
+        );
+      }
+    } finally {
+      if (mounted && restartScanner && !_isScanSuccessful(model)) {
+        try {
+          await cameraController.start();
+        } catch (e) {
+          if (kDebugMode) debugPrint('label scan restart camera: $e');
+        }
+      }
+      if (mounted) {
+        setState(() => _labelOcrInProgress = false);
+      }
+    }
   }
 
   Future<void> fetchData(String code) async {
@@ -164,6 +268,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     _fetchInProgress = true;
 
     final model = Provider.of<CustomerMedViewmodel>(context, listen: false);
+    model.resetLabelScan();
     model.setQrValue(code);
     requiredQtyController.clear();
 
@@ -211,7 +316,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                   child: Container(
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.2), // semi-transparent glass
@@ -246,7 +351,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                   child: Container(
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.2), // semi-transparent glass
@@ -288,6 +393,9 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
               child: Consumer<CustomerMedViewmodel>(
                 builder: (context, viewModel, _) {
                   final scanSuccess = _isScanSuccessful(viewModel);
+                  final showScanner = !scanSuccess &&
+                      !viewModel.labelOcrLoading &&
+                      !_labelOcrInProgress;
                   return Column(
                     children: [
                       Expanded(
@@ -297,10 +405,21 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               SizedBox(height: height * .005),
-                              if (!scanSuccess)
+                              if (showScanner)
                                 _buildScannerSection(width, height, viewModel)
-                              else
-                                scanSuccessBanner(),
+                              else if (scanSuccess)
+                                scanSuccessBanner(viewModel)
+                              else if (viewModel.labelOcrLoading ||
+                                  _labelOcrInProgress)
+                                SizedBox(
+                                  height: min(height * 0.28, 220),
+                                  child: const Center(
+                                    child: CircularProgressIndicator(
+                                      color: Color(0xFFE07A2F),
+                                      strokeWidth: 4,
+                                    ),
+                                  ),
+                                ),
                               SizedBox(height: scanSuccess ? 8 : height * .02),
                               medicineCard(viewModel),
                             ],
@@ -335,8 +454,9 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
               children: [
                 MobileScanner(
                   controller: cameraController,
-                  fit: BoxFit.cover, 
+                  fit: BoxFit.cover,
                   onDetect: (capture) {
+                    if (capture.barcodes.isEmpty) return;
                     final code = capture.barcodes.first.rawValue;
                     if (code == null) return;
                     if (code == viewModel.qrValue) return;
@@ -344,6 +464,50 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   },
                 ),
                 scannerFocusBox(),
+                Positioned(
+                  bottom: 10,
+                  child: GestureDetector(
+                    onTap: _scanLabelFromCamera,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: BackdropFilter(
+                        filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: const Color(0xFFE07A2F).withValues(alpha: 0.8),
+                            ),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.document_scanner_outlined,
+                                color: Color(0xFFE07A2F),
+                                size: 18,
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                'Photo label',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -352,7 +516,8 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     );
   }
 
-  Widget scanSuccessBanner() {
+  Widget scanSuccessBanner(CustomerMedViewmodel model) {
+    final isLabel = _isLabelScanSuccessful(model);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
       child: Row(
@@ -372,9 +537,9 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
             ),
           ),
           const SizedBox(width: 14),
-          const Text(
-            'Successfully Scanned',
-            style: TextStyle(
+          Text(
+            isLabel ? 'Medicine found in stock' : 'Successfully Scanned',
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 16,
               fontWeight: FontWeight.w600,
@@ -436,7 +601,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     );
   }
   Widget medicineCard(CustomerMedViewmodel model) {
-    if (model.qrFetchLoading) {
+    if (model.qrFetchLoading || model.labelOcrLoading || _labelOcrInProgress) {
       return SizedBox(
         height: 200,
         child: const Padding(
@@ -444,6 +609,32 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
           child: Center(child: CircularProgressIndicator(color: const Color(0xFFE07A2F), strokeWidth: 4)),
         ),
       );
+    }
+
+    if (model.labelNotFound) {
+      return SizedBox(
+        height: 200,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.search_off, color: Colors.white70, size: 40),
+              const SizedBox(height: 12),
+              Text(
+                model.labelOcrError.isNotEmpty
+                    ? model.labelOcrError
+                    : 'Product not found',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_isLabelScanSuccessful(model)) {
+      return _buildLabelMedicineCard(model);
     }
 
     if (model.qrValue.isEmpty) {
@@ -465,7 +656,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(30),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15), // blur for glass effect
+          filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15), // blur for glass effect
           child: Container(
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: 0.15), // semi-transparent
@@ -505,6 +696,86 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                 const Divider(color: Colors.white54),
                 _rowTextField(
                   "Required Quantity",
+                  requiredQtyController,
+                  icon: Icons.shopping_cart,
+                  keyboardType: TextInputType.number,
+                ),
+                const Divider(color: Colors.white54),
+                _buildInvoiceField(model),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLabelMedicineCard(CustomerMedViewmodel model) {
+    final medicineOptions = model.labelMedicineOptions;
+    final potencyOptions = model.labelPotencyOptions;
+    final packingOptions = model.labelPackingOptions;
+    final stockQty = model.availableLabelStockQuantity();
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(30),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.2),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black12.withValues(alpha: 0.15),
+                  blurRadius: 20,
+                  offset: const Offset(0, 7),
+                ),
+              ],
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            child: Column(
+              children: [
+                _LabelDropdown(
+                  label: 'Medicine Name',
+                  icon: Icons.medication,
+                  value: model.labelMedicine,
+                  items: medicineOptions,
+                  onChanged: (value) =>
+                      model.setLabelMedicine(context, value),
+                ),
+                const Divider(color: Colors.white54),
+                _LabelDropdown(
+                  label: 'Potency',
+                  icon: Icons.percent,
+                  value: model.labelPotency,
+                  items: potencyOptions,
+                  enabled: model.labelMedicine != null,
+                  onChanged: model.setLabelPotency,
+                ),
+                const Divider(color: Colors.white54),
+                _LabelDropdown(
+                  label: 'Packing',
+                  icon: Icons.inventory_2_outlined,
+                  value: model.labelPacking,
+                  items: packingOptions,
+                  enabled: model.labelMedicine != null,
+                  onChanged: model.setLabelPacking,
+                ),
+                const Divider(color: Colors.white54),
+                _rowItem(
+                  'Available Stock',
+                  _formatQty(stockQty),
+                  icon: Icons.inventory_2,
+                ),
+                const Divider(color: Colors.white54),
+                _rowTextField(
+                  'Required Quantity',
                   requiredQtyController,
                   icon: Icons.shopping_cart,
                   keyboardType: TextInputType.number,
@@ -695,7 +966,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(30),
                     child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                      filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                       child: ElevatedButton.icon(
                         onPressed: () async {
                           double quantity =
@@ -703,8 +974,6 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
 
                           final prefix = invoicePrefixController.text.trim();
                           final invoiceNumber = _fullInvoiceNumber;
-                          final qrData = model.qrResponse?.result?.data;
-                          final scanQty = model.availableScanQuantity(qrData);
 
                           if (prefix.isEmpty) {
                             StatusDialog.show(
@@ -713,18 +982,82 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                               message: 'Invoice number is required',
                               type: StatusType.info,
                             );
-                          } else if (model.qrResponse?.result?.data == null) {
-                            StatusDialog.show(
-                              context: context,
-                              title: 'QR Error',
-                              message: 'Scan a product QR first',
-                              type: StatusType.info,
-                            );
-                          } else if (quantity == 0.0) {
+                            return;
+                          }
+
+                          if (quantity == 0.0) {
                             StatusDialog.show(
                               context: context,
                               title: "Quantity Error",
                               message: "Quantity must be greater than 0",
+                              type: StatusType.info,
+                            );
+                            return;
+                          }
+
+                          if (_isLabelScanSuccessful(model)) {
+                            final scanQty = model.availableLabelStockQuantity();
+                            if (model.selectedLabelStock == null) {
+                              StatusDialog.show(
+                                context: context,
+                                title: 'Selection Error',
+                                message:
+                                    'Select medicine, potency, and packing from stock.',
+                                type: StatusType.info,
+                              );
+                              return;
+                            }
+                            if (quantity > scanQty) {
+                              StatusDialog.show(
+                                context: context,
+                                title: "Quantity Error",
+                                message:
+                                    'Required quantity is greater than stock quantity '
+                                    '(${_formatQty(scanQty)})',
+                                type: StatusType.info,
+                              );
+                              return;
+                            }
+
+                            final result = await model.addLabelStockToInvoice(
+                              qty: quantity,
+                              context: context,
+                              invoiceNumber: invoiceNumber,
+                            );
+
+                            if (!context.mounted) return;
+
+                            if (result == 'success') {
+                              await StatusDialog.show(
+                                context: context,
+                                title: 'Success',
+                                message: 'Medicine quantity added',
+                                type: StatusType.success,
+                              );
+                              try {
+                                await cameraController.stop();
+                              } catch (_) {}
+                              if (!context.mounted) return;
+                              Navigator.of(context).maybePop(true);
+                            } else if (context.mounted) {
+                              await StatusDialog.show(
+                                context: context,
+                                title: 'Failed',
+                                message: result,
+                                type: StatusType.error,
+                              );
+                            }
+                            return;
+                          }
+
+                          final qrData = model.qrResponse?.result?.data;
+                          final scanQty = model.availableScanQuantity(qrData);
+
+                          if (model.qrResponse?.result?.data == null) {
+                            StatusDialog.show(
+                              context: context,
+                              title: 'Scan Error',
+                              message: 'Scan a product QR or label first',
                               type: StatusType.info,
                             );
                           } else if (quantity > scanQty) {
@@ -799,7 +1132,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(30),
                     child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                      filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                       child: ElevatedButton.icon(
                         onPressed: refreshScanner,
                         icon: const Icon(Icons.clear, color: Colors.white),
@@ -823,6 +1156,96 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
               ],
             );
           }
+      ),
+    );
+  }
+}
+
+class _LabelDropdown extends StatelessWidget {
+  const _LabelDropdown({
+    required this.label,
+    required this.icon,
+    required this.items,
+    required this.onChanged,
+    this.value,
+    this.enabled = true,
+  });
+
+  final String label;
+  final IconData icon;
+  final String? value;
+  final List<String> items;
+  final bool enabled;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeValue =
+        value != null && items.any((e) => e == value) ? value : null;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                icon,
+                size: 20,
+                color: const Color(0xFFE07A2F).withValues(alpha: 0.85),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: safeValue,
+                isExpanded: true,
+                hint: Text(
+                  items.isEmpty ? 'Not available' : 'Select',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.45),
+                    fontSize: 12,
+                  ),
+                ),
+                dropdownColor: const Color(0xff2c505c),
+                iconEnabledColor: Colors.white70,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                items: items
+                    .map(
+                      (e) => DropdownMenuItem<String>(
+                        value: e,
+                        child: Text(e),
+                      ),
+                    )
+                    .toList(),
+                onChanged: enabled && items.isNotEmpty ? onChanged : null,
+                onTap: () {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  SystemChannels.textInput.invokeMethod('TextInput.hide');
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

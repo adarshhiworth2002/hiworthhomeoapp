@@ -2,6 +2,7 @@ import '../features/services/invoice_calc_helper.dart';
 
 class InvoiceLineModel {
   const InvoiceLineModel({
+    this.id,
     this.productName,
     this.potency,
     this.company,
@@ -27,6 +28,7 @@ class InvoiceLineModel {
     this.rack,
   });
 
+  final int? id;
   final String? productName;
   final String? potency;
   final String? company;
@@ -65,6 +67,9 @@ class InvoiceLineModel {
 
   factory InvoiceLineModel.fromJson(Map<String, dynamic> json) {
     return InvoiceLineModel(
+      id: json['id'] is int
+          ? json['id'] as int
+          : int.tryParse('${json['id']}'),
       productName: _str(json, const [
         'product_name',
         'product_id_name',

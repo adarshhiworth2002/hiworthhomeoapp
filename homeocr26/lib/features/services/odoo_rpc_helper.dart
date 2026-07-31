@@ -645,6 +645,80 @@ class OdooRpcHelper {
     }
   }
 
+  /// Update an existing pharmacy invoice line (edit bill).
+  static Future<bool> updateCustomerInvoiceLine(
+    String sessionId, {
+    required int lineId,
+    double? quantity,
+    double? priceUnit,
+    double? discount,
+    String? batch,
+    String? hsn,
+    String? rack,
+  }) async {
+    if (lineId <= 0) return false;
+    try {
+      final available = await _modelFields(sessionId, 'account.move.line');
+      final vals = <String, dynamic>{};
+
+      void put(String key, dynamic value) {
+        if (!available.contains(key)) return;
+        if (value == null) return;
+        vals[key] = value;
+      }
+
+      final qtyField = available.contains('quantity')
+          ? 'quantity'
+          : (available.contains('qty') ? 'qty' : null);
+      if (quantity != null && qtyField != null) {
+        vals[qtyField] = quantity;
+      }
+
+      final unit = priceUnit;
+      if (unit != null && unit > 0) {
+        put('price_unit', unit);
+        put('u_price', unit);
+        put('mrp', unit);
+      }
+      if (discount != null && discount >= 0) {
+        put('discount', discount);
+      }
+      if (batch != null && batch.trim().isNotEmpty) {
+        if (available.contains('batch_no')) {
+          vals['batch_no'] = batch.trim();
+        } else if (available.contains('batch')) {
+          vals['batch'] = batch.trim();
+        }
+      }
+      if (hsn != null && hsn.trim().isNotEmpty) {
+        if (available.contains('hsn')) vals['hsn'] = hsn.trim();
+        if (available.contains('hsn_code')) vals['hsn_code'] = hsn.trim();
+      }
+      if (rack != null && rack.trim().isNotEmpty) {
+        if (available.contains('rack')) vals['rack'] = rack.trim();
+      }
+
+      if (vals.isEmpty) return true;
+
+      await callKw(
+        sessionId: sessionId,
+        model: 'account.move.line',
+        method: 'write',
+        args: [
+          [lineId],
+          vals,
+        ],
+      );
+      if (kDebugMode) {
+        debugPrint('updateCustomerInvoiceLine #$lineId → $vals');
+      }
+      return true;
+    } catch (e) {
+      if (kDebugMode) debugPrint('updateCustomerInvoiceLine failed: $e');
+      return false;
+    }
+  }
+
   /// Find or create a `pharmacy.customer` so the website many2one can show it.
   /// Returns the pharmacy.customer id (never a res.partner id).
   static Future<int?> findOrCreatePharmacyCustomer({
@@ -764,6 +838,7 @@ class OdooRpcHelper {
     String? gstType,
     bool? expiryMedicineBill,
     int? discountCategoryId,
+    bool clearDiscountCategory = false,
     String? discountType,
     double? discountRate,
     String? remarks,
@@ -904,7 +979,9 @@ class OdooRpcHelper {
       if (expiryMedicineBill != null) {
         putIf('expiry_medicine_bill', expiryMedicineBill);
       }
-      if (discountCategoryId != null) {
+      if (clearDiscountCategory && available.contains('discount_category_id')) {
+        vals['discount_category_id'] = false;
+      } else if (discountCategoryId != null) {
         putIf('discount_category_id', discountCategoryId);
       }
       if (discountType != null) {
@@ -1504,6 +1581,9 @@ class OdooRpcHelper {
           'group',
           'hsn',
           'hsn_code',
+          'gst',
+          'gst_percent',
+          'tax_percent',
           'pharmacy_company_id',
           'company_id',
           'packing_id',
@@ -1574,6 +1654,21 @@ class OdooRpcHelper {
             final rack = pick(const ['rack', 'rack_id_name']);
             if (group != null) entry['group'] = group;
             if (hsn != null) entry['hsn'] = hsn;
+            final taxRaw =
+                map['gst'] ?? map['gst_percent'] ?? map['tax_percent'];
+            if (taxRaw is num && taxRaw > 0) {
+              final n = taxRaw.toDouble();
+              entry['tax'] = n == n.roundToDouble()
+                  ? n.toInt().toString()
+                  : n.toStringAsFixed(2);
+            } else if (taxRaw != null && taxRaw != false) {
+              final n = double.tryParse('$taxRaw');
+              if (n != null && n > 0) {
+                entry['tax'] = n == n.roundToDouble()
+                    ? n.toInt().toString()
+                    : n.toStringAsFixed(2);
+              }
+            }
             if (company != null) entry['company'] = company;
             if (pack != null) entry['pack'] = pack;
             if (rack != null) entry['rack'] = rack;
@@ -1649,6 +1744,11 @@ class OdooRpcHelper {
               groupOk) {
             defaults['hsn'] = best['hsn']!;
           }
+          if ((defaults['tax'] ?? '').isEmpty &&
+              (best['tax'] ?? '').isNotEmpty &&
+              groupOk) {
+            defaults['tax'] = best['tax']!;
+          }
           if (groupOk) {
             for (final key in const ['company', 'pack', 'rack']) {
               if ((defaults[key] ?? '').isEmpty &&
@@ -1710,7 +1810,7 @@ class OdooRpcHelper {
           ],
         ],
         kwargs: {
-          'fields': ['id', 'name', 'hsn'],
+          'fields': ['id', 'name', 'hsn', 'tax_percent', 'gst', 'gst_percent', 'tax', 'type'],
           'limit': 3,
         },
       );
@@ -1720,10 +1820,44 @@ class OdooRpcHelper {
         final hsn = (map['hsn'] ?? '').toString().trim();
         if (hsn.isEmpty || hsn == 'false') continue;
         defaults['hsn'] = hsn;
+        _applyTaxFromGroupMap(defaults, map);
         return;
       }
     } catch (e) {
       if (kDebugMode) debugPrint('_fillHsnFromPharmacyGroup: $e');
+    }
+  }
+
+  /// Map pharmacy.group tax/gst fields into potency defaults.
+  static void _applyTaxFromGroupMap(
+    Map<String, String> defaults,
+    Map<String, dynamic> map,
+  ) {
+    if ((defaults['tax'] ?? '').trim().isNotEmpty) return;
+    for (final key in const [
+      'tax_percent',
+      'gst_percent',
+      'gst',
+      'tax',
+    ]) {
+      final raw = map[key];
+      if (raw == null || raw == false) continue;
+      final n = raw is num ? raw.toDouble() : double.tryParse('$raw');
+      if (n != null && n > 0) {
+        defaults['tax'] = n == n.roundToDouble()
+            ? n.toInt().toString()
+            : n.toStringAsFixed(2);
+        return;
+      }
+    }
+    final type = (map['type'] ?? '').toString().trim();
+    if (type.isNotEmpty && type != 'false') {
+      final n = double.tryParse(type.replaceAll('%', '').trim());
+      if (n != null && n > 0) {
+        defaults['tax'] = n == n.roundToDouble()
+            ? n.toInt().toString()
+            : n.toStringAsFixed(2);
+      }
     }
   }
 
@@ -2887,7 +3021,29 @@ class OdooRpcHelper {
                 'dis2_percent',
                 'u_price',
               }
-            : <String>{};
+            : model == 'entry.stock'
+                ? {
+                    'id',
+                    'uid',
+                    'barcode',
+                    'product_barcode',
+                    'qr_data',
+                    'qr_code',
+                    'default_code',
+                    'stock_display_id',
+                    'display_id',
+                    'medicine_id',
+                    'batch',
+                    'batch_no',
+                    'potency_id',
+                    'packing_id',
+                    'pharmacy_company_id',
+                    'pharmacy_group_id',
+                    'item_qty',
+                    'stock',
+                    'mrp',
+                  }
+                : <String>{};
     if (fallback.isNotEmpty) {
       _fieldsCache[model] = fallback;
     }

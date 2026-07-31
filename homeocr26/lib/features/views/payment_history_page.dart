@@ -19,6 +19,8 @@ class PaymentHistoryPage extends StatefulWidget {
 
 class _PaymentHistoryPageState extends State<PaymentHistoryPage>
     with LiveRefreshMixin, SingleTickerProviderStateMixin {
+  static const _snackDuration = Duration(milliseconds: 900);
+
   late final PaymentHistoryViewModel _viewModel;
   late final TextEditingController _searchController;
   late final TabController _tabController;
@@ -94,18 +96,33 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
         .toList(growable: false);
   }
 
+  void _briefSnack(String message, {VoidCallback? onUndo}) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: _snackDuration,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        action: onUndo == null
+            ? null
+            : SnackBarAction(
+                label: 'Undo',
+                onPressed: onUndo,
+              ),
+      ),
+    );
+  }
+
   Future<void> _settle(InvoiceSummaryModel item) async {
     await SettledPaymentStore.settle(item);
     await _reloadSettled(live: _viewModel.items);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${item.displayNumber} moved to Settled'),
-        action: SnackBarAction(
-          label: 'Undo',
-          onPressed: () => _restore(item),
-        ),
-      ),
+    _briefSnack(
+      '${item.displayNumber} moved to Settled',
+      onUndo: () => _restore(item),
     );
   }
 
@@ -113,9 +130,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
     await SettledPaymentStore.restore(item);
     await _reloadSettled(live: _viewModel.items);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${item.displayNumber} restored to History')),
-    );
+    _briefSnack('${item.displayNumber} restored to History');
   }
 
   @override

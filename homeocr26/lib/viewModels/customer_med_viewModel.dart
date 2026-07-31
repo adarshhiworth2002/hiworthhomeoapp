@@ -10,10 +10,14 @@ import '../features/services/WebApi/web_api_impl.dart';
 import '../features/services/api_request_helper.dart';
 import '../features/services/api_response_helper.dart';
 import '../features/services/invoice_search_service.dart';
+import '../features/services/label_ocr_parser.dart';
+import '../features/services/label_stock_service.dart';
+import '../features/services/odoo_rpc_helper.dart';
 import '../features/services/qr_data_helper.dart';
 import '../features/services/appConfig.dart';
 import '../features/services/endPoints.dart';
 import '../models/qr_model.dart';
+import '../models/stock_item_model.dart';
 
 class CustomerMedViewmodel extends ChangeNotifier {
   final http.Client httpClient;
@@ -29,6 +33,15 @@ class CustomerMedViewmodel extends ChangeNotifier {
   String qrValue = "";
   String qrUid = "";
   QrResponseModel? qrResponse;
+
+  bool labelOcrLoading = false;
+  bool labelScanActive = false;
+  bool labelNotFound = false;
+  String labelOcrError = "";
+  List<StockItemModel> labelStockPool = [];
+  String? labelMedicine;
+  String? labelPotency;
+  String? labelPacking;
 
   /// From the last successful add_to_invoice (draft `name` is often `/`).
   int? lastAddedInvoiceId;
@@ -54,6 +67,393 @@ class CustomerMedViewmodel extends ChangeNotifier {
     qrFetchError = "";
     qrResponse = null;
     notifyListeners();
+  }
+
+  void resetLabelScan() {
+    labelOcrLoading = false;
+    labelScanActive = false;
+    labelNotFound = false;
+    labelOcrError = "";
+    labelStockPool = [];
+    labelMedicine = null;
+    labelPotency = null;
+    labelPacking = null;
+    notifyListeners();
+  }
+
+  void resetAllScan() {
+    resetLabelScan();
+    resetQr();
+  }
+
+  List<String> get labelMedicineOptions =>
+      LabelStockService.uniqueMedicines(labelStockPool);
+
+  List<String> get labelPotencyOptions {
+    final med = labelMedicine;
+    if (med == null || med.trim().isEmpty) return const [];
+    return LabelStockService.potenciesFor(labelStockPool, med);
+  }
+
+  List<String> get labelPackingOptions {
+    final med = labelMedicine;
+    if (med == null || med.trim().isEmpty) return const [];
+    return LabelStockService.packingsFor(
+      labelStockPool,
+      med,
+      labelPotency,
+    );
+  }
+
+  StockItemModel? get selectedLabelStock => LabelStockService.resolveSelection(
+        labelStockPool,
+        medicine: labelMedicine,
+        potency: labelPotency,
+        packing: labelPacking,
+      );
+
+  double availableLabelStockQuantity() {
+    final item = selectedLabelStock;
+    if (item == null) return 0;
+    return item.availableStock ?? item.stock ?? item.itemQty ?? 0;
+  }
+
+  Future<void> applyLabelOcrText(
+    BuildContext context,
+    String ocrText,
+  ) async {
+    labelOcrLoading = true;
+    labelOcrError = "";
+    labelNotFound = false;
+    labelScanActive = false;
+    notifyListeners();
+
+    try {
+      final parsed = LabelOcrParser.parse(ocrText);
+      if (kDebugMode) {
+        debugPrint(
+          'label parsed: name=${parsed.medicineName} '
+          'potency=${parsed.potency} packing=${parsed.packing}',
+        );
+      }
+      if (!parsed.hasAnyField) {
+        labelNotFound = true;
+        labelOcrError = 'Could not read medicine details from the label.';
+        return;
+      }
+
+      final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
+      final sessionId = loginModel.sessionId ?? '';
+      if (sessionId.isEmpty) {
+        labelOcrError = 'Session expired. Please log in again.';
+        return;
+      }
+
+      final matches = await LabelStockService.findMatches(sessionId, parsed);
+      if (matches.isEmpty) {
+        labelNotFound = true;
+        labelOcrError = 'Product not found';
+        return;
+      }
+
+      labelStockPool = matches;
+      labelScanActive = true;
+
+      final best = matches.first;
+      labelMedicine = best.medicineLabel;
+
+      final parsedPot = parsed.potency?.trim();
+      final potencyOptions =
+          LabelStockService.potenciesFor(labelStockPool, labelMedicine!);
+      if (parsedPot != null &&
+          parsedPot.isNotEmpty &&
+          potencyOptions.any(
+            (p) => p.toLowerCase() == parsedPot.toLowerCase(),
+          )) {
+        labelPotency = potencyOptions.firstWhere(
+          (p) => p.toLowerCase() == parsedPot.toLowerCase(),
+        );
+      } else if (potencyOptions.length == 1) {
+        labelPotency = potencyOptions.first;
+      } else {
+        labelPotency = best.potency?.trim().isNotEmpty == true
+            ? best.potency
+            : null;
+      }
+
+      final parsedPack = parsed.packing?.trim();
+      final packingOptions = LabelStockService.packingsFor(
+        labelStockPool,
+        labelMedicine!,
+        labelPotency,
+      );
+      if (parsedPack != null &&
+          parsedPack.isNotEmpty &&
+          packingOptions.any(
+            (p) => p.toLowerCase() == parsedPack.toLowerCase(),
+          )) {
+        labelPacking = packingOptions.firstWhere(
+          (p) => p.toLowerCase() == parsedPack.toLowerCase(),
+        );
+      } else if (packingOptions.length == 1) {
+        labelPacking = packingOptions.first;
+      } else {
+        labelPacking = best.packing?.trim().isNotEmpty == true
+            ? best.packing
+            : null;
+      }
+    } catch (e, s) {
+      if (kDebugMode) debugPrint('applyLabelOcrText: $e\n$s');
+      labelOcrError = 'Failed to read label. Please try again.';
+    } finally {
+      labelOcrLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> setLabelMedicine(BuildContext context, String? medicine) async {
+    labelMedicine = medicine;
+    labelPotency = null;
+    labelPacking = null;
+
+    if (medicine != null && medicine.trim().isNotEmpty) {
+      final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
+      final sessionId = loginModel.sessionId ?? '';
+      if (sessionId.isNotEmpty) {
+        final rows = await LabelStockService.searchStock(sessionId, medicine);
+        if (rows.isNotEmpty) {
+          labelStockPool = rows;
+        }
+      }
+
+      final potencyOptions = labelPotencyOptions;
+      if (potencyOptions.length == 1) {
+        labelPotency = potencyOptions.first;
+      }
+
+      final packingOptions = labelPackingOptions;
+      if (packingOptions.length == 1) {
+        labelPacking = packingOptions.first;
+      }
+    }
+
+    notifyListeners();
+  }
+
+  void setLabelPotency(String? potency) {
+    labelPotency = potency;
+    final packingOptions = labelPackingOptions;
+    if (packingOptions.length == 1) {
+      labelPacking = packingOptions.first;
+    } else if (labelPacking != null &&
+        !packingOptions.any(
+          (p) => p.toLowerCase() == labelPacking!.toLowerCase(),
+        )) {
+      labelPacking = null;
+    }
+    notifyListeners();
+  }
+
+  void setLabelPacking(String? packing) {
+    labelPacking = packing;
+    notifyListeners();
+  }
+
+  Future<String?> _resolveOdooWebSession(
+    BuildContext context, {
+    bool forceRefresh = false,
+  }) async {
+    if (forceRefresh) OdooRpcHelper.invalidateWebSession();
+
+    final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
+    var sid = loginModel.sessionId ?? '';
+    final email = (loginModel.loginEmail ?? '').trim();
+    final pass = loginModel.loginPassword ?? '';
+    if (email.isNotEmpty && pass.isNotEmpty) {
+      final webSid = await OdooRpcHelper.cachedWebSessionId(
+        db: LoginViewmodel.dbName,
+        login: email,
+        password: pass,
+      );
+      if (webSid != null && webSid.isNotEmpty) sid = webSid;
+    }
+    return sid.isEmpty ? null : sid;
+  }
+
+  Future<String> _tryAddToInvoice({
+    required WebApiImpl webApi,
+    required String sessionId,
+    required String invoiceNumber,
+    required num qtyValue,
+    required Map<String, dynamic> params,
+  }) async {
+    if (kDebugMode) {
+      debugPrint('label add_to_invoice params: $params');
+    }
+
+    final response = await webApi.addMedicineQty(
+      userDetails: ApiRequestHelper.jsonRpcCall(params),
+      sessionId: sessionId,
+    );
+
+    if (response.statusCode != 200) {
+      return 'Unable to add medicine (HTTP ${response.statusCode})';
+    }
+
+    final respo = json.decode(response.body) as Map<String, dynamic>;
+    if (ApiResponseHelper.isSuccess(respo)) {
+      _captureAddInvoiceMeta(respo);
+      return 'success';
+    }
+
+    return ApiResponseHelper.errorMessage(
+      respo,
+      fallback: 'Failed to add medicine quantity',
+    );
+  }
+
+  Future<String> addLabelStockToInvoice({
+    required double qty,
+    required BuildContext context,
+    required String invoiceNumber,
+  }) async {
+    lastAddedInvoiceId = null;
+    lastAddedInvoiceName = null;
+
+    final stock = selectedLabelStock;
+    if (stock == null) {
+      return 'Select medicine, potency, and packing from stock.';
+    }
+
+    try {
+      addingLoading = true;
+      notifyListeners();
+
+      final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
+      final flutterSid = loginModel.sessionId ?? '';
+      if (flutterSid.isEmpty) {
+        return 'Session expired. Please log in again.';
+      }
+
+      final trimmedInvoice = invoiceNumber.trim();
+      if (trimmedInvoice.isEmpty) {
+        return 'Invoice number is required';
+      }
+
+      final qtyValue = qty == qty.roundToDouble() ? qty.toInt() : qty;
+      final webApi = WebApiImpl();
+
+      // Path 1: Flutter add_to_invoice (uses app session — no Odoo web RPC).
+      if (stock.stockId != null && stock.stockId! > 0) {
+        for (final key in const ['stock_display_id', 'stock_id']) {
+          final result = await _tryAddToInvoice(
+            webApi: webApi,
+            sessionId: flutterSid,
+            invoiceNumber: trimmedInvoice,
+            qtyValue: qtyValue,
+            params: {
+              'invoice_number': trimmedInvoice,
+              key: stock.stockId,
+              'quantity': qtyValue,
+            },
+          );
+          if (result == 'success') return result;
+        }
+
+        final detailResult = await _tryAddToInvoice(
+          webApi: webApi,
+          sessionId: flutterSid,
+          invoiceNumber: trimmedInvoice,
+          qtyValue: qtyValue,
+          params: {
+            'invoice_number': trimmedInvoice,
+            'stock_display_id': stock.stockId,
+            'medicine_name': stock.medicineLabel,
+            if ((stock.potency ?? '').trim().isNotEmpty)
+              'potency': stock.potency!.trim(),
+            if ((stock.packing ?? '').trim().isNotEmpty)
+              'packing': stock.packing!.trim(),
+            'quantity': qtyValue,
+          },
+        );
+        if (detailResult == 'success') return detailResult;
+      }
+
+      // Path 2: QR token from Odoo web session (optional).
+      final odooSid = await _resolveOdooWebSession(context);
+      if (odooSid != null) {
+        final token = await OdooRpcHelper.findEntryStockQrToken(
+          odooSid,
+          stockDisplayId: stock.stockId,
+          medicine: stock.medicineLabel,
+          potency: stock.potency,
+        );
+
+        if (token != null && token.isNotEmpty) {
+          final result = await _tryAddToInvoice(
+            webApi: webApi,
+            sessionId: flutterSid,
+            invoiceNumber: trimmedInvoice,
+            qtyValue: qtyValue,
+            params: {
+              'invoice_number': trimmedInvoice,
+              'qr_data': token,
+              'quantity': qtyValue,
+            },
+          );
+          if (result == 'success') return result;
+        }
+      }
+
+      // Path 3: Odoo RPC write (refresh web session once on failure).
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final rpcSid = await _resolveOdooWebSession(
+          context,
+          forceRefresh: attempt > 0,
+        );
+        if (rpcSid == null || rpcSid.isEmpty) break;
+
+        final stockRow = await OdooRpcHelper.findEntryStockRow(
+          rpcSid,
+          stockDisplayId: stock.stockId,
+          medicine: stock.medicineLabel,
+          potency: stock.potency,
+        );
+        if (stockRow == null) continue;
+
+        final invoiceId = await OdooRpcHelper.findCustomerInvoiceId(
+          rpcSid,
+          trimmedInvoice,
+        );
+        if (invoiceId == null || invoiceId <= 0) {
+          return 'Invoice not found on server.';
+        }
+
+        final ok = await OdooRpcHelper.addStockLineToCustomerInvoice(
+          rpcSid,
+          invoiceId: invoiceId,
+          stockRow: stockRow,
+          quantity: qty,
+        );
+        if (ok) {
+          lastAddedInvoiceId = invoiceId;
+          lastAddedInvoiceName = trimmedInvoice;
+          return 'success';
+        }
+      }
+
+      return 'Failed to add medicine to invoice. Please log in again and retry.';
+    } catch (e, s) {
+      if (kDebugMode) debugPrint('addLabelStockToInvoice: $e\n$s');
+      final message = e.toString().toLowerCase();
+      if (message.contains('session expired')) {
+        return 'Session expired. Please log in again and retry.';
+      }
+      return 'Network error. Please check your connection and try again.';
+    } finally {
+      addingLoading = false;
+      notifyListeners();
+    }
   }
 
   void setQrValue(String value) {

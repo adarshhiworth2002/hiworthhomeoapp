@@ -143,6 +143,8 @@ class _BillLine {
   int? stockDisplayId;
   /// Odoo `account.move` id from add_to_invoice (draft name is often `/`).
   int? serverInvoiceId;
+  /// Odoo `account.move.line` id when editing an existing bill line.
+  int? odooLineId;
 
   bool get hasRequiredLineFields {
     bool filled(String? v) => (v ?? '').trim().isNotEmpty;
@@ -345,6 +347,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   String? _gstType = 'GST MINUS';
   String? _discountType = 'Percentage';
   _DiscountCategoryOption? _discountCategory;
+  String? _pendingDiscountCategoryName;
   List<_DiscountCategoryOption> _discountCategories = [];
   bool _expiryMedicineBill = false;
   bool _saving = false;
@@ -464,6 +467,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
               : (g.contains('no') ? 'No GST' : 'GST MINUS'));
     }
     _expiryMedicineBill = inv.expiryMedicineBill;
+    final discCat = (inv.discountCategory ?? '').trim();
+    if (discCat.isNotEmpty) {
+      _pendingDiscountCategoryName = discCat;
+    }
     if (inv.discountType != null) {
       final t = inv.discountType!.toLowerCase();
       _discountType =
@@ -487,6 +494,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
     _lines = inv.lines.map((l) {
       final line = _BillLine();
+      line.odooLineId = l.id;
       line.applyFromStock(_LineTemplate.fromInvoiceLine(l));
       final qty = l.qty;
       if (qty != null) {
@@ -512,6 +520,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       }
       return line;
     }).toList();
+    _recalcAllLinePrices();
     // Existing draft lines open collapsed (tap Edit for full form).
     _editingLineIndex = null;
   }
@@ -554,6 +563,26 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       return;
     }
     setState(() => _totals = result);
+  }
+
+  static String _formatLineNum(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+
+  /// Website: Unit TP / Unit P = MRP minus line discount (%); not tax-inclusive.
+  void _recalcLinePrices(_BillLine line) {
+    final mrp = InvoiceCalcHelper.parseNum(line.mrp);
+    if (mrp <= 0) return;
+    final disc = InvoiceCalcHelper.parseNum(line.discount);
+    final unitTp =
+        disc > 0 ? mrp * (1 - disc / 100.0) : mrp;
+    line.unitP = _formatLineNum(unitTp);
+    line.revision++;
+  }
+
+  void _recalcAllLinePrices() {
+    for (final line in _lines) {
+      _recalcLinePrices(line);
+    }
   }
 
   void _seedFromExistingInvoices() {
@@ -772,6 +801,18 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
             .map(_DiscountCategoryOption.fromOdoo)
             .where((e) => e.name.isNotEmpty && e.id > 0)
             .toList(growable: false);
+        final pending = (_pendingDiscountCategoryName ?? '').trim();
+        if (pending.isNotEmpty && _discountCategory == null) {
+          final want = pending.toLowerCase();
+          for (final c in _discountCategories) {
+            if (c.name.toLowerCase() == want ||
+                c.displayName.toLowerCase() == want) {
+              _discountCategory = c;
+              break;
+            }
+          }
+          _pendingDiscountCategoryName = null;
+        }
       });
     } catch (e) {
       if (kDebugMode) debugPrint('discount categories load: $e');
@@ -970,13 +1011,16 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     return _pickBestStockRow(matches);
   }
 
-  Future<void> _syncLineFromStock(_BillLine line) async {
+  Future<void> _syncLineFromStock(
+    _BillLine line, {
+    bool potencyOnly = false,
+  }) async {
     final product = (line.product ?? '').trim();
     final potency = (line.potency ?? '').trim();
     if (product.isEmpty && potency.isEmpty) return;
 
-    // Product + potency → exact medicine row.
-    if (product.isNotEmpty && potency.isNotEmpty) {
+    // Product + potency → exact medicine row (not when potency-only pick).
+    if (!potencyOnly && product.isNotEmpty && potency.isNotEmpty) {
       final rows = await _stockRowsForProduct(product);
       if (!mounted) return;
       final match = _exactStockMatch(line, rows);
@@ -994,8 +1038,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       return;
     }
 
-    // Website: potency without product → fill related fields, keep product blank.
-    if (product.isEmpty && potency.isNotEmpty) {
+    // Website: potency → Group / Tax / HSN only (product may be blank or set).
+    if (potency.isNotEmpty && (product.isEmpty || potencyOnly)) {
       // 1) Live Odoo entry.stock by potency_id (website onchange source).
       try {
         final sid = await _odooSessionId();
@@ -1183,8 +1227,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       } catch (e) {
         if (kDebugMode) debugPrint('potency stock fallback: $e');
       }
-      potencyRows = fromTemplates.values.toList()
-        ..sort((a, b) => (a['name'] ?? '').compareTo(b['name'] ?? ''));
+      potencyRows = fromTemplates.values.toList();
     }
 
     final potencyNames = potencyRows
@@ -1241,26 +1284,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         _addOpt(_hsns, _hsnKeys, hsn);
       }
     }
-    if (!onlyEmpty || (line.company ?? '').trim().isEmpty) {
-      setStr(
-        (v) => line.company = v,
-        defaults['company'],
-        _companies,
-        _companyKeys,
-      );
-    }
-    if (!onlyEmpty || (line.pack ?? '').trim().isEmpty) {
-      setStr((v) => line.pack = v, defaults['pack'], _packs, _packKeys);
-    }
-    if (!onlyEmpty || line.rack.trim().isEmpty) {
-      final rack = (defaults['rack'] ?? '').trim();
-      if (rack.isNotEmpty) {
-        line.rack = rack;
-        _addOpt(_racks, _rackKeys, rack);
+    if (!onlyEmpty || line.tax.trim().isEmpty) {
+      final tax = (defaults['tax'] ?? '').trim();
+      if (tax.isNotEmpty) {
+        line.tax = tax;
       }
-    }
-    if (!onlyEmpty || (line.batch ?? '').trim().isEmpty) {
-      setStr((v) => line.batch = v, defaults['batch'], _batches, _batchKeys);
     }
     line.revision++;
   }
@@ -1493,12 +1521,36 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       line.revision++;
     });
 
-    // Website: selecting potency fills Group/HSN/etc. even with blank product.
-    if (title == 'Potency' || title == 'Company' || title == 'Pack') {
+    // Website: potency → Group / Tax / HSN only; company/pack sync full stock row.
+    if (title == 'Potency') {
+      await _syncLineFromStock(line, potencyOnly: true);
+    } else if (title == 'Company' || title == 'Pack') {
       await _syncLineFromStock(line);
     } else {
       _recalculate();
     }
+  }
+
+  Future<void> _pickPotencyForLine(_BillLine line) async {
+    if (_potencies.isEmpty || _potencyMasterRows.isEmpty) {
+      await _loadMasterDropdowns();
+      if (!mounted) return;
+    }
+    final picked = await _pickLineValue(
+      title: 'Potency',
+      options: List<String>.from(_potencies),
+      selected: line.potency,
+      rememberInto: _potencies,
+      rememberKeys: _potencyKeys,
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      line.potency = picked.isEmpty ? null : picked;
+      line.revision++;
+    });
+
+    await _syncLineFromStock(line, potencyOnly: true);
   }
 
   String? _primaryAddQrToken(QrData data) {
@@ -1592,7 +1644,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
             manuf.isNotEmpty) {
           line.manuf = manuf;
         }
-        if (line.unitP.trim().isEmpty && unitP != null) line.unitP = unitP;
+        if (line.unitP.trim().isEmpty && unitP != null) {
+          // unitP from scan may be tax-inclusive — recalc from MRP instead.
+          _recalcLinePrices(line);
+        }
         if (line.discount.trim().isEmpty && discount != null) {
           line.discount = discount;
         }
@@ -1620,8 +1675,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         );
         line.applyFromStock(t);
         line.qty = qtyText;
-        if (unitP != null) line.unitP = unitP;
         if (discount != null) line.discount = discount;
+        _recalcLinePrices(line);
         _markLineServerCommitted(line, data, qty, invoiceId: invoiceId);
         _mergeTemplateIntoPools(t);
         _templates.add(t);
@@ -2291,6 +2346,46 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     return true;
   }
 
+  /// Push edits on lines that already exist on the server (edit bill).
+  Future<bool> _syncCommittedLines(LoginViewmodel login) async {
+    final committed = _lines
+        .where(
+          (l) =>
+              l.serverCommitted &&
+              l.odooLineId != null &&
+              l.odooLineId! > 0 &&
+              l.hasRequiredLineFields,
+        )
+        .toList(growable: false);
+    if (committed.isEmpty) return true;
+
+    final sid = await _odooSessionId();
+    if (sid.isEmpty) return false;
+
+    for (final line in committed) {
+      final qty = InvoiceCalcHelper.parseNum(line.qty);
+      final mrp = InvoiceCalcHelper.parseNum(line.mrp);
+      final disc = InvoiceCalcHelper.parseNum(line.discount);
+      final ok = await OdooRpcHelper.updateCustomerInvoiceLine(
+        sid,
+        lineId: line.odooLineId!,
+        quantity: qty > 0 ? qty : null,
+        priceUnit: mrp > 0 ? mrp : null,
+        discount: disc,
+        batch: line.batch,
+        hsn: line.hsn.trim().isEmpty ? null : line.hsn.trim(),
+        rack: line.rack.trim().isEmpty ? null : line.rack.trim(),
+      );
+      if (!ok) {
+        _toast(
+          'Could not update ${line.product ?? 'line'} on the server.',
+        );
+        return false;
+      }
+    }
+    return true;
+  }
+
   Future<bool> _syncHeaderToOdoo(LoginViewmodel login) async {
     var moveId = _serverInvoiceId ?? widget.editInvoice?.id;
     if (moveId == null && _invoiceNumber.trim().isNotEmpty) {
@@ -2347,6 +2442,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         gstType: _gstType,
         expiryMedicineBill: _expiryMedicineBill,
         discountCategoryId: _discountCategory?.id,
+        clearDiscountCategory: _discountCategory == null,
         discountType: _discountType,
         discountRate: rate,
         remarks: _remarksCtrl.text.trim(),
@@ -2435,6 +2531,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       // Manually added products must go through add_to_invoice (like QR).
       final linesOk = await _commitPendingLines(login);
       if (!linesOk) return;
+
+      final syncedLines = await _syncCommittedLines(login);
+      if (!syncedLines) return;
 
       final synced = await _syncHeaderToOdoo(login);
       if (!synced) {
@@ -2968,15 +3067,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                           rackPool: _racks,
                           onPick: _pickLineValue,
                           onPickProduct: () => _pickProductForLine(line),
-                          onPickPotency: () => _pickRelatedForLine(
-                            line,
-                            title: 'Potency',
-                            readField: (s) => s.potency,
-                            assignField: (v) => line.potency = v,
-                            pool: _potencies,
-                            poolKeys: _potencyKeys,
-                            fallbackOptions: List<String>.from(_potencies),
-                          ),
+                          onPickPotency: () => _pickPotencyForLine(line),
                           onPickCompany: () => _pickRelatedForLine(
                             line,
                             title: 'Company',
@@ -3042,6 +3133,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                 _lineRequiredErrors = next;
                               }
                             }
+                            _recalcLinePrices(line);
                             setState(() {});
                             _recalculate();
                           },
@@ -3072,24 +3164,44 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                 _Card(
                   child: Column(
                     children: [
-                      _StaticDropdown(
-                        label: 'Discount Category',
-                        value: _discountCategory?.name,
-                        items: _discountCategories.map((e) => e.name).toList(),
-                        onChanged: (v) {
-                          if (v == null || v.isEmpty) {
-                            _applyDiscountCategory(null);
-                            return;
-                          }
-                          _DiscountCategoryOption? match;
-                          for (final c in _discountCategories) {
-                            if (c.name.toLowerCase() == v.toLowerCase()) {
-                              match = c;
-                              break;
-                            }
-                          }
-                          _applyDiscountCategory(match);
-                        },
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _StaticDropdown(
+                                label: 'Discount Category',
+                                value: _discountCategory?.name,
+                                items: _discountCategories
+                                    .map((e) => e.name)
+                                    .toList(),
+                                onChanged: (v) {
+                                  if (v == null || v.isEmpty) {
+                                    _applyDiscountCategory(null);
+                                    return;
+                                  }
+                                  _DiscountCategoryOption? match;
+                                  for (final c in _discountCategories) {
+                                    if (c.name.toLowerCase() == v.toLowerCase()) {
+                                      match = c;
+                                      break;
+                                    }
+                                  }
+                                  _applyDiscountCategory(match);
+                                },
+                              ),
+                            ),
+                            if (_discountCategory != null)
+                              IconButton(
+                                tooltip: 'Clear discount category',
+                                onPressed: () => _applyDiscountCategory(null),
+                                icon: const Icon(
+                                  Icons.delete_outline,
+                                  color: Colors.redAccent,
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
                       _StaticDropdown(
                         label: 'Discount Type',
@@ -3380,15 +3492,13 @@ class _LineCardState extends State<_LineCard> {
   Widget _buildCollapsed(_BillLine line) {
     final qty = InvoiceCalcHelper.parseNum(line.qty);
     final mrp = InvoiceCalcHelper.parseNum(line.mrp);
-    final unitP = InvoiceCalcHelper.parseNum(line.unitP);
     final disc = InvoiceCalcHelper.parseNum(line.discount);
     final taxPct = InvoiceCalcHelper.parseNum(line.tax);
-    final unit = unitP > 0 ? unitP : mrp;
-    final gross = qty * unit;
-    final lineDisc = disc > 0 ? gross * disc / 100.0 : 0.0;
-    final net = (gross - lineDisc).clamp(0.0, double.infinity);
-    final taxAmt = taxPct > 0 ? net * taxPct / 100.0 : 0.0;
-    final total = net + taxAmt;
+    final unitTp = InvoiceCalcHelper.parseNum(line.unitP) > 0
+        ? InvoiceCalcHelper.parseNum(line.unitP)
+        : (disc > 0 ? mrp * (1 - disc / 100.0) : mrp);
+    // Column totals exclude tax (bill footer handles GST).
+    final total = qty > 0 && unitTp > 0 ? qty * unitTp : 0.0;
 
     String fmtNum(double? v) =>
         v == null ? '—' : v.toStringAsFixed(v == v.roundToDouble() ? 0 : 2);
@@ -3445,17 +3555,21 @@ class _LineCardState extends State<_LineCard> {
           right: _CompactField('Dis', fmtNum(disc > 0 ? disc : null)),
         ),
         _CompactLineRow(
-          left: _CompactField('Unit P', fmtMoney(unitP > 0 ? unitP : null)),
-          right: _CompactField('Tax', fmtNum(taxPct > 0 ? taxPct : null)),
+          left: _CompactField('Unit TP', fmtMoney(unitTp > 0 ? unitTp : null)),
+          right: _CompactField('Unit P', fmtMoney(unitTp > 0 ? unitTp : null)),
         ),
         _CompactLineRow(
-          left: _CompactField('Tax Amt', fmtMoney(taxAmt > 0 ? taxAmt : null)),
-          right: _CompactField('Total', fmtMoney(total > 0 ? total : null),
+          left: _CompactField('Tax', fmtNum(taxPct > 0 ? taxPct : null)),
+          right: _CompactField('Tax Amt', '—'),
+        ),
+        _CompactLineRow(
+          left: _CompactField('Total', fmtMoney(total > 0 ? total : null),
               emphasize: true),
+          right: _CompactField('Hsn', line.hsn.isEmpty ? null : line.hsn),
         ),
         _CompactLineRow(
-          left: _CompactField('Hsn', line.hsn.isEmpty ? null : line.hsn),
-          right: _CompactField('Rack', line.rack.isEmpty ? null : line.rack),
+          left: _CompactField('Rack', line.rack.isEmpty ? null : line.rack),
+          right: _CompactField('', null),
         ),
       ],
     );
@@ -3606,19 +3720,15 @@ class _LineCardState extends State<_LineCard> {
             line.discount = v;
             widget.onChanged();
           },
-          onNext: () => _moveTo(_unitPFocus),
-        ),
-        _LineTextRow(
-          label: 'Unit P',
-          controller: _unitPCtrl,
-          focusNode: _unitPFocus,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          textInputAction: TextInputAction.next,
-          onChanged: (v) {
-            line.unitP = v;
-            widget.onChanged();
-          },
           onNext: () => _moveTo(_taxFocus),
+        ),
+        _LineReadOnlyRow(
+          label: 'Unit TP',
+          value: line.unitP.trim().isEmpty ? null : line.unitP,
+        ),
+        _LineReadOnlyRow(
+          label: 'Unit P',
+          value: line.unitP.trim().isEmpty ? null : line.unitP,
         ),
         _LineTextRow(
           label: 'Tax',
@@ -3784,6 +3894,49 @@ class _LineDropdownRow extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _LineReadOnlyRow extends StatelessWidget {
+  const _LineReadOnlyRow({required this.label, this.value});
+
+  final String label;
+  final String? value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.65),
+                fontSize: 12,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+              ),
+              child: Text(
+                (value == null || value!.trim().isEmpty) ? '—' : value!,
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

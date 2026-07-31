@@ -225,7 +225,7 @@ class _ChequeClearanceCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                _PaidPill(item.displayState),
+                // Status pill (Paid, etc.) hidden on main cheque list.
                 // Chevron / open-detail affordance paused (list-only).
                 // const SizedBox(width: 4),
                 // Icon(
@@ -327,31 +327,6 @@ class _Cell extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _PaidPill extends StatelessWidget {
-  const _PaidPill(this.label);
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFF2E7D32),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
     );
   }
 }
