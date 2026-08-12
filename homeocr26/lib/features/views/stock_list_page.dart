@@ -275,7 +275,12 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
           final item = visible[index];
           return StockListCard(
             item: item,
-            onTap: () => openStockDetail(context, item),
+            onTap: () async {
+              final updated = await openStockDetail(context, item);
+              if (updated != null && context.mounted) {
+                model.replaceLocalItem(updated);
+              }
+            },
           );
         },
       ),
@@ -283,7 +288,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
   }
 }
 
-/// Compact single-line row: Name · Potency · Qty · Stock · Mrp.
+/// Compact single-line row: Name · Company · Potency · Packing · Group · Mrp.
 class StockListCard extends StatelessWidget {
   const StockListCard({super.key, required this.item, this.onTap});
 
@@ -312,6 +317,13 @@ class StockListCard extends StatelessWidget {
           Expanded(
             flex: 2,
             child: _LineCell(
+              label: 'Company',
+              value: item.company ?? '—',
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: _LineCell(
               label: 'Potency',
               value: item.potency ?? '—',
             ),
@@ -319,15 +331,15 @@ class StockListCard extends StatelessWidget {
           Expanded(
             flex: 2,
             child: _LineCell(
-              label: 'Qty',
-              value: StockItemModel.qty(item.itemQty),
+              label: 'Packing',
+              value: item.packing ?? '—',
             ),
           ),
           Expanded(
             flex: 2,
             child: _LineCell(
-              label: 'Stock',
-              value: StockItemModel.qty(item.stock),
+              label: 'Group',
+              value: item.group ?? '—',
             ),
           ),
           Expanded(

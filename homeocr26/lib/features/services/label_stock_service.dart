@@ -100,7 +100,7 @@ class LabelStockService {
       final batch = await searchStock(sessionId, query);
       for (final item in batch) {
         if (!_itemMatchesQuery(item, query, parsed)) continue;
-        final id = item.stockId;
+        final id = item.entryStockId ?? item.stockDisplayId ?? item.stockId;
         if (id != null && !seenId.add(id)) continue;
         merged.add(item);
       }

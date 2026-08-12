@@ -4,7 +4,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
@@ -13,12 +12,24 @@ import '../../viewModels/customer_med_viewModel.dart';
 import '../../models/qr_model.dart';
 import '../services/invoice_helper.dart';
 import '../services/label_ocr_service.dart';
+import 'label_camera_page.dart';
+import 'label_text_select_page.dart';
 import '../widgets/invoice_prefix_field.dart';
 import '../widgets/show_dialog_custom.dart';
 import '../widgets/system_safe.dart';
 
+/// Returned when [AddToCustomerPage.showPopup] closes after a successful add.
+class AddToCustomerResult {
+  const AddToCustomerResult({
+    required this.data,
+    required this.qty,
+    this.invoiceId,
+  });
 
-
+  final QrData data;
+  final double qty;
+  final int? invoiceId;
+}
 
 class AddToCustomerPage extends StatefulWidget {
   const AddToCustomerPage({
@@ -39,12 +50,12 @@ class AddToCustomerPage extends StatefulWidget {
   final void Function(QrData data, double qty, int? invoiceId)? onAdded;
 
   /// Opens the Add-to-Customer scanner as a popup (does not replace other screens).
-  static Future<void> showPopup(
+  static Future<AddToCustomerResult?> showPopup(
     BuildContext context, {
     String? lockedInvoiceNumber,
     void Function(QrData data, double qty, int? invoiceId)? onAdded,
   }) {
-    return showDialog<void>(
+    return showDialog<AddToCustomerResult?>(
       context: context,
       barrierDismissible: true,
       builder: (ctx) {
@@ -75,7 +86,6 @@ class AddToCustomerPage extends StatefulWidget {
 
 class _AddToCustomerPageState extends State<AddToCustomerPage> {
   MobileScannerController cameraController = MobileScannerController();
-  final ImagePicker _labelImagePicker = ImagePicker();
 
   bool hasPermission = false;
   String medicineName = "";
@@ -104,6 +114,27 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
       return InvoiceHelper.formatFull(InvoiceHelper.prefixFromFull(locked));
     }
     return InvoiceHelper.formatFull(invoicePrefixController.text);
+  }
+
+  Future<void> _finishSuccessfulAdd({
+    required QrData data,
+    required double qty,
+    int? invoiceId,
+  }) async {
+    widget.onAdded?.call(data, qty, invoiceId);
+    await StatusDialog.show(
+      context: context,
+      title: 'Success',
+      message: 'Medicine quantity added',
+      type: StatusType.success,
+    );
+    try {
+      await cameraController.stop();
+    } catch (_) {}
+    if (!context.mounted) return;
+    Navigator.of(context).maybePop(
+      AddToCustomerResult(data: data, qty: qty, invoiceId: invoiceId),
+    );
   }
 
   @override
@@ -185,56 +216,24 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
       restartScanner = cameraController.value.isRunning;
       if (restartScanner) {
         await cameraController.stop();
-        await Future<void>.delayed(const Duration(milliseconds: 350));
       }
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Photograph the physical medicine label (not a phone screen).',
-          ),
-          duration: Duration(seconds: 3),
-        ),
+      final bytes = await LabelCameraPage.capture(context);
+      if (!mounted || bytes == null) return;
+
+      final selectedText = await LabelTextSelectPage.show(
+        context,
+        imageBytes: bytes,
+        recognitionFuture: LabelOcrService.recognizeImageBytesDetailed(bytes),
       );
 
-      final photo = await _labelImagePicker.pickImage(
-        source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.rear,
-        imageQuality: 90,
-      );
-
-      if (!mounted) return;
-      if (photo == null) return;
-
-      final bytes = await photo.readAsBytes();
-      if (bytes.isEmpty) {
-        if (!mounted) return;
-        await StatusDialog.show(
-          context: context,
-          title: 'Scan label',
-          message: 'Could not read the photo. Please try again.',
-          type: StatusType.info,
-        );
+      if (!mounted || selectedText == null || selectedText.trim().isEmpty) {
         return;
       }
 
-      final text = await LabelOcrService.recognizeImageBytes(bytes);
-      if (!mounted) return;
-
-      if (text.trim().isEmpty) {
-        await StatusDialog.show(
-          context: context,
-          title: 'Scan label',
-          message:
-              'No text found on the label. Move closer, improve lighting, and try again.',
-          type: StatusType.info,
-        );
-        return;
-      }
-
-      await model.applyLabelOcrText(context, text);
+      await model.applyLabelOcrText(context, selectedText.trim());
       if (mounted && _isLabelScanSuccessful(model)) {
         restartScanner = false;
         await cameraController.stop();
@@ -1028,17 +1027,14 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                             if (!context.mounted) return;
 
                             if (result == 'success') {
-                              await StatusDialog.show(
-                                context: context,
-                                title: 'Success',
-                                message: 'Medicine quantity added',
-                                type: StatusType.success,
-                              );
-                              try {
-                                await cameraController.stop();
-                              } catch (_) {}
-                              if (!context.mounted) return;
-                              Navigator.of(context).maybePop(true);
+                              final addedStock = model.selectedLabelStock;
+                              if (addedStock != null) {
+                                await _finishSuccessfulAdd(
+                                  data: model.qrDataFromLabelStock(addedStock),
+                                  qty: quantity,
+                                  invoiceId: model.lastAddedInvoiceId,
+                                );
+                              }
                             } else if (context.mounted) {
                               await StatusDialog.show(
                                 context: context,
@@ -1081,23 +1077,12 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                             if (result == 'success') {
                               final addedData = model.qrResponse?.result?.data;
                               if (addedData != null) {
-                                widget.onAdded?.call(
-                                  addedData,
-                                  quantity,
-                                  model.lastAddedInvoiceId,
+                                await _finishSuccessfulAdd(
+                                  data: addedData,
+                                  qty: quantity,
+                                  invoiceId: model.lastAddedInvoiceId,
                                 );
                               }
-                              await StatusDialog.show(
-                                context: context,
-                                title: 'Success',
-                                message: 'Medicine quantity added',
-                                type: StatusType.success,
-                              );
-                              try {
-                                await cameraController.stop();
-                              } catch (_) {}
-                              if (!context.mounted) return;
-                              Navigator.of(context).maybePop(true);
                             } else if (context.mounted) {
                               await StatusDialog.show(
                                 context: context,

@@ -111,9 +111,7 @@ class _LoginPageState extends State<LoginPage> {
                             const SizedBox(height: 14),
                             _buildTextField(
                               hint: 'Password',
-                              icon: hidePassword
-                                  ? Icons.lock_outline
-                                  : Icons.lock_open_rounded,
+                              icon: Icons.lock_outline,
                               controller: passwordController,
                               isPassword: true,
                               validator: (value) {
@@ -249,14 +247,20 @@ class _LoginPageState extends State<LoginPage> {
       obscureText: isPassword ? hidePassword : false,
       style: const TextStyle(color: _ink, fontWeight: FontWeight.w500),
       decoration: InputDecoration(
-        prefixIcon: isPassword
-            ? GestureDetector(
-                onTap: () {
+        prefixIcon: Icon(icon, color: _muted),
+        suffixIcon: isPassword
+            ? IconButton(
+                onPressed: () {
                   setState(() => hidePassword = !hidePassword);
                 },
-                child: Icon(icon, color: _muted),
+                icon: Icon(
+                  hidePassword
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  color: _muted,
+                ),
               )
-            : Icon(icon, color: _muted),
+            : null,
         hintText: hint,
         hintStyle: TextStyle(color: _muted.withValues(alpha: 0.75)),
         filled: true,

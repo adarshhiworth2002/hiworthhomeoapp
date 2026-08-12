@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../models/invoice_summary_model.dart';
+import '../../models/qr_model.dart';
+import '../services/invoice_calc_helper.dart';
 import '../services/invoice_detail_service.dart';
 import '../widgets/system_safe.dart';
 import 'add_to_customer.dart';
@@ -35,6 +37,11 @@ class CustomerInvoiceDetailPage extends StatefulWidget {
 class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
   late InvoiceSummaryModel _invoice;
   bool _loadingLines = false;
+  /// Optimistic lines shown until the server reload catches up.
+  List<InvoiceLineModel>? _linesOverride;
+
+  List<InvoiceLineModel> get _visibleLines =>
+      _linesOverride ?? _invoice.lines;
 
   @override
   void initState() {
@@ -53,10 +60,160 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
     setState(() {
       _invoice = loaded;
       _loadingLines = false;
+      _linesOverride = null;
     });
   }
 
-  void _openScanner() {
+  void _applyScannedLine(QrData data, double qty, int? invoiceId) {
+    final product = data.productName?.trim();
+    final potency = data.potency?.trim();
+    final batch = data.batch?.trim();
+
+    final lines = List<InvoiceLineModel>.from(_visibleLines);
+    final existingIndex = lines.indexWhere((line) {
+      final sameProduct = (line.productName ?? '').trim().toLowerCase() ==
+          (product ?? '').toLowerCase();
+      final samePotency = (line.potency ?? '').trim().toLowerCase() ==
+          (potency ?? '').toLowerCase();
+      final sameBatch = (line.batch ?? '').trim().toLowerCase() ==
+          (batch ?? '').toLowerCase();
+      return sameProduct && samePotency && sameBatch && (product ?? '').isNotEmpty;
+    });
+
+    if (existingIndex >= 0) {
+      final line = lines[existingIndex];
+      final prevQty = line.qty ?? 0;
+      lines[existingIndex] = InvoiceLineModel(
+        id: line.id,
+        productName: line.productName ?? product,
+        potency: line.potency ?? potency,
+        company: line.company ?? data.company,
+        batch: line.batch ?? batch,
+        manufacturer: line.manufacturer ?? data.mfd,
+        mfd: line.mfd ?? data.mfd,
+        expiry: line.expiry ?? data.expiry,
+        packing: line.packing ?? data.packing,
+        group: line.group ?? data.group,
+        qty: prevQty + qty,
+        orderedQty: line.orderedQty,
+        freeQty: line.freeQty,
+        mrp: line.mrp ?? data.mrp,
+        discount: line.discount,
+        dis2Percent: line.dis2Percent,
+        unit: line.unit,
+        unitPrice: line.unitPrice ?? data.unitPrice,
+        uPrice: line.uPrice ?? data.unitPrice,
+        tax: line.tax ?? data.tax,
+        taxAmount: line.taxAmount,
+        total: line.total,
+        hsn: line.hsn ?? data.hsn,
+        rack: line.rack ?? data.rack,
+      );
+    } else {
+      lines.add(
+        InvoiceLineModel(
+          productName: product,
+          potency: potency,
+          company: data.company,
+          batch: batch,
+          manufacturer: data.mfd,
+          mfd: data.mfd,
+          expiry: data.expiry,
+          packing: data.packing,
+          group: data.group,
+          qty: qty,
+          mrp: data.mrp,
+          unitPrice: data.unitPrice,
+          uPrice: data.unitPrice,
+          tax: data.tax,
+          hsn: data.hsn,
+          rack: data.rack,
+        ),
+      );
+    }
+
+    setState(() {
+      if (invoiceId != null && _invoice.id == null) {
+        _invoice = InvoiceSummaryModel(
+          id: invoiceId,
+          invoiceNumber: _invoice.invoiceNumber,
+          customer: _invoice.customer,
+          pharmacyCustomerId: _invoice.pharmacyCustomerId,
+          address: _invoice.address,
+          phone: _invoice.phone,
+          responsiblePerson: _invoice.responsiblePerson,
+          doctor: _invoice.doctor,
+          invoiceDate: _invoice.invoiceDate,
+          expiryMedicineBill: _invoice.expiryMedicineBill,
+          verifyStatus: _invoice.verifyStatus,
+          billedBy: _invoice.billedBy,
+          taxAmount: _invoice.taxAmount,
+          balance: _invoice.balance,
+          subtotal: _invoice.subtotal,
+          discountTotal: _invoice.discountTotal,
+          total: _invoice.total,
+          supplierInvoiceNo: _invoice.supplierInvoiceNo,
+          poNumber: _invoice.poNumber,
+          supplierInvoiceAmount: _invoice.supplierInvoiceAmount,
+          previousInvoice: _invoice.previousInvoice,
+          deliveryDate: _invoice.deliveryDate,
+          status: _invoice.status,
+          moveState: _invoice.moveState,
+          paymentState: _invoice.paymentState,
+          isPaid: _invoice.isPaid,
+          paymentMode: _invoice.paymentMode,
+          gstType: _invoice.gstType,
+          discountCategory: _invoice.discountCategory,
+          discountType: _invoice.discountType,
+          discountRate: _invoice.discountRate,
+          verifiedBy: _invoice.verifiedBy,
+          expense: _invoice.expense,
+          expenseAmt: _invoice.expenseAmt,
+          remarks: _invoice.remarks,
+          workMinutes: _invoice.workMinutes,
+          workHours: _invoice.workHours,
+          isCreditCustomer: _invoice.isCreditCustomer,
+          lines: _invoice.lines,
+        );
+      }
+      _linesOverride = lines;
+    });
+  }
+
+  InvoiceCalcResult _visibleTotals() {
+    if (_linesOverride == null) return _invoice.websiteTotals();
+    return InvoiceSummaryModel(
+      discountType: _invoice.discountType,
+      discountRate: _invoice.discountRate,
+      gstType: _invoice.gstType,
+      expenseAmt: _invoice.expenseAmt,
+      lines: _linesOverride!,
+    ).websiteTotals();
+  }
+
+  Future<void> _reloadDetailAfterAdd() async {
+    final expectedMin = _visibleLines.length;
+    for (var attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) {
+        await Future<void>.delayed(Duration(milliseconds: 300 * attempt));
+      }
+      final loaded = await InvoiceDetailService.fetchCustomerInvoice(
+        context,
+        seed: _invoice,
+      );
+      if (!mounted) return;
+      if (loaded.lines.length >= expectedMin) {
+        setState(() {
+          _invoice = loaded;
+          _linesOverride = null;
+          _loadingLines = false;
+        });
+        return;
+      }
+    }
+  }
+
+  Future<void> _openScanner() async {
     if (_invoice.sectionKey == 'paid') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -66,10 +223,14 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
       return;
     }
     final number = _invoice.displayNumber;
-    AddToCustomerPage.showPopup(
+    final result = await AddToCustomerPage.showPopup(
       context,
       lockedInvoiceNumber: number == 'Unknown' ? null : number,
     );
+    if (result != null && mounted) {
+      _applyScannedLine(result.data, result.qty, result.invoiceId);
+      await _reloadDetailAfterAdd();
+    }
   }
 
   Future<void> _openEdit() async {
@@ -118,7 +279,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
     final canScan = widget.allowScan && _invoice.sectionKey != 'paid';
     final canEdit = !widget.supplierLayout &&
         (_invoice.sectionKey == 'draft' || _invoice.sectionKey == 'open');
-    final totals = _invoice.websiteTotals();
+    final totals = _visibleTotals();
     final showSupplierQty = widget.supplierLayout;
 
     return Scaffold(
@@ -244,7 +405,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
                       ),
                     ),
                   )
-                : _invoice.lines.isEmpty
+                : _visibleLines.isEmpty
                     ? const Padding(
                         padding: EdgeInsets.symmetric(vertical: 8),
                         child: Text(
@@ -253,7 +414,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
                         ),
                       )
                     : Column(
-                        children: _invoice.lines
+                        children: _visibleLines
                             .map(
                               (line) => _LineTile(
                                 line: line,

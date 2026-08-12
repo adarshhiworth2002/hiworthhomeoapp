@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../features/services/WebApi/web_api_impl.dart';
 import '../features/services/api_request_helper.dart';
 import '../features/services/api_response_helper.dart';
+import '../features/services/invoice_draft_helper.dart';
 import '../features/services/invoice_search_service.dart';
 import '../features/services/label_ocr_parser.dart';
 import '../features/services/label_stock_service.dart';
@@ -111,6 +112,32 @@ class CustomerMedViewmodel extends ChangeNotifier {
         potency: labelPotency,
         packing: labelPacking,
       );
+
+  QrData qrDataFromLabelStock(StockItemModel stock) {
+    return QrData(
+      uid: stock.qrToken,
+      lineUid: stock.qrToken,
+      productBarcode: stock.qrToken,
+      productName: stock.medicineLabel,
+      productId: stock.stockDisplayId,
+      stockEntryId: stock.entryStockId,
+      potency: stock.potency,
+      packing: stock.packing,
+      company: stock.company,
+      group: stock.group,
+      batch: stock.batch,
+      mrp: stock.mrp,
+      hsn: stock.hsn,
+      tax: stock.gst,
+      rack: stock.rack,
+      availableStock: stock.availableStock,
+      stockQty: stock.availableStock ?? stock.stock ?? stock.itemQty,
+      warehouseStockQty: stock.stock,
+      entryStockQty: stock.itemQty,
+      mfd: stock.mfd,
+      expiry: stock.exp,
+    );
+  }
 
   double availableLabelStockQuantity() {
     final item = selectedLabelStock;
@@ -312,6 +339,46 @@ class CustomerMedViewmodel extends ChangeNotifier {
     );
   }
 
+  Future<String?> _ensureCustomerInvoiceNumber(
+    BuildContext context,
+    String invoiceNumber,
+  ) async {
+    final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
+    final flutterSid = loginModel.sessionId ?? '';
+    if (flutterSid.isEmpty) return null;
+
+    final trimmed = invoiceNumber.trim();
+    if (trimmed.isEmpty) return null;
+
+    final odooSid = await _resolveOdooWebSession(context) ?? flutterSid;
+    final existingId =
+        await OdooRpcHelper.findCustomerInvoiceId(odooSid, trimmed);
+    if (existingId != null && existingId > 0) {
+      lastAddedInvoiceId = existingId;
+      lastAddedInvoiceName = trimmed;
+      return trimmed;
+    }
+
+    final draft = await InvoiceDraftHelper.createEmptyDraft(
+      sessionId: flutterSid,
+      knownNumbers: {trimmed},
+      login: loginModel.loginEmail,
+      password: loginModel.loginPassword,
+      db: LoginViewmodel.dbName,
+    );
+    if (draft == null) return null;
+
+    lastAddedInvoiceId = draft.invoiceId;
+    lastAddedInvoiceName = draft.invoiceNumber;
+    if (kDebugMode) {
+      debugPrint(
+        'label add: created draft invoice ${draft.invoiceNumber} '
+        '(id=${draft.invoiceId})',
+      );
+    }
+    return draft.invoiceNumber;
+  }
+
   Future<String> addLabelStockToInvoice({
     required double qty,
     required BuildContext context,
@@ -340,72 +407,72 @@ class CustomerMedViewmodel extends ChangeNotifier {
         return 'Invoice number is required';
       }
 
+      final resolvedInvoice =
+          await _ensureCustomerInvoiceNumber(context, trimmedInvoice);
+      if (resolvedInvoice == null || resolvedInvoice.isEmpty) {
+        return 'Invoice not found on server. Save the bill first, then retry.';
+      }
+
       final qtyValue = qty == qty.roundToDouble() ? qty.toInt() : qty;
       final webApi = WebApiImpl();
+      final displayId = stock.stockDisplayId;
+      final entryId = stock.entryStockId;
 
-      // Path 1: Flutter add_to_invoice (uses app session — no Odoo web RPC).
-      if (stock.stockId != null && stock.stockId! > 0) {
-        for (final key in const ['stock_display_id', 'stock_id']) {
-          final result = await _tryAddToInvoice(
-            webApi: webApi,
-            sessionId: flutterSid,
-            invoiceNumber: trimmedInvoice,
-            qtyValue: qtyValue,
-            params: {
-              'invoice_number': trimmedInvoice,
-              key: stock.stockId,
-              'quantity': qtyValue,
-            },
-          );
-          if (result == 'success') return result;
-        }
+      if (kDebugMode) {
+        debugPrint(
+          'label add stock: medicine=${stock.medicineLabel} '
+          'displayId=$displayId entryId=$entryId '
+          'potency=${stock.potency} batch=${stock.batch}',
+        );
+      }
 
-        final detailResult = await _tryAddToInvoice(
+      // Path 1: add_to_invoice with qr_data (same as QR scan — correct product).
+      var qrToken = (stock.qrToken ?? '').trim();
+      final odooSid = await _resolveOdooWebSession(context);
+      if (qrToken.isEmpty && odooSid != null) {
+        qrToken = await OdooRpcHelper.findEntryStockQrToken(
+              odooSid,
+              stockDisplayId: displayId,
+              entryStockId: entryId,
+              medicine: stock.medicineLabel,
+              potency: stock.potency,
+              batch: stock.batch,
+            ) ??
+            '';
+      }
+
+      if (qrToken.isNotEmpty) {
+        final result = await _tryAddToInvoice(
           webApi: webApi,
           sessionId: flutterSid,
-          invoiceNumber: trimmedInvoice,
+          invoiceNumber: resolvedInvoice,
           qtyValue: qtyValue,
           params: {
-            'invoice_number': trimmedInvoice,
-            'stock_display_id': stock.stockId,
-            'medicine_name': stock.medicineLabel,
-            if ((stock.potency ?? '').trim().isNotEmpty)
-              'potency': stock.potency!.trim(),
-            if ((stock.packing ?? '').trim().isNotEmpty)
-              'packing': stock.packing!.trim(),
+            'invoice_number': resolvedInvoice,
+            'qr_data': qrToken,
             'quantity': qtyValue,
           },
         );
-        if (detailResult == 'success') return detailResult;
-      }
+        if (result == 'success') return result;
 
-      // Path 2: QR token from Odoo web session (optional).
-      final odooSid = await _resolveOdooWebSession(context);
-      if (odooSid != null) {
-        final token = await OdooRpcHelper.findEntryStockQrToken(
-          odooSid,
-          stockDisplayId: stock.stockId,
-          medicine: stock.medicineLabel,
-          potency: stock.potency,
-        );
-
-        if (token != null && token.isNotEmpty) {
-          final result = await _tryAddToInvoice(
+        final alt = _alternativeAddQrData(qrToken);
+        if (alt != null && alt.isNotEmpty) {
+          final retry = await _tryAddToInvoice(
             webApi: webApi,
             sessionId: flutterSid,
-            invoiceNumber: trimmedInvoice,
+            invoiceNumber: resolvedInvoice,
             qtyValue: qtyValue,
             params: {
-              'invoice_number': trimmedInvoice,
-              'qr_data': token,
+              'invoice_number': resolvedInvoice,
+              'qr_data': alt,
               'quantity': qtyValue,
             },
           );
-          if (result == 'success') return result;
+          if (retry == 'success') return retry;
         }
       }
 
-      // Path 3: Odoo RPC write (refresh web session once on failure).
+      // Path 2: Odoo RPC write with the exact stock row (no ambiguous stock_id).
       for (var attempt = 0; attempt < 2; attempt++) {
         final rpcSid = await _resolveOdooWebSession(
           context,
@@ -415,16 +482,30 @@ class CustomerMedViewmodel extends ChangeNotifier {
 
         final stockRow = await OdooRpcHelper.findEntryStockRow(
           rpcSid,
-          stockDisplayId: stock.stockId,
+          stockDisplayId: displayId,
+          entryStockId: entryId,
           medicine: stock.medicineLabel,
           potency: stock.potency,
+          batch: stock.batch,
         );
         if (stockRow == null) continue;
 
-        final invoiceId = await OdooRpcHelper.findCustomerInvoiceId(
-          rpcSid,
-          trimmedInvoice,
-        );
+        if (kDebugMode) {
+          final rowMed = stockRow['medicine_id_name'] ??
+              (stockRow['medicine_id'] is List &&
+                      (stockRow['medicine_id'] as List).length >= 2
+                  ? (stockRow['medicine_id'] as List)[1]
+                  : null);
+          debugPrint(
+            'label add RPC row id=${stockRow['id']} medicine=$rowMed',
+          );
+        }
+
+        final invoiceId = lastAddedInvoiceId ??
+            await OdooRpcHelper.findCustomerInvoiceId(
+              rpcSid,
+              resolvedInvoice,
+            );
         if (invoiceId == null || invoiceId <= 0) {
           return 'Invoice not found on server.';
         }
@@ -437,12 +518,12 @@ class CustomerMedViewmodel extends ChangeNotifier {
         );
         if (ok) {
           lastAddedInvoiceId = invoiceId;
-          lastAddedInvoiceName = trimmedInvoice;
+          lastAddedInvoiceName = resolvedInvoice;
           return 'success';
         }
       }
 
-      return 'Failed to add medicine to invoice. Please log in again and retry.';
+      return 'Failed to add medicine to invoice. Check potency, packing, and stock.';
     } catch (e, s) {
       if (kDebugMode) debugPrint('addLabelStockToInvoice: $e\n$s');
       final message = e.toString().toLowerCase();

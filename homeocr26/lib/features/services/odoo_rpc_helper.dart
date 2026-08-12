@@ -377,11 +377,23 @@ class OdooRpcHelper {
   static Future<Map<String, dynamic>?> findEntryStockRow(
     String sessionId, {
     int? stockDisplayId,
+    int? entryStockId,
     String? medicine,
     String? batch,
     String? potency,
   }) async {
     try {
+      if (entryStockId != null && entryStockId > 0) {
+        final direct = await readEntryStockRowById(
+          sessionId,
+          entryStockId,
+          medicine: medicine,
+          batch: batch,
+          potency: potency,
+        );
+        if (direct != null) return direct;
+      }
+
       final available = await _modelFields(sessionId, 'entry.stock');
       if (available.isEmpty) return null;
 
@@ -421,9 +433,6 @@ class OdooRpcHelper {
             ['display_id', '=', stockDisplayId],
           ]);
         }
-        domains.add([
-          ['id', '=', stockDisplayId],
-        ]);
       }
 
       final med = (medicine ?? '').trim();
@@ -446,6 +455,9 @@ class OdooRpcHelper {
         domains.add(domain);
       }
 
+      Map<String, dynamic>? best;
+      var bestScore = -1;
+
       for (final domain in domains) {
         final rows = await callKw(
           sessionId: sessionId,
@@ -454,16 +466,29 @@ class OdooRpcHelper {
           args: [domain],
           kwargs: {
             'fields': fields,
-            'limit': 5,
+            'limit': 20,
             'order': 'id desc',
           },
         );
         if (rows is! List || rows.isEmpty) continue;
         for (final raw in rows) {
           if (raw is! Map) continue;
-          return _normalizeOdooMap(Map<String, dynamic>.from(raw));
+          final map = _normalizeOdooMap(Map<String, dynamic>.from(raw));
+          final score = _scoreEntryStockRow(
+            map,
+            stockDisplayId: stockDisplayId,
+            medicine: medicine,
+            batch: batch,
+            potency: potency,
+          );
+          if (score > bestScore) {
+            bestScore = score;
+            best = map;
+          }
         }
       }
+
+      if (best != null && bestScore >= 20) return best;
       return null;
     } catch (e) {
       if (kDebugMode) debugPrint('findEntryStockRow failed: $e');
@@ -471,10 +496,154 @@ class OdooRpcHelper {
     }
   }
 
+  /// Read a single [entry.stock] row by Odoo id (exact match).
+  static Future<Map<String, dynamic>?> readEntryStockRowById(
+    String sessionId,
+    int entryStockId, {
+    String? medicine,
+    String? batch,
+    String? potency,
+  }) async {
+    if (entryStockId <= 0) return null;
+    try {
+      final available = await _modelFields(sessionId, 'entry.stock');
+      if (available.isEmpty) return null;
+
+      final fields = <String>['id'];
+      for (final f in const [
+        'uid',
+        'barcode',
+        'product_barcode',
+        'qr_data',
+        'qr_code',
+        'default_code',
+        'stock_display_id',
+        'display_id',
+        'medicine_id',
+        'batch',
+        'batch_no',
+        'potency_id',
+        'packing_id',
+        'pharmacy_company_id',
+        'pharmacy_group_id',
+        'item_qty',
+        'stock',
+        'mrp',
+      ]) {
+        if (available.contains(f)) fields.add(f);
+      }
+
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'entry.stock',
+        method: 'search_read',
+        args: [
+          [
+            ['id', '=', entryStockId],
+          ],
+        ],
+        kwargs: {'fields': fields, 'limit': 1},
+      );
+      if (rows is! List || rows.isEmpty) return null;
+      final raw = rows.first;
+      if (raw is! Map) return null;
+      final map = _normalizeOdooMap(Map<String, dynamic>.from(raw));
+      final score = _scoreEntryStockRow(
+        map,
+        medicine: medicine,
+        batch: batch,
+        potency: potency,
+      );
+      if (score < 0) return null;
+      return map;
+    } catch (e) {
+      if (kDebugMode) debugPrint('readEntryStockRowById failed: $e');
+      return null;
+    }
+  }
+
+  static int _scoreEntryStockRow(
+    Map<String, dynamic> row, {
+    int? stockDisplayId,
+    String? medicine,
+    String? batch,
+    String? potency,
+  }) {
+    var score = 0;
+
+    if (stockDisplayId != null && stockDisplayId > 0) {
+      final display = row['stock_display_id'] ?? row['display_id'];
+      final displayId = display is int
+          ? display
+          : int.tryParse(display?.toString() ?? '');
+      if (displayId == stockDisplayId) {
+        score += 50;
+      } else {
+        return -1;
+      }
+    }
+
+    final med = (medicine ?? '').trim().toLowerCase();
+    if (med.isNotEmpty) {
+      final rowMed = (
+        row['medicine_id_name'] ??
+            (row['medicine_id'] is List && (row['medicine_id'] as List).length >= 2
+                ? (row['medicine_id'] as List)[1]
+                : null) ??
+            ''
+      ).toString().trim().toLowerCase();
+      if (rowMed.isEmpty) {
+        score += 5;
+      } else if (rowMed == med) {
+        score += 40;
+      } else if (rowMed.contains(med) || med.contains(rowMed)) {
+        score += 20;
+      } else {
+        return -1;
+      }
+    }
+
+    final bat = (batch ?? '').trim().toLowerCase();
+    if (bat.isNotEmpty) {
+      final rowBatch = (row['batch'] ?? row['batch_no'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      if (rowBatch.isEmpty) {
+        score += 2;
+      } else if (rowBatch == bat) {
+        score += 15;
+      } else {
+        return -1;
+      }
+    }
+
+    final pot = (potency ?? '').trim().toLowerCase();
+    if (pot.isNotEmpty) {
+      final rowPot = (
+        row['potency_id_name'] ??
+            (row['potency_id'] is List && (row['potency_id'] as List).length >= 2
+                ? (row['potency_id'] as List)[1]
+                : null) ??
+            ''
+      ).toString().trim().toLowerCase();
+      if (rowPot.isEmpty) {
+        score += 2;
+      } else if (rowPot == pot) {
+        score += 15;
+      } else {
+        return -1;
+      }
+    }
+
+    return score;
+  }
+
   /// Resolve add_to_invoice qr_data token from pharmacy stock display id / product.
   static Future<String?> findEntryStockQrToken(
     String sessionId, {
     int? stockDisplayId,
+    int? entryStockId,
     String? medicine,
     String? batch,
     String? potency,
@@ -482,6 +651,7 @@ class OdooRpcHelper {
     final map = await findEntryStockRow(
       sessionId,
       stockDisplayId: stockDisplayId,
+      entryStockId: entryStockId,
       medicine: medicine,
       batch: batch,
       potency: potency,
@@ -612,28 +782,15 @@ class OdooRpcHelper {
         ],
       );
 
-      // Best-effort stock qty reduction.
+      // Best-effort stock qty reduction (keep item_qty + stock in sync).
       try {
-        final stockAvail = await _modelFields(sessionId, 'entry.stock');
-        final qtyKey = stockAvail.contains('item_qty')
-            ? 'item_qty'
-            : (stockAvail.contains('stock') ? 'stock' : null);
-        if (qtyKey != null) {
-          final current = stockRow[qtyKey];
-          final cur = current is num
-              ? current.toDouble()
-              : double.tryParse('$current') ?? 0;
-          final next = (cur - quantity).clamp(0, double.infinity);
-          await callKw(
-            sessionId: sessionId,
-            model: 'entry.stock',
-            method: 'write',
-            args: [
-              [stockId],
-              {qtyKey: next},
-            ],
-          );
-        }
+        await _adjustEntryStockFields(
+          sessionId: sessionId,
+          entryId: stockId,
+          delta: -quantity,
+          includeStockField: true,
+          currentValues: stockRow,
+        );
       } catch (_) {}
 
       return true;
@@ -3351,6 +3508,7 @@ class OdooRpcHelper {
     String? potency,
     double quantity = 0,
     int? invoiceId,
+    int? stockEntryId,
   }) async {
     final moveId = invoiceId ??
         await findCustomerInvoiceId(sessionId, invoiceNumber);
@@ -3429,6 +3587,7 @@ class OdooRpcHelper {
     final wantProduct = productName.trim().toLowerCase();
     final wantBatch = (batch ?? '').trim().toLowerCase();
     final wantPotency = (potency ?? '').trim().toLowerCase();
+    final wantEntryId = stockEntryId;
     var remaining = quantity > 0 ? quantity : double.infinity;
 
     final toUnlink = <int>[];
@@ -3448,6 +3607,18 @@ class OdooRpcHelper {
         continue;
       }
 
+      final lineEntryId = map['stock_entry_id'] is int
+          ? map['stock_entry_id'] as int
+          : map['stock_entry_id'] is List && (map['stock_entry_id'] as List).isNotEmpty
+              ? int.tryParse('${(map['stock_entry_id'] as List).first}')
+              : int.tryParse(map['stock_entry_id']?.toString() ?? '');
+
+      if (wantEntryId != null &&
+          wantEntryId > 0 &&
+          lineEntryId != null &&
+          lineEntryId > 0) {
+        if (lineEntryId != wantEntryId) continue;
+      } else {
       final lineProduct = (
         map['product_name'] ??
             map['medicine_id_name'] ??
@@ -3485,6 +3656,7 @@ class OdooRpcHelper {
           linePotency != wantPotency) {
         continue;
       }
+      }
 
       final idRaw = map['id'];
       final id = idRaw is int
@@ -3498,9 +3670,10 @@ class OdooRpcHelper {
           0;
       if (lineQty <= 0) continue;
 
-      final entryId = map['stock_entry_id'] is int
-          ? map['stock_entry_id'] as int
-          : int.tryParse(map['stock_entry_id']?.toString() ?? '');
+      final entryId = lineEntryId ??
+          (map['stock_entry_id'] is int
+              ? map['stock_entry_id'] as int
+              : int.tryParse(map['stock_entry_id']?.toString() ?? ''));
 
       double take;
       if (!remaining.isFinite || remaining >= lineQty - 1e-9) {
@@ -3528,13 +3701,16 @@ class OdooRpcHelper {
       return false;
     }
 
-    // Restore pharmacy stock first (add_to_invoice deducted entry.stock).
+    // Restore pharmacy stock first. RPC add deducts item_qty + stock; Odoo
+    // usually puts `stock` back when the invoice line is unlinked, so only
+    // restore `item_qty` here to avoid double-counting `stock`.
     var stockRestored = false;
     for (final entry in restoreByEntry.entries) {
       final ok = await _increaseEntryStock(
         sessionId: sessionId,
         entryId: entry.key,
         qty: entry.value,
+        includeStockField: false,
       );
       if (ok) stockRestored = true;
     }
@@ -3603,83 +3779,284 @@ class OdooRpcHelper {
     return stockRestored || lineChanged;
   }
 
-  /// Put qty back onto pharmacy `entry.stock` after a bill line is removed.
-  static Future<bool> _increaseEntryStock({
-    required String sessionId,
-    required int entryId,
-    required double qty,
+  static const List<String> _entryStockQtyFieldPriority = [
+    'item_qty',
+    'stock',
+    'qty',
+    'quantity',
+    'stock_qty',
+    'available_qty',
+    'remaining_qty',
+    'product_qty',
+  ];
+
+  static List<String> _entryStockQtyFieldNames(Set<String> available) {
+    if (available.isEmpty) {
+      return const ['item_qty', 'stock'];
+    }
+    return _entryStockQtyFieldPriority
+        .where(available.contains)
+        .toList(growable: false);
+  }
+
+  static double _asStockQty(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse('$value') ?? 0;
+  }
+
+  static Future<int?> findRecordIdByName(
+    String sessionId,
+    String model,
+    String name, {
+    String op = '=',
   }) async {
-    if (qty <= 0) return false;
+    try {
+      final trimmed = name.trim();
+      if (trimmed.isEmpty) return null;
+      final result = await callKw(
+        sessionId: sessionId,
+        model: model,
+        method: 'name_search',
+        args: [trimmed, [], op, 8],
+      );
+      if (result is! List || result.isEmpty) return null;
+      final want = trimmed.toLowerCase();
+      for (final row in result) {
+        if (row is List && row.length >= 2) {
+          final label = row[1]?.toString().trim().toLowerCase() ?? '';
+          if (label == want) {
+            final id = row[0];
+            if (id is int) return id;
+            return int.tryParse('$id');
+          }
+        }
+      }
+      final first = result.first;
+      if (first is List && first.isNotEmpty) {
+        final id = first[0];
+        if (id is int) return id;
+        return int.tryParse('$id');
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('findRecordIdByName $model: $e');
+    }
+    return null;
+  }
 
-    final qtyFields = const [
-      'qty',
-      'quantity',
-      'stock_qty',
-      'available_qty',
-      'remaining_qty',
-      'product_qty',
-    ];
+  static Future<int?> _findRecordIdInModels(
+    String sessionId,
+    List<String> models,
+    String name,
+  ) async {
+    for (final model in models) {
+      if (_missingModels.contains(model)) continue;
+      final id = await findRecordIdByName(sessionId, model, name);
+      if (id != null) return id;
+    }
+    return null;
+  }
 
+  /// Update pharmacy `entry.stock` from the stock detail editor.
+  static Future<bool> updateEntryStock(
+    String sessionId, {
+    required int entryStockId,
+    String? medicine,
+    String? potency,
+    String? packing,
+    String? company,
+    String? group,
+    double? mrp,
+    double? itemQty,
+    double? stock,
+    String? batch,
+    String? mfd,
+    String? exp,
+    String? rack,
+    String? hsn,
+    double? gst,
+    double? holdQty,
+  }) async {
+    if (entryStockId <= 0) return false;
     try {
       final available = await _modelFields(sessionId, 'entry.stock');
-      final readFields = [
-        'id',
-        ...qtyFields.where(available.contains),
-      ];
-      if (readFields.length == 1) {
-        // fields_get failed — still try common names.
-        readFields.addAll(qtyFields);
+      if (available.isEmpty) return false;
+
+      final writeVals = <String, dynamic>{};
+
+      Future<void> putM2o(
+        String field,
+        List<String> models,
+        String? value,
+      ) async {
+        if (!available.contains(field) || value == null) return;
+        final trimmed = value.trim();
+        if (trimmed.isEmpty) return;
+        final id = await _findRecordIdInModels(sessionId, models, trimmed);
+        if (id != null) writeVals[field] = id;
       }
 
+      await putM2o('medicine_id', const [
+        'pharmacy.medicine',
+        'product.product',
+        'product.template',
+      ], medicine);
+      await putM2o('potency_id', const ['pharmacy.potency'], potency);
+      await putM2o('packing_id', const [
+        'pharmacy.packing',
+        'pharmacy.pack',
+        'product.packing',
+      ], packing);
+      await putM2o('pharmacy_company_id', const [
+        'pharmacy.company',
+        'pharmacy.medicine.company',
+      ], company);
+      await putM2o('pharmacy_group_id', const [
+        'pharmacy.group',
+        'pharmacy.medicine.group',
+      ], group);
+      await putM2o('rack_id', const [
+        'pharmacy.rack',
+        'stock.rack',
+      ], rack);
+
+      void putNum(String field, double? value) {
+        if (!available.contains(field) || value == null) return;
+        writeVals[field] =
+            value == value.roundToDouble() ? value.toInt() : value;
+      }
+
+      void putStr(Iterable<String> fields, String? value) {
+        if (value == null) return;
+        final trimmed = value.trim();
+        for (final field in fields) {
+          if (!available.contains(field)) continue;
+          writeVals[field] = trimmed.isEmpty ? false : trimmed;
+          return;
+        }
+      }
+
+      putNum('mrp', mrp);
+      putNum('item_qty', itemQty);
+      putNum('stock', stock);
+      putNum('gst', gst);
+      putNum('hold_qty', holdQty);
+      putStr(const ['batch_no', 'batch'], batch);
+      putStr(const ['mfd_date', 'mfd', 'manufacture_date', 'manufacturer'], mfd);
+      putStr(const ['exp_date', 'exp', 'expiry_date', 'expiry'], exp);
+      putStr(const ['rack', 'rack_name'], rack);
+      putStr(const ['hsn', 'hsn_code'], hsn);
+
+      if (writeVals.isEmpty) return false;
+
+      await callKw(
+        sessionId: sessionId,
+        model: 'entry.stock',
+        method: 'write',
+        args: [
+          [entryStockId],
+          writeVals,
+        ],
+      );
+      if (kDebugMode) {
+        debugPrint(
+          'updateEntryStock #$entryStockId → $writeVals',
+        );
+      }
+      return true;
+    } catch (e) {
+      if (kDebugMode) debugPrint('updateEntryStock failed: $e');
+      return false;
+    }
+  }
+
+  /// Adjust pharmacy `entry.stock` quantity fields by [delta] (negative = deduct).
+  static Future<bool> _adjustEntryStockFields({
+    required String sessionId,
+    required int entryId,
+    required double delta,
+    required bool includeStockField,
+    Map<String, dynamic>? currentValues,
+  }) async {
+    if (delta == 0) return false;
+
+    final available = await _modelFields(sessionId, 'entry.stock');
+    var fields = _entryStockQtyFieldNames(available);
+    if (!includeStockField) {
+      fields = fields.where((f) => f != 'stock').toList(growable: false);
+    }
+    if (fields.isEmpty) return false;
+
+    final values = <String, dynamic>{};
+    if (currentValues != null) {
+      for (final field in fields) {
+        if (currentValues.containsKey(field)) {
+          values[field] = currentValues[field];
+        }
+      }
+    }
+
+    if (values.length < fields.length) {
       final rows = await callKw(
         sessionId: sessionId,
         model: 'entry.stock',
         method: 'read',
         args: [
           [entryId],
-          readFields,
+          ['id', ...fields],
         ],
       );
       if (rows is! List || rows.isEmpty || rows.first is! Map) {
         if (kDebugMode) {
-          debugPrint('_increaseEntryStock: entry $entryId not readable');
+          debugPrint('_adjustEntryStockFields: entry $entryId not readable');
         }
         return false;
       }
+      values.addAll(Map<String, dynamic>.from(rows.first as Map));
+    }
 
-      final map = Map<String, dynamic>.from(rows.first as Map);
-      String? field;
-      double current = 0;
-      for (final key in qtyFields) {
-        if (!map.containsKey(key)) continue;
-        final v = map[key];
-        if (v is num) {
-          field = key;
-          current = v.toDouble();
-          break;
-        }
-      }
-      field ??= available.contains('qty')
-          ? 'qty'
-          : (available.contains('quantity') ? 'quantity' : 'stock_qty');
+    final writeVals = <String, dynamic>{};
+    for (final field in fields) {
+      if (!values.containsKey(field)) continue;
+      final current = _asStockQty(values[field]);
+      final next = (current + delta).clamp(0, double.infinity);
+      writeVals[field] =
+          next == next.roundToDouble() ? next.toInt() : next;
+    }
+    if (writeVals.isEmpty) return false;
 
-      final next = current + qty;
-      final writeVal = next == next.roundToDouble() ? next.toInt() : next;
-      await callKw(
-        sessionId: sessionId,
-        model: 'entry.stock',
-        method: 'write',
-        args: [
-          [entryId],
-          {field: writeVal},
-        ],
+    await callKw(
+      sessionId: sessionId,
+      model: 'entry.stock',
+      method: 'write',
+      args: [
+        [entryId],
+        writeVals,
+      ],
+    );
+    if (kDebugMode) {
+      debugPrint(
+        '_adjustEntryStockFields #$entryId delta=$delta '
+        'includeStock=$includeStockField → $writeVals',
       );
-      if (kDebugMode) {
-        debugPrint(
-          '_increaseEntryStock #$entryId $field: $current + $qty → $writeVal',
-        );
-      }
-      return true;
+    }
+    return true;
+  }
+
+  /// Put qty back onto pharmacy `entry.stock` after a bill line is removed.
+  static Future<bool> _increaseEntryStock({
+    required String sessionId,
+    required int entryId,
+    required double qty,
+    bool includeStockField = true,
+  }) async {
+    if (qty <= 0) return false;
+    try {
+      return await _adjustEntryStockFields(
+        sessionId: sessionId,
+        entryId: entryId,
+        delta: qty,
+        includeStockField: includeStockField,
+      );
     } catch (e) {
       if (kDebugMode) debugPrint('_increaseEntryStock failed: $e');
       return false;

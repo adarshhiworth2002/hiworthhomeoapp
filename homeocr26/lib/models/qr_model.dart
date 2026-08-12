@@ -64,6 +64,8 @@ class QrData {
   String? potency;
   String? group;
   int? productId;
+  /// Odoo `entry.stock` row id (for restock / RPC when display id differs).
+  int? stockEntryId;
   double? mrp;
   String? batch;
   String? productName;
@@ -94,6 +96,7 @@ class QrData {
     this.potency,
     this.group,
     this.productId,
+    this.stockEntryId,
     this.mrp,
     this.batch,
     this.productName,
@@ -153,7 +156,12 @@ class QrData {
       packing: json['packing'],
       potency: json['potency'],
       group: json['group'],
-      productId: json['product_id'],
+      productId: json['product_id'] is int
+          ? json['product_id'] as int
+          : int.tryParse(json['product_id']?.toString() ?? ''),
+      stockEntryId: json['stock_entry_id'] is int
+          ? json['stock_entry_id'] as int
+          : int.tryParse(json['stock_entry_id']?.toString() ?? ''),
       mrp: (json['mrp'] as num?)?.toDouble(),
       batch: json['batch'],
       productName: json['product_name'],
@@ -232,6 +240,7 @@ class QrData {
       'potency': potency,
       'group': group,
       'product_id': productId,
+      'stock_entry_id': stockEntryId,
       'mrp': mrp,
       'batch': batch,
       'product_name': productName,

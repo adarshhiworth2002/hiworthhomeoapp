@@ -96,6 +96,17 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
         .toList(growable: false);
   }
 
+  List<InvoiceSummaryModel> _currentTabItems(PaymentHistoryViewModel model) {
+    if (_tabController.index == 0) {
+      return _filter(_activeItems(model.items));
+    }
+    return _filter(_settledItems);
+  }
+
+  double _sumTotals(List<InvoiceSummaryModel> items) {
+    return items.fold<double>(0, (sum, item) => sum + (item.total ?? 0));
+  }
+
   void _briefSnack(String message, {VoidCallback? onUndo}) {
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
@@ -199,6 +210,9 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
               );
             }
 
+            final tabItems = _currentTabItems(model);
+            final tabTotal = _sumTotals(tabItems);
+
             return Column(
               children: [
                 Padding(
@@ -218,6 +232,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                     ],
                   ),
                 ),
+                _buildTotalFooter(tabTotal, tabItems.length),
               ],
             );
           },
@@ -257,7 +272,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
             )
           : ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: SystemSafe.listPadding(context, top: 0),
+              padding: SystemSafe.listPadding(context, top: 0, extraBottom: 72),
               itemCount: active.length,
               separatorBuilder: (_, _) => const SizedBox(height: 8),
               itemBuilder: (context, index) {
@@ -315,7 +330,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
             )
           : ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: SystemSafe.listPadding(context, top: 0),
+              padding: SystemSafe.listPadding(context, top: 0, extraBottom: 72),
               itemCount: settled.length,
               separatorBuilder: (_, _) => const SizedBox(height: 8),
               itemBuilder: (context, index) {
@@ -354,6 +369,46 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                 );
               },
             ),
+    );
+  }
+
+  Widget _buildTotalFooter(double total, int count) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        16,
+        12,
+        16,
+        SystemSafe.actionBarBottomPadding(context),
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFF242424),
+        border: Border(
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              count == 1 ? 'Total (1 bill)' : 'Total ($count bills)',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.75),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Text(
+            InvoiceSummaryModel.formatMoney(total),
+            style: const TextStyle(
+              color: Color(0xFFE07A2F),
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

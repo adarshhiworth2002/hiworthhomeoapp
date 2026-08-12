@@ -1,6 +1,8 @@
 class StockItemModel {
   const StockItemModel({
-    this.stockId,
+    this.stockDisplayId,
+    this.entryStockId,
+    this.qrToken,
     this.stockDate,
     this.medicine,
     this.potency,
@@ -23,7 +25,17 @@ class StockItemModel {
     this.expiryColorState,
   });
 
-  final int? stockId;
+  /// Pharmacy display id (`stock_display_id`) — use for search/UI, not Odoo row id.
+  final int? stockDisplayId;
+
+  /// Odoo `entry.stock` row id when the API returns it separately.
+  final int? entryStockId;
+
+  /// Barcode / uid token for `add_to_invoice` (`qr_data`).
+  final String? qrToken;
+
+  /// Back-compat alias for [stockDisplayId].
+  int? get stockId => stockDisplayId;
   final String? stockDate;
   final String? medicine;
   final String? potency;
@@ -46,8 +58,25 @@ class StockItemModel {
   final String? expiryColorState;
 
   factory StockItemModel.fromJson(Map<String, dynamic> json) {
+    final displayId = _asInt(json['stock_display_id'] ?? json['display_id']);
+    final rowId = _asInt(json['id'] ?? json['stock_entry_id']);
+    final legacyStockId = _asInt(json['stock_id']);
+
+    // `stock_display_id` is the pharmacy display number; `id` is the Odoo row.
+    // Never treat Odoo row id as display id when a separate display id exists.
+    final resolvedDisplayId = displayId ?? legacyStockId;
+    final resolvedEntryId = rowId;
+
     return StockItemModel(
-      stockId: _asInt(json['stock_display_id'] ?? json['stock_id'] ?? json['id']),
+      stockDisplayId: resolvedDisplayId,
+      entryStockId: resolvedEntryId,
+      qrToken: _firstDisplay(json, const [
+        'uid',
+        'qr_data',
+        'product_barcode',
+        'barcode',
+        'default_code',
+      ]),
       stockDate: _display(json['stock_date'] ?? json['date']),
       medicine: _display(
         json['medicine_name'] ??

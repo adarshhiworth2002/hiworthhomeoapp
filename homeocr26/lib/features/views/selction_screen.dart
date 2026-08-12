@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:homeocr26/features/views/amount_book_page.dart';
 import 'package:homeocr26/features/views/cheque_clearance_page.dart';
 import 'package:homeocr26/features/views/customer_invoice_list_page.dart';
 import 'package:homeocr26/features/views/customer_web_view_page.dart';
@@ -291,6 +292,17 @@ class _SelectionScreenState extends State<SelectionScreen> {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
                                     builder: (_) => const CustomerWebViewPage(),
+                                  ),
+                                );
+                              },
+                            ),
+                            _HomeTile(
+                              title: 'Cash\nBook',
+                              icon: Icons.menu_book_outlined,
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const AmountBookPage(),
                                   ),
                                 );
                               },

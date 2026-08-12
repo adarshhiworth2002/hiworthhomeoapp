@@ -16,6 +16,7 @@ class InvoiceStockRestoreHelper {
     String? productName,
     String? batch,
     String? potency,
+    int? stockEntryId,
     String? login,
     String? password,
     String db = 'HOMEO_JULY',
@@ -45,6 +46,7 @@ class InvoiceStockRestoreHelper {
         batch: batch,
         potency: potency,
         quantity: qty,
+        stockEntryId: stockEntryId,
       );
     } catch (e) {
       if (kDebugMode) debugPrint('restoreAfterLineDelete odoo failed: $e');

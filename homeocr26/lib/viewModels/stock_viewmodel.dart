@@ -183,6 +183,24 @@ class StockViewModel extends ChangeNotifier {
     _searchHits = items.where((item) => _medicinePrefixMatch(item, query)).toList();
   }
 
+  /// Apply stock detail edits to the in-memory list without a full reload.
+  void replaceLocalItem(StockItemModel updated) {
+    final entryId = updated.entryStockId;
+    final displayId = updated.stockDisplayId;
+    for (var i = 0; i < items.length; i++) {
+      final cur = items[i];
+      final match = (entryId != null && cur.entryStockId == entryId) ||
+          (displayId != null && cur.stockDisplayId == displayId);
+      if (match) {
+        items[i] = updated;
+        break;
+      }
+    }
+    _rebuildSearchHits();
+    _saveSnapshot();
+    notifyListeners();
+  }
+
   Future<void> fetchStockList(
     BuildContext context, {
     bool forceRefresh = false,

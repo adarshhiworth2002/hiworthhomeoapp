@@ -141,6 +141,8 @@ class _BillLine {
   String? addQrDataAlt;
   /// Pharmacy stock display id (from stock picker) for save → add_to_invoice.
   int? stockDisplayId;
+  /// Odoo `entry.stock` row id for precise restock.
+  int? entryStockId;
   /// Odoo `account.move` id from add_to_invoice (draft name is often `/`).
   int? serverInvoiceId;
   /// Odoo `account.move.line` id when editing an existing bill line.
@@ -956,6 +958,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (stock.stockId != null) {
       line.stockDisplayId = stock.stockId;
     }
+    if (stock.entryStockId != null) {
+      line.entryStockId = stock.entryStockId;
+    }
     _mergeTemplateIntoPools(t);
     _templates.add(t);
   }
@@ -1437,6 +1442,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       if (stock.stockId != null) {
         line.stockDisplayId = stock.stockId;
       }
+      if (stock.entryStockId != null) {
+        line.entryStockId = stock.entryStockId;
+      }
       line.revision++;
       _addOpt(_products, _productKeys, name);
     });
@@ -1592,6 +1600,12 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final primary = _primaryAddQrToken(data);
     if (primary != null && primary.isNotEmpty) {
       line.addQrData ??= primary;
+    }
+    if (data.productId != null) {
+      line.stockDisplayId ??= data.productId;
+    }
+    if (data.stockEntryId != null) {
+      line.entryStockId ??= data.stockEntryId;
     }
     final alt = _alternateAddQrToken(data, line.addQrData);
     if (alt != null && alt.isNotEmpty) {
@@ -2108,16 +2122,27 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   Future<void> _openScanner() async {
     FocusScope.of(context).unfocus();
     SystemChannels.textInput.invokeMethod('TextInput.hide');
-    await AddToCustomerPage.showPopup(
+
+    final login = Provider.of<LoginViewmodel>(context, listen: false);
+    if (!await _ensureServerInvoice(login)) {
+      _toast('Could not open bill on server. Try Save, then scan again.');
+      return;
+    }
+    if (!mounted) return;
+
+    final result = await AddToCustomerPage.showPopup(
       context,
       lockedInvoiceNumber: _invoiceNumber,
-      onAdded: (data, qty, invoiceId) {
-        if (!mounted) return;
-        _invoiceCommittedOnServer = true;
-        if (invoiceId != null) _serverInvoiceId = invoiceId;
-        _addOrUpdateLineFromQr(data, qty, invoiceId: invoiceId);
-      },
     );
+    if (result != null && mounted) {
+      _invoiceCommittedOnServer = true;
+      if (result.invoiceId != null) _serverInvoiceId = result.invoiceId;
+      _addOrUpdateLineFromQr(
+        result.data,
+        result.qty,
+        invoiceId: result.invoiceId,
+      );
+    }
   }
 
   bool get _isCreditPayment =>
@@ -2695,6 +2720,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       productName: line.product,
       batch: line.batch,
       potency: line.potency,
+      stockEntryId: line.entryStockId,
       login: login.loginEmail,
       password: login.loginPassword,
       db: LoginViewmodel.dbName,
