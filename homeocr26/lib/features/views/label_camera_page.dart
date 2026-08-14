@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import '../theme.dart';
 
 /// In-app camera for label photos (stays inside the app, no system camera).
 class LabelCameraPage extends StatefulWidget {
@@ -149,7 +150,7 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
           child: Text(
             _error!,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white70, fontSize: 15),
+            style: const TextStyle(color: sectionTextMuted, fontSize: 15),
           ),
         ),
       );
@@ -220,7 +221,7 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
         24,
         16 + MediaQuery.paddingOf(context).bottom,
       ),
-      color: const Color(0xFF1A1A1A),
+      color: sectionBg,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [

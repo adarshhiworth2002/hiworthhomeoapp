@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../services/label_ocr_recognition.dart';
 import '../services/label_ocr_service.dart';
+import '../theme.dart';
 
 /// Google Lens–style screen: photo with selectable OCR text overlays.
 class LabelTextSelectPage extends StatefulWidget {
@@ -396,7 +397,7 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
         child: Text(
           _ocrError!,
           textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.white70, fontSize: 15),
+          style: const TextStyle(color: sectionTextMuted, fontSize: 15),
         ),
       ),
     );
@@ -445,9 +446,9 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
         12 + MediaQuery.paddingOf(context).bottom,
       ),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1A),
+        color: sectionBg,
         border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+          top: BorderSide(color: sectionCard),
         ),
         boxShadow: [
           BoxShadow(
@@ -464,7 +465,7 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
           Text(
             'Selected text',
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.6),
+              color: sectionTextMuted,
               fontSize: 12,
               fontWeight: FontWeight.w500,
             ),
@@ -497,7 +498,7 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
               decoration: InputDecoration(
                 hintText: hint,
                 hintStyle: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.45),
+                  color: sectionTextMuted,
                   fontSize: 15,
                   fontWeight: FontWeight.w500,
                 ),

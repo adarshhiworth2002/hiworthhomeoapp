@@ -8,6 +8,7 @@ import '../widgets/system_safe.dart';
 import 'list_search_field.dart';
 import 'live_refresh_mixin.dart';
 import 'net_amount_detail_page.dart';
+import '../theme.dart';
 
 class NetAmountPage extends StatefulWidget {
   const NetAmountPage({super.key, this.viewModel});
@@ -62,18 +63,18 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
     return ChangeNotifierProvider.value(
       value: _viewModel,
       child: Scaffold(
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         appBar: AppBar(
-          iconTheme: const IconThemeData(color: Colors.white),
+          iconTheme: const IconThemeData(color: sectionText),
           title: const Text(
             'Net Amount (Yesterday)',
             style: TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontWeight: FontWeight.w500,
               fontSize: 15,
             ),
           ),
-          backgroundColor: const Color(0xFF1A1A1A),
+          backgroundColor: sectionBg,
           elevation: 0,
           actions: [
             IconButton(
@@ -81,7 +82,7 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
                 context,
                 forceRefresh: true,
               ),
-              icon: const Icon(Icons.refresh, color: Colors.white),
+              icon: const Icon(Icons.refresh, color: sectionText),
             ),
           ],
         ),
@@ -110,7 +111,7 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
                       child: Text(
                         'Report date: ${model.reportDate}',
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.65),
+                          color: sectionTextMuted,
                           fontSize: 12,
                         ),
                       ),
@@ -121,7 +122,7 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
                       child: Text(
                         model.error,
                         textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white70),
+                        style: const TextStyle(color: sectionTextMuted),
                       ),
                     ),
                   _AmountButton(
@@ -177,7 +178,7 @@ class _AmountButton extends StatelessWidget {
     final onColor =
         ThemeData.estimateBrightnessForColor(color) == Brightness.dark
             ? Colors.white
-            : const Color(0xFF1A1A1A);
+            : sectionBg;
     return Material(
       color: color.withValues(alpha: 0.95),
       borderRadius: BorderRadius.circular(16),
@@ -271,18 +272,18 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
     final isGave = section == NetAmountSection.youGave;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: sectionText),
         title: Text(
           NetAmountViewModel.sectionTitle(section),
           style: const TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
         ),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         elevation: 0,
       ),
       body: Consumer<NetAmountViewModel>(
@@ -312,7 +313,7 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
                             ? 'Yesterday'
                             : 'Date: ${model.reportDate}',
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.7),
+                          color: sectionTextMuted,
                           fontSize: 12,
                         ),
                       ),
@@ -320,7 +321,7 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
                     Text(
                       NetAmountViewModel.formatAmount(amount),
                       style: const TextStyle(
-                        color: Colors.white,
+                        color: sectionText,
                         fontWeight: FontWeight.w800,
                         fontSize: 16,
                       ),
@@ -355,7 +356,7 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
                                   _searchQuery.trim().isEmpty
                                       ? 'No records for yesterday'
                                       : 'No matches for "$_searchQuery"',
-                                  style: const TextStyle(color: Colors.white70),
+                                  style: const TextStyle(color: sectionTextMuted),
                                 ),
                               ),
                             ),
@@ -413,9 +414,9 @@ class _NetAmountListCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.12),
+          color: sectionCard,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+          border: Border.all(color: sectionCardBorder),
         ),
         child: Row(
           children: [
@@ -468,7 +469,7 @@ class _NetAmountListCard extends StatelessWidget {
             ),
             Icon(
               Icons.chevron_right,
-              color: Colors.white.withValues(alpha: 0.55),
+              color: sectionTextMuted,
               size: 20,
             ),
           ],
@@ -500,7 +501,7 @@ class _Cell extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.55),
+            color: sectionTextMuted,
             fontSize: 9,
             fontWeight: FontWeight.w600,
           ),
@@ -511,7 +512,7 @@ class _Cell extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: emphasize ? FontWeight.w700 : FontWeight.w600,
             fontSize: emphasize ? 12 : 11,
           ),

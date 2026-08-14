@@ -27,20 +27,27 @@ class MyApp extends StatelessWidget {
       ],
       child: MaterialApp(
         theme: ThemeData(
-          brightness: Brightness.dark,
-          scaffoldBackgroundColor: appBlack,
+          brightness: Brightness.light,
+          scaffoldBackgroundColor: appCream,
           colorScheme: ColorScheme.fromSeed(
             seedColor: appOrange,
-            brightness: Brightness.dark,
+            brightness: Brightness.light,
             primary: appOrange,
             secondary: appOrange,
-            surface: appBlackSoft,
+            surface: appWhite,
             onPrimary: appWhite,
+            onSurface: appInk,
           ),
           appBarTheme: const AppBarTheme(
-            backgroundColor: appBlack,
-            foregroundColor: appWhite,
+            backgroundColor: appWhite,
+            foregroundColor: appInk,
             elevation: 0,
+            iconTheme: IconThemeData(color: appInk),
+            titleTextStyle: TextStyle(
+              color: appInk,
+              fontWeight: FontWeight.w600,
+              fontSize: 15,
+            ),
           ),
           progressIndicatorTheme: const ProgressIndicatorThemeData(
             color: appOrange,
@@ -54,6 +61,11 @@ class MyApp extends StatelessWidget {
               backgroundColor: appOrange,
               foregroundColor: appWhite,
             ),
+          ),
+          tabBarTheme: const TabBarThemeData(
+            labelColor: appOrange,
+            unselectedLabelColor: appMuted,
+            indicatorColor: appOrange,
           ),
         ),
         debugShowCheckedModeBanner: false,

@@ -8,10 +8,12 @@ import '../../viewModels/customer_invoice_viewmodel.dart';
 import '../../viewModels/employee_performance_viewmodel.dart';
 import '../../viewModels/login_viewmodel.dart';
 import '../../viewModels/net_amount_viewmodel.dart';
+import '../../viewModels/payment_book_viewmodel.dart';
 import '../../viewModels/payment_history_viewmodel.dart';
 import '../../viewModels/stock_viewmodel.dart';
 import 'cheque_clearance_service.dart';
 import 'odoo_rpc_helper.dart';
+import 'payment_book_service.dart';
 import 'payment_history_service.dart';
 
 /// Prefetches data for all home tiles after login / live sync.
@@ -57,6 +59,7 @@ class HomePrefetchService {
 
     if (forceRefresh) {
       PaymentHistoryService.clearCache();
+      PaymentBookService.clearCache();
       ChequeClearanceService.clearCache();
       CustomerInvoiceViewModel.clearGlobalCache();
       EmployeePerformanceViewModel.clearGlobalCache();
@@ -93,6 +96,10 @@ class HomePrefetchService {
         forceRefresh: forceRefresh,
       ),
       PaymentHistoryViewModel.prefetch(
+        context,
+        forceRefresh: forceRefresh,
+      ),
+      PaymentBookViewModel.prefetch(
         context,
         forceRefresh: forceRefresh,
       ),

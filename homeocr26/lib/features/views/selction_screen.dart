@@ -8,6 +8,7 @@ import 'package:homeocr26/features/views/customer_web_view_page.dart';
 import 'package:homeocr26/features/views/employee_performance_page.dart';
 import 'package:homeocr26/features/views/login_page.dart';
 import 'package:homeocr26/features/views/net_amount_page.dart';
+import 'package:homeocr26/features/views/payment_book_page.dart';
 import 'package:homeocr26/features/views/payment_history_page.dart';
 import 'package:homeocr26/features/views/stock_list_page.dart';
 import 'package:homeocr26/features/widgets/app_backdrop.dart';
@@ -15,6 +16,8 @@ import 'package:provider/provider.dart';
 
 import '../../viewModels/cheque_clearance_viewmodel.dart';
 import '../../viewModels/net_amount_viewmodel.dart';
+import '../../viewModels/payment_book_viewmodel.dart';
+import '../../models/payment_book_model.dart';
 import '../services/cheque_clearance_service.dart';
 import '../services/cheque_notification_service.dart';
 import '../services/home_prefetch_service.dart';
@@ -31,11 +34,13 @@ class SelectionScreen extends StatefulWidget {
 
 class _SelectionScreenState extends State<SelectionScreen> {
   late final NetAmountViewModel _netAmountViewModel;
+  late final PaymentBookViewModel _paymentBookViewModel;
 
   @override
   void initState() {
     super.initState();
     _netAmountViewModel = NetAmountViewModel();
+    _paymentBookViewModel = PaymentBookViewModel();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // Cheque alert as soon as home is visible — do not wait for warmAll.
       unawaited(_notifyChequeClearance());
@@ -43,6 +48,12 @@ class _SelectionScreenState extends State<SelectionScreen> {
         await HomePrefetchService.warmAll(
           context,
           netAmountViewModel: _netAmountViewModel,
+        );
+        if (!mounted) return;
+        await _paymentBookViewModel.fetch(
+          context,
+          silent: true,
+          applyFilter: PaymentBookFilter.today(),
         );
         if (!mounted) return;
         LiveDataSync.start(onSync: _liveSync);
@@ -87,12 +98,20 @@ class _SelectionScreenState extends State<SelectionScreen> {
       netAmountViewModel: _netAmountViewModel,
       forceRefresh: true,
     );
+    if (!mounted) return;
+    await _paymentBookViewModel.fetch(
+      context,
+      silent: true,
+      forceRefresh: true,
+      applyFilter: PaymentBookFilter.today(),
+    );
   }
 
   @override
   void dispose() {
     LiveDataSync.stop();
     _netAmountViewModel.dispose();
+    _paymentBookViewModel.dispose();
     super.dispose();
   }
 
@@ -154,8 +173,11 @@ class _SelectionScreenState extends State<SelectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider.value(
-      value: _netAmountViewModel,
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: _netAmountViewModel),
+        ChangeNotifierProvider.value(value: _paymentBookViewModel),
+      ],
       child: Scaffold(
         backgroundColor: Colors.transparent,
         extendBodyBehindAppBar: true,
@@ -169,7 +191,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
               letterSpacing: 0.4,
             ),
           ),
-          backgroundColor: Colors.black.withValues(alpha: 0.28),
+          backgroundColor: appOrange.withValues(alpha: 0.92),
           elevation: 0,
           actions: [
             IconButton(
@@ -220,14 +242,23 @@ class _SelectionScreenState extends State<SelectionScreen> {
                   // ),
                   // const SizedBox(height: 18),
                   Expanded(
-                    child: Consumer<NetAmountViewModel>(
-                      builder: (context, netModel, _) {
+                    child: Consumer2<NetAmountViewModel, PaymentBookViewModel>(
+                      builder: (context, netModel, _, _) {
                         return RefreshIndicator(
                           color: const Color(0xFFE07A2F),
-                          onRefresh: () => HomePrefetchService.refreshHome(
-                            context,
-                            netAmountViewModel: _netAmountViewModel,
-                          ),
+                          onRefresh: () async {
+                            await HomePrefetchService.refreshHome(
+                              context,
+                              netAmountViewModel: _netAmountViewModel,
+                            );
+                            if (!context.mounted) return;
+                            await _paymentBookViewModel.fetch(
+                              context,
+                              forceRefresh: true,
+                              silent: true,
+                              applyFilter: PaymentBookFilter.today(),
+                            );
+                          },
                           child: GridView.count(
                           physics: const AlwaysScrollableScrollPhysics(),
                           crossAxisCount: 2,
@@ -303,6 +334,17 @@ class _SelectionScreenState extends State<SelectionScreen> {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
                                     builder: (_) => const AmountBookPage(),
+                                  ),
+                                );
+                              },
+                            ),
+                            _HomeTile(
+                              title: 'Payment\nBook',
+                              icon: Icons.payments_outlined,
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const PaymentBookPage(),
                                   ),
                                 );
                               },

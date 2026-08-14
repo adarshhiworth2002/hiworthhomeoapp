@@ -61,7 +61,7 @@ class AmountBookCustomerDetailPage extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
-                    color: Colors.white.withValues(alpha: 0.55),
+                    color: sectionTextMuted,
                   ),
                 ),
                 const SizedBox(width: 28),
@@ -81,7 +81,7 @@ class AmountBookCustomerDetailPage extends StatelessWidget {
                 ? const Center(
                     child: Text(
                       'No entries for this customer',
-                      style: TextStyle(color: Colors.white70),
+                      style: TextStyle(color: sectionTextMuted),
                     ),
                   )
                 : ListView(
@@ -110,7 +110,7 @@ class AmountBookCustomerDetailPage extends StatelessWidget {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
-                color: Colors.white.withValues(alpha: 0.55),
+                color: sectionTextMuted,
               ),
             ),
           ),
@@ -163,9 +163,9 @@ class _LedgerEntryCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: sectionCard,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -179,7 +179,7 @@ class _LedgerEntryCard extends StatelessWidget {
                     timeLabel,
                     style: TextStyle(
                       fontSize: 11,
-                      color: Colors.white.withValues(alpha: 0.55),
+                      color: sectionTextMuted,
                     ),
                   ),
                 const SizedBox(height: 2),

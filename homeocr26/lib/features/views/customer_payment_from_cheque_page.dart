@@ -5,6 +5,7 @@ import '../../models/cheque_clearance_model.dart';
 import '../services/cheque_payment_enrichment.dart';
 import '../widgets/system_safe.dart';
 import 'customer_payment_create_page.dart';
+import '../theme.dart';
 
 /// Customer Payment detail opened from cheque party details (PAY/0236).
 class CustomerPaymentFromChequePage extends StatefulWidget {
@@ -63,18 +64,18 @@ class _CustomerPaymentFromChequePageState
     final outstanding = cheque.displayBalance ?? balanceSum;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: sectionText),
         title: Text(
           cheque.displayCustomerPayment,
           style: const TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
         ),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         elevation: 0,
       ),
       body: Stack(
@@ -121,7 +122,7 @@ class _CustomerPaymentFromChequePageState
                           const Text(
                             'CUSTOMER PAYMENT',
                             style: TextStyle(
-                              color: Colors.white,
+                              color: sectionText,
                               fontWeight: FontWeight.w700,
                               fontSize: 13,
                               letterSpacing: 0.3,
@@ -144,7 +145,7 @@ class _CustomerPaymentFromChequePageState
                         Text(
                           'OUTSTANDING BALANCE',
                           style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.7),
+                            color: sectionTextMuted,
                             fontSize: 9,
                             fontWeight: FontWeight.w600,
                           ),
@@ -153,7 +154,7 @@ class _CustomerPaymentFromChequePageState
                         Text(
                           '₹ ${ChequeClearanceModel.formatMoney(outstanding)}',
                           style: const TextStyle(
-                            color: Colors.white,
+                            color: sectionText,
                             fontWeight: FontWeight.w800,
                             fontSize: 15,
                           ),
@@ -236,7 +237,7 @@ class _CustomerPaymentFromChequePageState
               Text(
                 'INVOICES',
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.85),
+                  color: sectionTextMuted,
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
                   letterSpacing: 0.5,
@@ -247,14 +248,14 @@ class _CustomerPaymentFromChequePageState
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.08),
+                    color: sectionCard,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
                     _loading
                         ? 'Loading invoices…'
                         : 'No linked invoices',
-                    style: const TextStyle(color: Colors.white70),
+                    style: const TextStyle(color: sectionTextMuted),
                   ),
                 )
               else
@@ -267,7 +268,7 @@ class _CustomerPaymentFromChequePageState
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.1),
+                    color: sectionCard,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Column(
@@ -399,9 +400,9 @@ class _SectionCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: sectionCard,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -415,7 +416,7 @@ class _SectionCard extends StatelessWidget {
               Text(
                 title,
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: sectionText,
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
                 ),
@@ -447,7 +448,7 @@ class _Meta extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = Text(
       value,
-      style: const TextStyle(color: Colors.white, fontSize: 12),
+      style: const TextStyle(color: sectionText, fontSize: 12),
     );
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -459,7 +460,7 @@ class _Meta extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
+                color: sectionTextMuted,
                 fontSize: 11,
               ),
             ),
@@ -496,9 +497,9 @@ class _InvoiceCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: sectionCard,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -519,7 +520,7 @@ class _InvoiceCard extends StatelessWidget {
                 child: Text(
                   invoice.number ?? '—',
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: sectionText,
                     fontWeight: FontWeight.w700,
                     fontSize: 13,
                   ),
@@ -605,7 +606,7 @@ class _InvCell extends StatelessWidget {
         Text(
           label,
           style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.55),
+            color: sectionTextMuted,
             fontSize: 9,
           ),
         ),
@@ -614,7 +615,7 @@ class _InvCell extends StatelessWidget {
           value,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: Colors.white, fontSize: 12),
+          style: const TextStyle(color: sectionText, fontSize: 12),
         ),
       ],
     );
@@ -637,7 +638,7 @@ class _FooterRow extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.65),
+                color: sectionTextMuted,
                 fontSize: 12,
               ),
             ),
@@ -645,7 +646,7 @@ class _FooterRow extends StatelessWidget {
           Text(
             value,
             style: const TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontWeight: FontWeight.w600,
               fontSize: 12,
             ),

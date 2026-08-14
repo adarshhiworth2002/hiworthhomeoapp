@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// Shared dark search field for list screens (first-letter / prefix filter).
+import '../theme.dart';
+
+/// Shared search field for list screens (first-letter / prefix filter).
 class ListSearchField extends StatelessWidget {
   const ListSearchField({
     super.key,
@@ -18,12 +20,12 @@ class ListSearchField extends StatelessWidget {
     return TextField(
       controller: controller,
       onChanged: onChanged,
-      style: const TextStyle(color: Colors.white, fontSize: 14),
-      cursorColor: const Color(0xFFE07A2F),
+      style: const TextStyle(color: sectionText, fontSize: 14),
+      cursorColor: sectionAccent,
       decoration: InputDecoration(
         hintText: hintText,
-        hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.45)),
-        prefixIcon: const Icon(Icons.search, color: Colors.white70),
+        hintStyle: const TextStyle(color: sectionTextMuted),
+        prefixIcon: const Icon(Icons.search, color: sectionAccent),
         suffixIcon: controller.text.isEmpty
             ? null
             : IconButton(
@@ -32,22 +34,23 @@ class ListSearchField extends StatelessWidget {
                   controller.clear();
                   onChanged('');
                 },
-                icon: const Icon(Icons.clear, color: Colors.white70),
+                icon: const Icon(Icons.clear, color: sectionTextMuted),
               ),
         filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.1),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        fillColor: sectionCard,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+          borderSide: const BorderSide(color: sectionCardBorder),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+          borderSide: const BorderSide(color: sectionCardBorder),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFFE07A2F)),
+          borderSide: const BorderSide(color: sectionAccent),
         ),
       ),
     );

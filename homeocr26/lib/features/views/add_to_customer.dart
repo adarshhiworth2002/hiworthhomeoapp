@@ -17,6 +17,7 @@ import 'label_text_select_page.dart';
 import '../widgets/invoice_prefix_field.dart';
 import '../widgets/show_dialog_custom.dart';
 import '../widgets/system_safe.dart';
+import '../theme.dart';
 
 /// Returned when [AddToCustomerPage.showPopup] closes after a successful add.
 class AddToCustomerResult {
@@ -286,26 +287,26 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     final width = MediaQuery.of(context).size.width;
     final height = MediaQuery.of(context).size.height;
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: sectionText),
         automaticallyImplyLeading: !widget.asPopup,
         leading: widget.asPopup
             ? IconButton(
                 tooltip: 'Close',
-                icon: const Icon(Icons.close, color: Colors.white),
+                icon: const Icon(Icons.close, color: sectionText),
                 onPressed: () => Navigator.of(context).maybePop(),
               )
             : null,
         title: Text(
           _invoiceLocked ? 'Scan into bill' : 'Add to Customer',
           style: const TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
         ),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         elevation: 0,
         actions: [
           GestureDetector(
@@ -617,7 +618,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.search_off, color: Colors.white70, size: 40),
+              const Icon(Icons.search_off, color: sectionTextMuted, size: 40),
               const SizedBox(height: 12),
               Text(
                 model.labelOcrError.isNotEmpty
@@ -676,13 +677,13 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
             child: Column(
               children: [
                 _rowItem("Medicine Name", model.qrResponse?.result?.data?.productName??"", icon: Icons.medication),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _rowItem("Potency", model.qrResponse?.result?.data?.potency??"", icon: Icons.percent),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _rowItem("Company", model.qrResponse?.result?.data?.company??"", icon: Icons.location_city),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _rowItem("Expiry", model.qrResponse?.result?.data?.expiry??"", icon: Icons.calendar_today),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _rowItem(
                   "Stock Quantity",
                   _formatQty(
@@ -692,14 +693,14 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   ),
                   icon: Icons.inventory_2,
                 ),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _rowTextField(
                   "Required Quantity",
                   requiredQtyController,
                   icon: Icons.shopping_cart,
                   keyboardType: TextInputType.number,
                 ),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _buildInvoiceField(model),
               ],
             ),
@@ -748,7 +749,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   onChanged: (value) =>
                       model.setLabelMedicine(context, value),
                 ),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _LabelDropdown(
                   label: 'Potency',
                   icon: Icons.percent,
@@ -757,7 +758,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   enabled: model.labelMedicine != null,
                   onChanged: model.setLabelPotency,
                 ),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _LabelDropdown(
                   label: 'Packing',
                   icon: Icons.inventory_2_outlined,
@@ -766,20 +767,20 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   enabled: model.labelMedicine != null,
                   onChanged: model.setLabelPacking,
                 ),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _rowItem(
                   'Available Stock',
                   _formatQty(stockQty),
                   icon: Icons.inventory_2,
                 ),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _rowTextField(
                   'Required Quantity',
                   requiredQtyController,
                   icon: Icons.shopping_cart,
                   keyboardType: TextInputType.number,
                 ),
-                const Divider(color: Colors.white54),
+                const Divider(color: sectionTextMuted),
                 _buildInvoiceField(model),
               ],
             ),
@@ -819,7 +820,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.12),
+                color: sectionCard,
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: const Color(0xFFE07A2F).withValues(alpha: 0.5)),
               ),
@@ -869,7 +870,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                 child: Text(
                   title,
                   style: const TextStyle(
-                      color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+                      color: sectionTextMuted, fontSize: 11, fontWeight: FontWeight.bold),
                 ),
               ),
 
@@ -921,7 +922,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
               controller: controller,
               style: const TextStyle(
                 fontSize: 13,
-                color: Colors.white54,
+                color: sectionTextMuted,
               ),
               decoration: const InputDecoration(
                 isDense: true,
@@ -1196,9 +1197,9 @@ class _LabelDropdown extends StatelessWidget {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 10),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.08),
+              color: sectionCard,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+              border: Border.all(color: sectionCardBorder),
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
@@ -1207,13 +1208,13 @@ class _LabelDropdown extends StatelessWidget {
                 hint: Text(
                   items.isEmpty ? 'Not available' : 'Select',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.45),
+                    color: sectionTextMuted,
                     fontSize: 12,
                   ),
                 ),
                 dropdownColor: const Color(0xff2c505c),
                 iconEnabledColor: Colors.white70,
-                style: const TextStyle(color: Colors.white, fontSize: 12),
+                style: const TextStyle(color: sectionText, fontSize: 12),
                 items: items
                     .map(
                       (e) => DropdownMenuItem<String>(

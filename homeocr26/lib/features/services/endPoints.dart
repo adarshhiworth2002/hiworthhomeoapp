@@ -7,6 +7,7 @@ enum EndPoint {
   stockList("api/flutter/get_stock_list"),
   netAmountYesterday("api/flutter/get_net_amount_yesterday"),
   paymentHistory("api/flutter/get_payment_history"),
+  paymentBook("api/flutter/get_payment_book"),
   chequeClearance("api/flutter/get_cheque_clearance"),
   employeePerformance("api/flutter/get_employee_performance"),
   login("api/flutter/login"),

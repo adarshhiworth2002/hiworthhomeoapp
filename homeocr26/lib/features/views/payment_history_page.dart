@@ -9,6 +9,7 @@ import '../widgets/system_safe.dart';
 import 'invoice_list_widgets.dart';
 import 'list_search_field.dart';
 import 'live_refresh_mixin.dart';
+import '../theme.dart';
 
 class PaymentHistoryPage extends StatefulWidget {
   const PaymentHistoryPage({super.key});
@@ -149,18 +150,18 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
     return ChangeNotifierProvider.value(
       value: _viewModel,
       child: Scaffold(
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         appBar: AppBar(
-          iconTheme: const IconThemeData(color: Colors.white),
+          iconTheme: const IconThemeData(color: sectionText),
           title: const Text(
             'Payment History',
             style: TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontWeight: FontWeight.w500,
               fontSize: 15,
             ),
           ),
-          backgroundColor: const Color(0xFF1A1A1A),
+          backgroundColor: sectionBg,
           elevation: 0,
           actions: [
             IconButton(
@@ -169,7 +170,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                 if (!mounted) return;
                 await _reloadSettled(live: _viewModel.items);
               },
-              icon: const Icon(Icons.refresh, color: Colors.white),
+              icon: const Icon(Icons.refresh, color: sectionText),
             ),
           ],
           bottom: PreferredSize(
@@ -177,8 +178,8 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
             child: TabBar(
               controller: _tabController,
               indicatorColor: const Color(0xFFE07A2F),
-              labelColor: Colors.white,
-              unselectedLabelColor: Colors.white54,
+              labelColor: sectionAccent,
+              unselectedLabelColor: sectionTextMuted,
               tabs: [
                 const Tab(
                   icon: Icon(Icons.history, size: 18),
@@ -263,7 +264,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                           : (_searchQuery.trim().isEmpty
                               ? 'All bills are in Settled'
                               : 'No matches for "$_searchQuery"'),
-                      style: const TextStyle(color: Colors.white70),
+                      style: const TextStyle(color: sectionTextMuted),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -321,7 +322,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                       _searchQuery.trim().isEmpty
                           ? 'Swipe a bill left in History to settle it'
                           : 'No settled matches for "$_searchQuery"',
-                      style: const TextStyle(color: Colors.white70),
+                      style: const TextStyle(color: sectionTextMuted),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -382,9 +383,9 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
         SystemSafe.actionBarBottomPadding(context),
       ),
       decoration: BoxDecoration(
-        color: const Color(0xFF242424),
+        color: sectionFooter,
         border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+          top: BorderSide(color: sectionCardBorder),
         ),
       ),
       child: Row(
@@ -393,7 +394,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
             child: Text(
               count == 1 ? 'Total (1 bill)' : 'Total ($count bills)',
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.75),
+                color: sectionTextMuted,
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
               ),
@@ -432,7 +433,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                 Text(
                   label,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: sectionText,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -445,7 +446,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                 Text(
                   label,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: sectionText,
                     fontWeight: FontWeight.w700,
                   ),
                 ),

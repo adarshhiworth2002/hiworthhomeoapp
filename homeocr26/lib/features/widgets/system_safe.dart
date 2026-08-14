@@ -10,10 +10,10 @@ class SystemSafe {
 
   static const _overlayStyle = SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light,
-    statusBarBrightness: Brightness.dark,
+    statusBarIconBrightness: Brightness.dark,
+    statusBarBrightness: Brightness.light,
     systemNavigationBarColor: Colors.transparent,
-    systemNavigationBarIconBrightness: Brightness.light,
+    systemNavigationBarIconBrightness: Brightness.dark,
     systemNavigationBarContrastEnforced: false,
   );
 

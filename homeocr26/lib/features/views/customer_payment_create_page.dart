@@ -9,6 +9,7 @@ import '../../models/cheque_clearance_model.dart';
 import '../../viewModels/login_viewmodel.dart';
 import '../services/odoo_rpc_helper.dart';
 import '../widgets/system_safe.dart';
+import '../theme.dart';
 
 /// Website "New Customer Payment" form (partner.payment draft).
 class CustomerPaymentCreatePage extends StatefulWidget {
@@ -373,7 +374,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
     return showModalBottomSheet<_NamedOpt>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -393,7 +394,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                             child: Text(
                               title,
                               style: const TextStyle(
-                                color: Colors.white,
+                                color: sectionText,
                                 fontWeight: FontWeight.w700,
                                 fontSize: 15,
                               ),
@@ -401,7 +402,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                           ),
                           IconButton(
                             onPressed: () => Navigator.pop(ctx),
-                            icon: const Icon(Icons.close, color: Colors.white70),
+                            icon: const Icon(Icons.close, color: sectionTextMuted),
                           ),
                         ],
                       ),
@@ -414,11 +415,11 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                         decoration: InputDecoration(
                           hintText: 'Search…',
                           hintStyle: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.45),
+                            color: sectionTextMuted,
                           ),
                           prefixIcon: const Icon(
                             Icons.search,
-                            color: Colors.white54,
+                            color: sectionTextMuted,
                           ),
                           filled: true,
                           fillColor: Colors.white.withValues(alpha: 0.08),
@@ -446,7 +447,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                         child: Text(
                           '${filtered.length} of ${options.length}',
                           style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.5),
+                            color: sectionTextMuted,
                             fontSize: 11,
                           ),
                         ),
@@ -523,7 +524,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
         title: const Text('Cancel payment?', style: TextStyle(color: Colors.white)),
         content: const Text(
           'This will cancel/delete the draft on the website.',
-          style: TextStyle(color: Colors.white70),
+          style: TextStyle(color: sectionTextMuted),
         ),
         actions: [
           TextButton(
@@ -602,18 +603,18 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: sectionText),
         title: const Text(
           'New Customer Payment',
           style: TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
         ),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         elevation: 0,
       ),
       body: _bootstrapping
@@ -629,7 +630,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                       children: [
                         Text(
                           _error!,
-                          style: const TextStyle(color: Colors.white70),
+                          style: const TextStyle(color: sectionTextMuted),
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 12),
@@ -754,7 +755,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                         Text(
                           'INVOICES',
                           style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.85),
+                            color: sectionTextMuted,
                             fontWeight: FontWeight.w700,
                             fontSize: 13,
                             letterSpacing: 0.5,
@@ -767,11 +768,11 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                           decoration: InputDecoration(
                             hintText: 'Scan or Type Invoice',
                             hintStyle: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.45),
+                              color: sectionTextMuted,
                             ),
                             prefixIcon: const Icon(
                               Icons.search,
-                              color: Colors.white54,
+                              color: sectionTextMuted,
                             ),
                             filled: true,
                             fillColor: Colors.white.withValues(alpha: 0.08),
@@ -787,14 +788,14 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                           Container(
                             padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.08),
+                              color: sectionCard,
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
                               _customer == null
                                   ? 'Select a customer to load invoices'
                                   : 'No open invoices',
-                              style: const TextStyle(color: Colors.white70),
+                              style: const TextStyle(color: sectionTextMuted),
                             ),
                           )
                         else
@@ -811,7 +812,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                             child: Text(
                               'Total Amount: ₹ ${ChequeClearanceModel.formatMoney(_invoiceTotalSum)}',
                               style: const TextStyle(
-                                color: Colors.white,
+                                color: sectionText,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
@@ -913,7 +914,7 @@ class _HeaderBanner extends StatelessWidget {
                 Text(
                   title,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: sectionText,
                     fontWeight: FontWeight.w700,
                     fontSize: 13,
                     letterSpacing: 0.3,
@@ -936,7 +937,7 @@ class _HeaderBanner extends StatelessWidget {
               Text(
                 'OUTSTANDING BALANCE',
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.7),
+                  color: sectionTextMuted,
                   fontSize: 9,
                   fontWeight: FontWeight.w600,
                 ),
@@ -945,7 +946,7 @@ class _HeaderBanner extends StatelessWidget {
               Text(
                 '₹ ${ChequeClearanceModel.formatMoney(outstanding)}',
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: sectionText,
                   fontWeight: FontWeight.w800,
                   fontSize: 15,
                 ),
@@ -975,9 +976,9 @@ class _SectionCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: sectionCard,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -991,7 +992,7 @@ class _SectionCard extends StatelessWidget {
               Text(
                 title,
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: sectionText,
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
                 ),
@@ -1027,7 +1028,7 @@ class _DropdownField extends StatelessWidget {
         child: InputDecorator(
           decoration: InputDecoration(
             labelText: label,
-            labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
+            labelStyle: TextStyle(color: sectionTextMuted),
             filled: true,
             fillColor: Colors.white.withValues(alpha: 0.06),
             border: OutlineInputBorder(
@@ -1038,7 +1039,7 @@ class _DropdownField extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
               borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
             ),
-            suffixIcon: const Icon(Icons.arrow_drop_down, color: Colors.white70),
+            suffixIcon: const Icon(Icons.arrow_drop_down, color: sectionTextMuted),
           ),
           child: Text(
             (value == null || value!.trim().isEmpty) ? 'Select…' : value!,
@@ -1076,7 +1077,7 @@ class _DateField extends StatelessWidget {
         child: InputDecorator(
           decoration: InputDecoration(
             labelText: label,
-            labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
+            labelStyle: TextStyle(color: sectionTextMuted),
             filled: true,
             fillColor: Colors.white.withValues(alpha: 0.06),
             border: OutlineInputBorder(
@@ -1088,11 +1089,11 @@ class _DateField extends StatelessWidget {
               borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
             ),
             suffixIcon:
-                const Icon(Icons.calendar_today, color: Colors.white70, size: 18),
+                const Icon(Icons.calendar_today, color: sectionTextMuted, size: 18),
           ),
           child: Text(
             value,
-            style: const TextStyle(color: Colors.white, fontSize: 13),
+            style: const TextStyle(color: sectionText, fontSize: 13),
           ),
         ),
       ),
@@ -1127,7 +1128,7 @@ class _AmountField extends StatelessWidget {
           labelText: label,
           prefixText: '₹ ',
           prefixStyle: const TextStyle(color: Colors.white),
-          labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
+          labelStyle: TextStyle(color: sectionTextMuted),
           filled: true,
           fillColor: const Color(0xFF1B5E20).withValues(alpha: 0.25),
           border: OutlineInputBorder(
@@ -1164,7 +1165,7 @@ class _ReadRow extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
+                color: sectionTextMuted,
                 fontSize: 11,
               ),
             ),
@@ -1172,7 +1173,7 @@ class _ReadRow extends StatelessWidget {
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(color: Colors.white, fontSize: 12),
+              style: const TextStyle(color: sectionText, fontSize: 12),
             ),
           ),
         ],
@@ -1211,7 +1212,7 @@ class _CheckRow extends StatelessWidget {
                   onChanged: (v) => onChanged(v ?? false),
                   activeColor: const Color(0xFFE07A2F),
                   side: BorderSide(
-                    color: Colors.white.withValues(alpha: 0.55),
+                    color: sectionTextMuted,
                   ),
                 ),
               ),
@@ -1219,7 +1220,7 @@ class _CheckRow extends StatelessWidget {
               Expanded(
                 child: Text(
                   label,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  style: const TextStyle(color: sectionText, fontSize: 12),
                 ),
               ),
             ],
@@ -1239,7 +1240,7 @@ class _InvoiceMiniCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.1),
+        color: sectionCard,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
       ),
@@ -1249,7 +1250,7 @@ class _InvoiceMiniCard extends StatelessWidget {
           Text(
             invoice.number ?? '—',
             style: const TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontWeight: FontWeight.w700,
               fontSize: 13,
             ),
@@ -1260,7 +1261,7 @@ class _InvoiceMiniCard extends StatelessWidget {
             '  ·  Balance ₹ ${ChequeClearanceModel.formatMoney(invoice.balance)}'
             '  ·  ${invoice.status ?? '—'}',
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.75),
+              color: sectionTextMuted,
               fontSize: 11,
             ),
           ),

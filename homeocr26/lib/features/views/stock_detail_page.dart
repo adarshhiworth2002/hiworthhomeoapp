@@ -5,6 +5,7 @@ import '../../models/stock_item_model.dart';
 import '../../viewModels/login_viewmodel.dart';
 import '../services/odoo_rpc_helper.dart';
 import '../widgets/system_safe.dart';
+import '../theme.dart';
 
 /// Full stock record detail with optional edit → Odoo `entry.stock` write.
 class StockDetailPage extends StatefulWidget {
@@ -225,24 +226,24 @@ class _StockDetailPageState extends State<StockDetailPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: sectionText),
         title: const Text(
           'Stock Details',
           style: TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
         ),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         elevation: 0,
         actions: [
           if (_editing)
             TextButton(
               onPressed: _saving ? null : _toggleEdit,
-              child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
+              child: const Text('Cancel', style: TextStyle(color: sectionTextMuted)),
             ),
           IconButton(
             tooltip: _editing ? 'Save' : 'Edit',
@@ -280,9 +281,9 @@ class _StockDetailPageState extends State<StockDetailPage> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.12),
+              color: sectionCard,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+              border: Border.all(color: sectionCardBorder),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -293,7 +294,7 @@ class _StockDetailPageState extends State<StockDetailPage> {
                   Text(
                     _item.medicineLabel,
                     style: const TextStyle(
-                      color: Colors.white,
+                      color: sectionText,
                       fontWeight: FontWeight.w700,
                       fontSize: 15,
                     ),
@@ -429,7 +430,7 @@ class _Meta extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
+                color: sectionTextMuted,
                 fontSize: 11,
               ),
             ),
@@ -437,7 +438,7 @@ class _Meta extends StatelessWidget {
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(color: Colors.white, fontSize: 12),
+              style: const TextStyle(color: sectionText, fontSize: 12),
             ),
           ),
         ],
@@ -464,11 +465,11 @@ class _EditField extends StatelessWidget {
       child: TextField(
         controller: controller,
         keyboardType: keyboardType,
-        style: const TextStyle(color: Colors.white, fontSize: 13),
+        style: const TextStyle(color: sectionText, fontSize: 13),
         decoration: InputDecoration(
           labelText: label,
           labelStyle: TextStyle(
-            color: Colors.white.withValues(alpha: 0.65),
+            color: sectionTextMuted,
             fontSize: 12,
           ),
           filled: true,
@@ -482,7 +483,7 @@ class _EditField extends StatelessWidget {
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
             borderSide: BorderSide(
-              color: Colors.white.withValues(alpha: 0.12),
+              color: sectionCard,
             ),
           ),
           focusedBorder: OutlineInputBorder(
@@ -516,7 +517,7 @@ class _AmountChip extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
+                color: sectionTextMuted,
                 fontSize: 10,
               ),
             ),
@@ -524,7 +525,7 @@ class _AmountChip extends StatelessWidget {
             Text(
               StockItemModel.money(value),
               style: const TextStyle(
-                color: Colors.white,
+                color: sectionText,
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
               ),

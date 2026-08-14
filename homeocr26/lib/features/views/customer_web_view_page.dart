@@ -15,6 +15,7 @@ import '../services/WebApi/web_api_impl.dart';
 import '../services/api_request_helper.dart';
 import '../services/endPoints.dart';
 import 'add_to_customer.dart';
+import '../theme.dart';
 
 /// Opens Customer Invoices with a real Odoo backend web session.
 class CustomerWebViewPage extends StatefulWidget {
@@ -839,13 +840,13 @@ document.cookie = "cids=1; path=/";
     return Scaffold(
       backgroundColor: const Color(0xFFF0F0F0),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         foregroundColor: Colors.white,
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: sectionText),
         title: Text(
           title,
           style: const TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w600,
             fontSize: 16,
           ),
@@ -862,7 +863,7 @@ document.cookie = "cids=1; path=/";
             ),
           IconButton(
             tooltip: 'Reload',
-            icon: const Icon(Icons.refresh, color: Colors.white),
+            icon: const Icon(Icons.refresh, color: sectionText),
             onPressed:
                 (_signingIn || controller == null) ? null : _openInvoices,
           ),

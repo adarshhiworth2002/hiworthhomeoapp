@@ -9,6 +9,7 @@ import 'customer_new_invoice_page.dart';
 import 'invoice_list_widgets.dart';
 import 'list_search_field.dart';
 import 'live_refresh_mixin.dart';
+import '../theme.dart';
 
 class CustomerInvoiceListPage extends StatefulWidget {
   const CustomerInvoiceListPage({super.key});
@@ -59,23 +60,23 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
     return ChangeNotifierProvider.value(
       value: _viewModel,
       child: Scaffold(
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         appBar: AppBar(
-          iconTheme: const IconThemeData(color: Colors.white),
+          iconTheme: const IconThemeData(color: sectionText),
           title: const Text(
             'Customer Invoice',
             style: TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontWeight: FontWeight.w500,
               fontSize: 15,
             ),
           ),
-          backgroundColor: const Color(0xFF1A1A1A),
+          backgroundColor: sectionBg,
           elevation: 0,
           actions: [
             IconButton(
               onPressed: () => _viewModel.fetch(context, forceRefresh: true),
-              icon: const Icon(Icons.refresh, color: Colors.white),
+              icon: const Icon(Icons.refresh, color: sectionText),
             ),
           ],
         ),
@@ -200,7 +201,7 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
               child: const Center(
                 child: Text(
                   'No customer invoices found',
-                  style: TextStyle(color: Colors.white70),
+                  style: TextStyle(color: sectionTextMuted),
                 ),
               ),
             ),
@@ -220,7 +221,7 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
               child: Center(
                 child: Text(
                   'No matches for "$_searchQuery"',
-                  style: const TextStyle(color: Colors.white70),
+                  style: const TextStyle(color: sectionTextMuted),
                 ),
               ),
             ),

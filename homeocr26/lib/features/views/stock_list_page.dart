@@ -9,6 +9,7 @@ import 'invoice_list_widgets.dart';
 import '../widgets/system_safe.dart';
 import 'live_refresh_mixin.dart';
 import 'stock_detail_page.dart';
+import '../theme.dart';
 
 class StockListPage extends StatefulWidget {
   const StockListPage({super.key});
@@ -74,23 +75,23 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
     return ChangeNotifierProvider.value(
       value: _viewModel,
       child: Scaffold(
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         appBar: AppBar(
-          iconTheme: const IconThemeData(color: Colors.white),
+          iconTheme: const IconThemeData(color: sectionText),
           title: const Text(
             'Stock',
             style: TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontWeight: FontWeight.w500,
               fontSize: 15,
             ),
           ),
-          backgroundColor: const Color(0xFF1A1A1A),
+          backgroundColor: sectionBg,
           elevation: 0,
           actions: [
             IconButton(
               onPressed: () => _viewModel.fetchStockList(context, forceRefresh: true),
-              icon: const Icon(Icons.refresh, color: Colors.white),
+              icon: const Icon(Icons.refresh, color: sectionText),
             ),
           ],
         ),
@@ -105,19 +106,19 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
                   child: TextField(
                     controller: _searchController,
                     onChanged: _onSearchChanged,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    style: const TextStyle(color: sectionText, fontSize: 14),
                     decoration: InputDecoration(
                       hintText: 'Search medicine (first letters)…',
                       hintStyle: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.45),
+                        color: sectionTextMuted,
                       ),
                       prefixIcon:
-                          const Icon(Icons.search, color: Colors.white70),
+                          const Icon(Icons.search, color: sectionTextMuted),
                       suffixIcon: _searchController.text.isEmpty
                           ? null
                           : IconButton(
                               icon: const Icon(Icons.clear,
-                                  color: Colors.white70),
+                                  color: sectionTextMuted),
                               onPressed: () {
                                 _searchController.clear();
                                 _viewModel.setSearchQuery('',
@@ -148,7 +149,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
                               : 'Loading…')
                           : model.statusText,
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.55),
+                        color: sectionTextMuted,
                         fontSize: 11,
                       ),
                     ),
@@ -173,7 +174,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
             Text(
               model.statusText.isEmpty ? 'Loading stock…' : model.statusText,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.7),
+                color: sectionTextMuted,
                 fontSize: 13,
               ),
             ),
@@ -201,7 +202,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
                 model.statusText.isEmpty ? 'Loading…' : model.statusText,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.7),
+                  color: sectionTextMuted,
                   fontSize: 13,
                 ),
               ),
@@ -225,7 +226,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
                         ? 'No matches for "${model.searchQuery}"'
                         : 'No stock records found',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white70),
+                    style: const TextStyle(color: sectionTextMuted),
                   ),
                 ),
               ),
@@ -300,9 +301,9 @@ class StockListCard extends StatelessWidget {
     final card = Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: sectionCard,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Row(
         children: [
@@ -354,7 +355,7 @@ class StockListCard extends StatelessWidget {
             const SizedBox(width: 4),
             Icon(
               Icons.chevron_right,
-              color: Colors.white.withValues(alpha: 0.55),
+              color: sectionTextMuted,
               size: 20,
             ),
           ],
@@ -399,7 +400,7 @@ class _LineCell extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           textAlign: align,
           style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.55),
+            color: sectionTextMuted,
             fontSize: 9,
             fontWeight: FontWeight.w600,
           ),
@@ -411,7 +412,7 @@ class _LineCell extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           textAlign: align,
           style: TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: emphasize ? FontWeight.w700 : FontWeight.w600,
             fontSize: emphasize ? 12 : 11,
           ),

@@ -5,6 +5,7 @@ import '../../models/cheque_clearance_model.dart';
 import '../services/cheque_payment_enrichment.dart';
 import '../widgets/system_safe.dart';
 import 'customer_payment_from_cheque_page.dart';
+import '../theme.dart';
 
 /// Cheque Details / PDC Entry — screenshot 2.
 class ChequeClearanceDetailPage extends StatefulWidget {
@@ -50,18 +51,18 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
     final active = cheque.displayState;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: sectionText),
         title: const Text(
           'Cheque Details',
           style: TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
         ),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         elevation: 0,
       ),
       body: Stack(
@@ -145,7 +146,7 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
                   Text(
                     'Select Invoices',
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.55),
+                      color: sectionTextMuted,
                       fontSize: 11,
                     ),
                   ),
@@ -154,7 +155,7 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
                     Text(
                       _loading ? 'Loading invoices…' : '—',
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.7),
+                        color: sectionTextMuted,
                       ),
                     )
                   else
@@ -176,7 +177,7 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
                                   vertical: 6,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.12),
+                                  color: sectionCard,
                                   borderRadius: BorderRadius.circular(20),
                                   border: Border.all(
                                     color:
@@ -241,7 +242,7 @@ class _HeaderBanner extends StatelessWidget {
                 Text(
                   title,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: sectionText,
                     fontWeight: FontWeight.w700,
                     fontSize: 13,
                     letterSpacing: 0.3,
@@ -328,9 +329,9 @@ class _InfoCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: sectionCard,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -342,7 +343,7 @@ class _InfoCard extends StatelessWidget {
               Text(
                 title,
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: sectionText,
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
                 ),
@@ -389,7 +390,7 @@ class _Field extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.55),
+              color: sectionTextMuted,
               fontSize: 10,
               letterSpacing: 0.4,
               fontWeight: FontWeight.w600,
@@ -434,7 +435,7 @@ class _TappableField extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.55),
+              color: sectionTextMuted,
               fontSize: 10,
               letterSpacing: 0.4,
               fontWeight: FontWeight.w600,

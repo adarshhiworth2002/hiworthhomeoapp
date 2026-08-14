@@ -191,18 +191,18 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
   }) {
     return InputDecoration(
       labelText: label,
-      labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.55)),
-      prefixIcon: Icon(icon, color: Colors.white70),
+      labelStyle: TextStyle(color: sectionTextMuted),
+      prefixIcon: Icon(icon, color: sectionTextMuted),
       filled: true,
-      fillColor: Colors.white.withValues(alpha: 0.1),
+      fillColor: sectionCard,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+        borderSide: BorderSide(color: sectionCardBorder),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+        borderSide: BorderSide(color: sectionCardBorder),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
@@ -260,7 +260,7 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
                 height: 4,
                 margin: const EdgeInsets.only(bottom: 16),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.25),
+                  color: sectionCardBorder,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -292,7 +292,7 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: sectionText,
                       side: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.25),
+                        color: sectionCardBorder,
                       ),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
@@ -310,7 +310,7 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: sectionText,
                       side: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.25),
+                        color: sectionCardBorder,
                       ),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
@@ -332,7 +332,7 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: sectionText,
                       side: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.25),
+                        color: sectionCardBorder,
                       ),
                     ),
                     onPressed: () {
@@ -423,7 +423,7 @@ class _CustomerTab extends StatelessWidget {
                           ? 'Filtered results'
                           : 'All customers',
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.7),
+                        color: sectionTextMuted,
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                       ),
@@ -441,7 +441,7 @@ class _CustomerTab extends StatelessWidget {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Text(
                     model.error,
-                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                    style: const TextStyle(color: sectionTextMuted, fontSize: 13),
                   ),
                 ),
               if (summaries.isEmpty)
@@ -452,7 +452,7 @@ class _CustomerTab extends StatelessWidget {
                       model.filter.isActive
                           ? 'No customers match your filter'
                           : 'No customer entries found',
-                      style: const TextStyle(color: Colors.white70),
+                      style: const TextStyle(color: sectionTextMuted),
                     ),
                   ),
                 )
@@ -490,9 +490,9 @@ class _SummaryCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: sectionCard,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Row(
         children: [
@@ -589,9 +589,9 @@ class _CustomerCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.12),
+          color: sectionCard,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+          border: Border.all(color: sectionCardBorder),
         ),
         child: Row(
           children: [
@@ -614,7 +614,7 @@ class _CustomerCard extends StatelessWidget {
                     '${summary.entryCount} entr${summary.entryCount == 1 ? 'y' : 'ies'}',
                     style: TextStyle(
                       fontSize: 11,
-                      color: Colors.white.withValues(alpha: 0.55),
+                      color: sectionTextMuted,
                     ),
                   ),
                 ],
@@ -627,7 +627,7 @@ class _CustomerCard extends StatelessWidget {
                   'Balance',
                   style: TextStyle(
                     fontSize: 9,
-                    color: Colors.white.withValues(alpha: 0.55),
+                    color: sectionTextMuted,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -643,7 +643,7 @@ class _CustomerCard extends StatelessWidget {
             ),
             Icon(
               Icons.chevron_right,
-              color: Colors.white.withValues(alpha: 0.55),
+              color: sectionTextMuted,
               size: 20,
             ),
           ],
@@ -675,14 +675,14 @@ class _SupplierPlaceholder extends StatelessWidget {
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
-                color: Colors.white70,
+                color: sectionTextMuted,
               ),
             ),
             const SizedBox(height: 6),
             Text(
               'Coming soon',
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.45),
+                color: sectionTextMuted,
               ),
             ),
           ],

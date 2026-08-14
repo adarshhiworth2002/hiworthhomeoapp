@@ -22,6 +22,7 @@ import '../services/odoo_rpc_helper.dart';
 import '../widgets/system_safe.dart';
 import '../../models/qr_model.dart';
 import 'add_to_customer.dart';
+import '../theme.dart';
 
 class _NamedOption {
   const _NamedOption({
@@ -1775,7 +1776,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                               child: Text(
                                 'Product (from stock)',
                                 style: TextStyle(
-                                  color: Colors.white,
+                                  color: sectionText,
                                   fontWeight: FontWeight.w700,
                                   fontSize: 16,
                                 ),
@@ -1796,11 +1797,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                           decoration: InputDecoration(
                             hintText: 'Search stock medicines…',
                             hintStyle: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.5),
+                              color: sectionTextMuted,
                             ),
                             prefixIcon: const Icon(
                               Icons.search,
-                              color: Colors.white70,
+                              color: sectionTextMuted,
                             ),
                             filled: true,
                             fillColor: Colors.white.withValues(alpha: 0.08),
@@ -1848,7 +1849,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                           padding: EdgeInsets.all(16),
                           child: Text(
                             'No stock matches. Type to search or create.',
-                            style: TextStyle(color: Colors.white70),
+                            style: TextStyle(color: sectionTextMuted),
                           ),
                         )
                       else
@@ -1872,7 +1873,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                     : Text(
                                         sub,
                                         style: const TextStyle(
-                                          color: Colors.white54,
+                                          color: sectionTextMuted,
                                           fontSize: 12,
                                         ),
                                       ),
@@ -1950,7 +1951,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                               child: Text(
                                 title,
                                 style: const TextStyle(
-                                  color: Colors.white,
+                                  color: sectionText,
                                   fontWeight: FontWeight.w700,
                                   fontSize: 16,
                                 ),
@@ -1962,7 +1963,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                 child: Text(
                                   '${filtered.length}/${options.length}',
                                   style: TextStyle(
-                                    color: Colors.white.withValues(alpha: 0.55),
+                                    color: sectionTextMuted,
                                     fontSize: 12,
                                   ),
                                 ),
@@ -1982,11 +1983,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                           decoration: InputDecoration(
                             hintText: 'Search or type to create…',
                             hintStyle: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.5),
+                              color: sectionTextMuted,
                             ),
                             prefixIcon: const Icon(
                               Icons.search,
-                              color: Colors.white70,
+                              color: sectionTextMuted,
                             ),
                             filled: true,
                             fillColor: Colors.white.withValues(alpha: 0.08),
@@ -2035,7 +2036,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                       : options.isEmpty
                                           ? 'No saved options — type to create'
                                           : 'Start typing…',
-                                  style: const TextStyle(color: Colors.white70),
+                                  style: const TextStyle(color: sectionTextMuted),
                                 ),
                               )
                             : ListView.builder(
@@ -2793,15 +2794,15 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         }
       },
       child: Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
-        backgroundColor: const Color(0xFF1A1A1A),
+        iconTheme: const IconThemeData(color: sectionText),
+        backgroundColor: sectionBg,
         elevation: 0,
         title: Text(
           _invoiceNumber,
           style: const TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w600,
             fontSize: 16,
           ),
@@ -2853,7 +2854,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
               ),
               Text(
                 _invoiceDateDisplay,
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                style: const TextStyle(color: sectionTextMuted, fontSize: 13),
               ),
             ],
           ),
@@ -3033,7 +3034,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                               child: Text(
                                 'Expiry Medicine Bill',
                                 style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.85),
+                                  color: sectionTextMuted,
                                   fontSize: 13,
                                 ),
                               ),
@@ -3062,7 +3063,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                           child: Text(
                             'No lines yet. Add a line or scan a product.',
                             style:
-                                TextStyle(color: Colors.white70, fontSize: 12),
+                                TextStyle(color: sectionTextMuted, fontSize: 12),
                           ),
                         ),
                       ..._lines.asMap().entries.map((e) {
@@ -3325,7 +3326,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                 child: OutlinedButton(
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.white54),
+                    side: const BorderSide(color: sectionTextMuted),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                   onPressed: _saving || _removingLine ? null : _discardAndClose,
@@ -3541,7 +3542,7 @@ class _LineCardState extends State<_LineCard> {
                     ? line.product!
                     : 'Line ${widget.index + 1}',
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: sectionText,
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
                 ),
@@ -3550,7 +3551,7 @@ class _LineCardState extends State<_LineCard> {
             IconButton(
               tooltip: 'Edit',
               onPressed: widget.onEdit,
-              icon: const Icon(Icons.edit_outlined, color: Colors.white70, size: 20),
+              icon: const Icon(Icons.edit_outlined, color: sectionTextMuted, size: 20),
             ),
             IconButton(
               tooltip: 'Delete',
@@ -3618,7 +3619,7 @@ class _LineCardState extends State<_LineCard> {
             Text(
               'Line ${widget.index + 1}',
               style: const TextStyle(
-                color: Colors.white,
+                color: sectionText,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -3823,7 +3824,7 @@ class _CompactField extends StatelessWidget {
     return RichText(
       text: TextSpan(
         style: TextStyle(
-          color: Colors.white.withValues(alpha: 0.65),
+          color: sectionTextMuted,
           fontSize: 10,
         ),
         children: [
@@ -3831,7 +3832,7 @@ class _CompactField extends StatelessWidget {
           TextSpan(
             text: text,
             style: TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
               fontSize: emphasize ? 12 : 11,
             ),
@@ -3892,7 +3893,7 @@ class _LineDropdownRow extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.08),
+                  color: sectionCard,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
                     color: highlightError
@@ -3913,7 +3914,7 @@ class _LineDropdownRow extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const Icon(Icons.arrow_drop_down, color: Colors.white70),
+                    const Icon(Icons.arrow_drop_down, color: sectionTextMuted),
                   ],
                 ),
               ),
@@ -3942,7 +3943,7 @@ class _LineReadOnlyRow extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.65),
+                color: sectionTextMuted,
                 fontSize: 12,
               ),
             ),
@@ -3954,11 +3955,11 @@ class _LineReadOnlyRow extends StatelessWidget {
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                border: Border.all(color: sectionCard),
               ),
               child: Text(
                 (value == null || value!.trim().isEmpty) ? '—' : value!,
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                style: const TextStyle(color: sectionTextMuted, fontSize: 13),
               ),
             ),
           ),
@@ -4025,7 +4026,7 @@ class _LineTextRow extends StatelessWidget {
               focusNode: focusNode,
               keyboardType: keyboardType,
               textInputAction: textInputAction,
-              style: const TextStyle(color: Colors.white, fontSize: 13),
+              style: const TextStyle(color: sectionText, fontSize: 13),
               onChanged: onChanged,
               onSubmitted: (_) => onNext(),
               decoration: InputDecoration(
@@ -4077,7 +4078,7 @@ class _StatusChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: selected
-              ? const Color(0xFF1A1A1A)
+              ? sectionBg
               : Colors.black.withValues(alpha: 0.2),
         ),
       ),
@@ -4085,7 +4086,7 @@ class _StatusChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (selected) ...[
-            const Icon(Icons.check, size: 14, color: const Color(0xFF1A1A1A)),
+            const Icon(Icons.check, size: 14, color: sectionBg),
             const SizedBox(width: 4),
           ],
           Text(
@@ -4114,9 +4115,9 @@ class _Card extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: sectionCard,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4125,7 +4126,7 @@ class _Card extends StatelessWidget {
             Text(
               title!,
               style: const TextStyle(
-                color: Colors.white,
+                color: sectionText,
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
               ),
@@ -4168,7 +4169,7 @@ class _TextField extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.65),
+              color: sectionTextMuted,
               fontSize: 12,
             ),
           ),
@@ -4180,7 +4181,7 @@ class _TextField extends StatelessWidget {
             maxLines: maxLines,
             textInputAction: textInputAction,
             onSubmitted: onSubmitted,
-            style: const TextStyle(color: Colors.white, fontSize: 14),
+            style: const TextStyle(color: sectionText, fontSize: 14),
             decoration: InputDecoration(
               isDense: true,
               filled: true,
@@ -4222,13 +4223,13 @@ class _PickerField extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.65),
+              color: sectionTextMuted,
               fontSize: 12,
             ),
           ),
           const SizedBox(height: 4),
           Material(
-            color: Colors.white.withValues(alpha: 0.08),
+            color: sectionCard,
             borderRadius: BorderRadius.circular(10),
             child: InkWell(
               borderRadius: BorderRadius.circular(10),
@@ -4240,7 +4241,7 @@ class _PickerField extends StatelessWidget {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(10),
                   border:
-                      Border.all(color: Colors.white.withValues(alpha: 0.25)),
+                      Border.all(color: sectionCardBorder),
                 ),
                 child: Row(
                   children: [
@@ -4255,7 +4256,7 @@ class _PickerField extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const Icon(Icons.arrow_drop_down, color: Colors.white70),
+                    const Icon(Icons.arrow_drop_down, color: sectionTextMuted),
                   ],
                 ),
               ),
@@ -4290,7 +4291,7 @@ class _StaticDropdown extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.65),
+              color: sectionTextMuted,
               fontSize: 12,
             ),
           ),
@@ -4299,9 +4300,9 @@ class _StaticDropdown extends StatelessWidget {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.08),
+              color: sectionCard,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+              border: Border.all(color: sectionCardBorder),
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
@@ -4309,13 +4310,13 @@ class _StaticDropdown extends StatelessWidget {
                 hint: Text(
                   'Optional',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.45),
+                    color: sectionTextMuted,
                   ),
                 ),
                 isExpanded: true,
                 dropdownColor: const Color(0xff2c505c),
                 iconEnabledColor: Colors.white70,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
+                style: const TextStyle(color: sectionText, fontSize: 14),
                 items: items
                     .map((e) => DropdownMenuItem(value: e, child: Text(e)))
                     .toList(),
@@ -4358,7 +4359,7 @@ class _ReadRow extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.65),
+                color: sectionTextMuted,
                 fontSize: 12,
               ),
             ),
@@ -4366,7 +4367,7 @@ class _ReadRow extends StatelessWidget {
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(color: Colors.white, fontSize: 12),
+              style: const TextStyle(color: sectionText, fontSize: 12),
             ),
           ),
         ],
@@ -4392,7 +4393,7 @@ class _MoneyRow extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.65),
+                color: sectionTextMuted,
                 fontSize: 12,
               ),
             ),

@@ -12,6 +12,7 @@ import '../services/invoice_search_service.dart';
 import '../widgets/invoice_prefix_field.dart';
 import '../widgets/show_dialog_custom.dart';
 import '../widgets/system_safe.dart';
+import '../theme.dart';
 
 class AddToSupplPage extends StatefulWidget {
   const AddToSupplPage({super.key});
@@ -112,19 +113,19 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
     final width = MediaQuery.of(context).size.width;
     final height = MediaQuery.of(context).size.height;
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: sectionText),
 
         title: const Text(
           "Add to Supplier",
           style: TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
         ),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         elevation: 0,
 
         actions: [
@@ -429,12 +430,12 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                             model.medicine[index].rate,
                             icon: Icons.medication,
                           ),
-                          const Divider(color: Colors.white54),
+                          const Divider(color: sectionTextMuted),
                         ],
                       );
                     },
                   ),
-                  const Divider(color: Colors.white54),
+                  const Divider(color: sectionTextMuted),
                   _buildInvoiceField(model),
                   const SizedBox(height: 8),
                 ],
@@ -510,7 +511,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                 child: Text(
                   title,
                   style: const TextStyle(
-                    color: Colors.white70,
+                    color: sectionTextMuted,
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
                   ),
@@ -591,7 +592,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
             child: Text(
               title,
               style: const TextStyle(
-                color: Colors.white70,
+                color: sectionTextMuted,
                 fontSize: 13,
                 fontWeight: FontWeight.bold,
               ),
@@ -601,7 +602,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
             child: TextField(
               keyboardType: keyboardType,
               controller: controller,
-              style: const TextStyle(fontSize: 14, color: Colors.white54),
+              style: const TextStyle(fontSize: 14, color: sectionTextMuted),
               decoration: const InputDecoration(
                 isDense: true,
                 border: UnderlineInputBorder(),
@@ -693,7 +694,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                             label: const Text(
                               "Add",
                               style: TextStyle(
-                                color: Colors.white,
+                                color: sectionText,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -725,7 +726,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                       label: const Text(
                         "Clear",
                         style: TextStyle(
-                          color: Colors.white,
+                          color: sectionText,
                           fontWeight: FontWeight.bold,
                         ),
                       ),

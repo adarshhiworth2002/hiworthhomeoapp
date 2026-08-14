@@ -7,6 +7,7 @@ import '../services/invoice_detail_service.dart';
 import '../widgets/system_safe.dart';
 import 'add_to_customer.dart';
 import 'customer_new_invoice_page.dart';
+import '../theme.dart';
 
 /// View-only customer invoice detail matching the Cash/Credit Tax Invoice screen.
 /// When [supplierLayout] is true (You Gave), line items show Ordered / Received /
@@ -283,18 +284,18 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
     final showSupplierQty = widget.supplierLayout;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: sectionText),
         title: Text(
           widget.title,
           style: const TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
         ),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         elevation: 0,
         actions: [
           if (canEdit)
@@ -363,7 +364,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
               ),
               Text(
                 _formatDate(_invoice.invoiceDate),
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                style: const TextStyle(color: sectionTextMuted, fontSize: 13),
               ),
             ],
           ),
@@ -410,7 +411,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
                         padding: EdgeInsets.symmetric(vertical: 8),
                         child: Text(
                           'No line items loaded for this bill.',
-                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                          style: TextStyle(color: sectionTextMuted, fontSize: 12),
                         ),
                       )
                     : Column(
@@ -465,7 +466,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
                 : 'View mode only — editing actions are disabled.',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.55),
+              color: sectionTextMuted,
               fontSize: 11,
             ),
           ),
@@ -491,7 +492,7 @@ class _StatusChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: selected
-              ? const Color(0xFF1A1A1A)
+              ? sectionBg
               : Colors.black.withValues(alpha: 0.2),
         ),
       ),
@@ -499,7 +500,7 @@ class _StatusChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (selected) ...[
-            const Icon(Icons.check, size: 14, color: Color(0xFF1A1A1A)),
+            const Icon(Icons.check, size: 14, color: sectionBg),
             const SizedBox(width: 4),
           ],
           Text(
@@ -528,9 +529,9 @@ class _SectionCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: sectionCard,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -539,7 +540,7 @@ class _SectionCard extends StatelessWidget {
             Text(
               title!,
               style: const TextStyle(
-                color: Colors.white,
+                color: sectionText,
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
               ),
@@ -571,7 +572,7 @@ class _ReadField extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.65),
+                color: sectionTextMuted,
                 fontSize: 12,
               ),
             ),
@@ -579,7 +580,7 @@ class _ReadField extends StatelessWidget {
           Expanded(
             child: Text(
               (value == null || value!.trim().isEmpty) ? '—' : value!,
-              style: const TextStyle(color: Colors.white, fontSize: 12),
+              style: const TextStyle(color: sectionText, fontSize: 12),
             ),
           ),
         ],
@@ -605,7 +606,7 @@ class _MoneyRow extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.65),
+                color: sectionTextMuted,
                 fontSize: 12,
               ),
             ),
@@ -650,7 +651,7 @@ class _LineTile extends StatelessWidget {
           Text(
             line.productName ?? 'Product',
             style: const TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontWeight: FontWeight.w700,
               fontSize: 13,
             ),
@@ -744,7 +745,7 @@ class _Field extends StatelessWidget {
     return RichText(
       text: TextSpan(
         style: TextStyle(
-          color: Colors.white.withValues(alpha: 0.65),
+          color: sectionTextMuted,
           fontSize: 10,
         ),
         children: [
@@ -752,7 +753,7 @@ class _Field extends StatelessWidget {
           TextSpan(
             text: text,
             style: TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
               fontSize: emphasize ? 12 : 11,
             ),

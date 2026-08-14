@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/invoice_summary_model.dart';
 import '../widgets/system_safe.dart';
+import '../theme.dart';
 
 /// Payment History session detail — same columns as the website list view.
 class PaymentHistoryDetailPage extends StatelessWidget {
@@ -15,18 +16,18 @@ class PaymentHistoryDetailPage extends StatelessWidget {
     final status = invoice.displayPaymentHistoryStatus;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: sectionText),
         title: const Text(
           'Payment History',
           style: TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
         ),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         elevation: 0,
       ),
       body: RefreshIndicator(
@@ -39,9 +40,9 @@ class PaymentHistoryDetailPage extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.12),
+              color: sectionCard,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+              border: Border.all(color: sectionCardBorder),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -52,7 +53,7 @@ class PaymentHistoryDetailPage extends StatelessWidget {
                       child: Text(
                         invoice.displayNumber,
                         style: const TextStyle(
-                          color: Colors.white,
+                          color: sectionText,
                           fontWeight: FontWeight.w700,
                           fontSize: 15,
                         ),
@@ -126,7 +127,7 @@ class _Meta extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
+                color: sectionTextMuted,
                 fontSize: 11,
               ),
             ),
@@ -134,7 +135,7 @@ class _Meta extends StatelessWidget {
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(color: Colors.white, fontSize: 12),
+              style: const TextStyle(color: sectionText, fontSize: 12),
             ),
           ),
         ],
@@ -164,7 +165,7 @@ class _AmountChip extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
+                color: sectionTextMuted,
                 fontSize: 10,
               ),
             ),
@@ -172,7 +173,7 @@ class _AmountChip extends StatelessWidget {
             Text(
               InvoiceSummaryModel.formatMoney(value),
               style: const TextStyle(
-                color: Colors.white,
+                color: sectionText,
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
               ),

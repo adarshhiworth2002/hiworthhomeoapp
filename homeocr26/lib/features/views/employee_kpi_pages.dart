@@ -7,6 +7,7 @@ import '../../models/invoice_summary_model.dart';
 import '../../viewModels/employee_performance_viewmodel.dart';
 import '../widgets/system_safe.dart';
 import 'employee_performance_page.dart';
+import '../theme.dart';
 
 /// Website "Completed Today" — paid bills in date range.
 class CompletedTodayPage extends StatefulWidget {
@@ -134,10 +135,10 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
-        backgroundColor: const Color(0xFF1A1A1A),
+        iconTheme: const IconThemeData(color: sectionText),
+        backgroundColor: sectionBg,
         elevation: 0,
         title: const Text(
           'Completed Today',
@@ -200,7 +201,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
                       '${_results.length} paid bill(s)'
                       '${widget.expectedCount != null ? ' · KPI: ${widget.expectedCount}' : ''}',
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.6),
+                        color: sectionTextMuted,
                         fontSize: 11,
                       ),
                     ),
@@ -222,7 +223,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
                           child: const Center(
                             child: Text(
                               'No paid bills in this date range',
-                              style: TextStyle(color: Colors.white70),
+                              style: TextStyle(color: sectionTextMuted),
                             ),
                           ),
                         ),
@@ -247,7 +248,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
                           child: Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.12),
+                              color: sectionCard,
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
                                 color: Colors.white.withValues(alpha: 0.18),
@@ -387,15 +388,15 @@ class _ActiveSessionsTimerLogsPageState
         context.watch<EmployeePerformanceViewModel>().summary.activeSessions;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
-        backgroundColor: const Color(0xFF1A1A1A),
+        iconTheme: const IconThemeData(color: sectionText),
+        backgroundColor: sectionBg,
         elevation: 0,
         title: const Text(
           'Cash/Credit Timer Logs',
           style: TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
@@ -419,7 +420,7 @@ class _ActiveSessionsTimerLogsPageState
             onPressed: _refreshing
                 ? null
                 : () => _load(forceRefresh: true),
-            icon: const Icon(Icons.refresh, color: Colors.white),
+            icon: const Icon(Icons.refresh, color: sectionText),
           ),
         ],
       ),
@@ -447,7 +448,7 @@ class _ActiveSessionsTimerLogsPageState
                   '${_logs.length} record(s)'
                   '${kpiCount > 0 ? ' · KPI: $kpiCount' : ''}',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.6),
+                    color: sectionTextMuted,
                     fontSize: 12,
                   ),
                 ),
@@ -458,7 +459,7 @@ class _ActiveSessionsTimerLogsPageState
                     child: Center(
                       child: Text(
                         'No running sessions',
-                        style: TextStyle(color: Colors.white70),
+                        style: TextStyle(color: sectionTextMuted),
                       ),
                     ),
                   )
@@ -481,7 +482,7 @@ class _ActiveSessionsTimerLogsPageState
                           child: Container(
                             padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.12),
+                              color: sectionCard,
                               borderRadius: BorderRadius.circular(14),
                               border: Border.all(
                                 color: Colors.white.withValues(alpha: 0.18),
@@ -496,7 +497,7 @@ class _ActiveSessionsTimerLogsPageState
                                       child: Text(
                                         log.invoiceNo ?? '—',
                                         style: const TextStyle(
-                                          color: Colors.white,
+                                          color: sectionText,
                                           fontWeight: FontWeight.w800,
                                           fontSize: 15,
                                         ),
@@ -518,7 +519,7 @@ class _ActiveSessionsTimerLogsPageState
                                             ? 'Running'
                                             : (log.status ?? 'Running'),
                                         style: const TextStyle(
-                                          color: Colors.white,
+                                          color: sectionText,
                                           fontWeight: FontWeight.w700,
                                           fontSize: 11,
                                         ),
@@ -607,15 +608,15 @@ class _ActiveSessionBillDetailPageState
     final status = log.status ?? 'Running';
 
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
-        backgroundColor: const Color(0xFF1A1A1A),
+        iconTheme: const IconThemeData(color: sectionText),
+        backgroundColor: sectionBg,
         elevation: 0,
         title: Text(
           log.invoiceNo ?? 'Active Session',
           style: const TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
@@ -634,7 +635,7 @@ class _ActiveSessionBillDetailPageState
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.12),
+                    color: sectionCard,
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
                       color: Colors.white.withValues(alpha: 0.18),
@@ -687,8 +688,8 @@ class _ActiveSessionBillDetailPageState
                 const SizedBox(height: 16),
                 TabBar(
                   controller: _tabs,
-                  labelColor: Colors.white,
-                  unselectedLabelColor: Colors.white54,
+                  labelColor: sectionAccent,
+                  unselectedLabelColor: sectionTextMuted,
                   indicatorColor: const Color(0xFFE07A2F),
                   tabs: const [
                     Tab(text: 'User Timings'),
@@ -760,7 +761,7 @@ class _DetailField extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
+                color: sectionTextMuted,
                 fontSize: 12,
               ),
             ),
@@ -808,7 +809,7 @@ class _UserTimingsTab extends StatelessWidget {
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.08),
+            color: sectionCard,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
           ),
@@ -818,7 +819,7 @@ class _UserTimingsTab extends StatelessWidget {
               Text(
                 invoiceNo,
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: sectionText,
                   fontWeight: FontWeight.w800,
                   fontSize: 14,
                 ),
@@ -872,7 +873,7 @@ class _AllBillSessionsTab extends StatelessWidget {
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.08),
+            color: sectionCard,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
           ),
@@ -885,7 +886,7 @@ class _AllBillSessionsTab extends StatelessWidget {
                     child: Text(
                       invoiceNo,
                       style: const TextStyle(
-                        color: Colors.white,
+                        color: sectionText,
                         fontWeight: FontWeight.w800,
                         fontSize: 14,
                       ),
@@ -903,7 +904,7 @@ class _AllBillSessionsTab extends StatelessWidget {
                     child: Text(
                       status,
                       style: const TextStyle(
-                        color: Colors.white,
+                        color: sectionText,
                         fontWeight: FontWeight.w700,
                         fontSize: 11,
                       ),
@@ -936,7 +937,7 @@ class _BreaksTab extends StatelessWidget {
     return const Center(
       child: Text(
         'No breaks',
-        style: TextStyle(color: Colors.white70, fontSize: 13),
+        style: TextStyle(color: sectionTextMuted, fontSize: 13),
       ),
     );
   }
@@ -1062,15 +1063,15 @@ class _EmployeePerformanceGraphPageState
     final chartMax = maxVal <= 0 ? 1.0 : maxVal;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: sectionBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.white),
-        backgroundColor: const Color(0xFF1A1A1A),
+        iconTheme: const IconThemeData(color: sectionText),
+        backgroundColor: sectionBg,
         elevation: 0,
         title: const Text(
           'Employee Performance Graph',
           style: TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
@@ -1089,7 +1090,7 @@ class _EmployeePerformanceGraphPageState
               child: Text(
                 'Report date: ${_fmtRawDate(widget.reportDate)}',
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.65),
+                  color: sectionTextMuted,
                   fontSize: 12,
                 ),
               ),
@@ -1097,9 +1098,9 @@ class _EmployeePerformanceGraphPageState
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.1),
+              color: sectionCard,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+              border: Border.all(color: sectionCardBorder),
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<EmployeeGraphMeasure>(
@@ -1107,7 +1108,7 @@ class _EmployeePerformanceGraphPageState
                 isExpanded: true,
                 dropdownColor: const Color(0xFF2A2A2A),
                 iconEnabledColor: Colors.white,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
+                style: const TextStyle(color: sectionText, fontSize: 14),
                 items: [
                   for (final m in EmployeeGraphMeasure.values)
                     DropdownMenuItem(value: m, child: Text(m.label)),
@@ -1123,9 +1124,9 @@ class _EmployeePerformanceGraphPageState
           Container(
             padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.12),
+              color: sectionCard,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+              border: Border.all(color: sectionCardBorder),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1173,7 +1174,7 @@ class _EmployeePerformanceGraphPageState
                   child: Text(
                     'Employee · tap a bar to open',
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.55),
+                      color: sectionTextMuted,
                       fontSize: 11,
                     ),
                   ),
@@ -1196,7 +1197,7 @@ class _EmployeePerformanceGraphPageState
                       vertical: 10,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.08),
+                      color: sectionCard,
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Row(
@@ -1217,7 +1218,7 @@ class _EmployeePerformanceGraphPageState
                         const SizedBox(width: 4),
                         Icon(
                           Icons.chevron_right,
-                          color: Colors.white.withValues(alpha: 0.5),
+                          color: sectionTextMuted,
                           size: 18,
                         ),
                       ],
@@ -1257,7 +1258,7 @@ class _BarColumn extends StatelessWidget {
         children: [
           Text(
             _fmtNum(value),
-            style: const TextStyle(color: Colors.white70, fontSize: 10),
+            style: const TextStyle(color: sectionTextMuted, fontSize: 10),
           ),
           const SizedBox(height: 4),
           Container(
@@ -1273,7 +1274,7 @@ class _BarColumn extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white70, fontSize: 10),
+            style: const TextStyle(color: sectionTextMuted, fontSize: 10),
           ),
         ],
       ),
@@ -1300,7 +1301,7 @@ class _DateField extends StatelessWidget {
       child: InputDecorator(
         decoration: InputDecoration(
           labelText: label,
-          labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
+          labelStyle: TextStyle(color: sectionTextMuted),
           filled: true,
           fillColor: Colors.white.withValues(alpha: 0.08),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
@@ -1363,7 +1364,7 @@ class _StatusPill extends StatelessWidget {
       child: Text(
         status,
         style: const TextStyle(
-          color: Colors.white,
+          color: sectionText,
           fontWeight: FontWeight.w700,
           fontSize: 11,
         ),
@@ -1391,7 +1392,7 @@ class _Line extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.55),
+                color: sectionTextMuted,
                 fontSize: 12,
               ),
             ),

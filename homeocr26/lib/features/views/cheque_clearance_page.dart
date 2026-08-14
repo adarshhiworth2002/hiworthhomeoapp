@@ -10,6 +10,7 @@ import '../widgets/system_safe.dart';
 import 'invoice_list_widgets.dart';
 import 'list_search_field.dart';
 import 'live_refresh_mixin.dart';
+import '../theme.dart';
 
 class ChequeClearancePage extends StatefulWidget {
   const ChequeClearancePage({super.key});
@@ -69,23 +70,23 @@ class _ChequeClearancePageState extends State<ChequeClearancePage>
     return ChangeNotifierProvider.value(
       value: _viewModel,
       child: Scaffold(
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: sectionBg,
         appBar: AppBar(
-          iconTheme: const IconThemeData(color: Colors.white),
+          iconTheme: const IconThemeData(color: sectionText),
           title: const Text(
             'Today Cheque Clearance',
             style: TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontWeight: FontWeight.w500,
               fontSize: 15,
             ),
           ),
-          backgroundColor: const Color(0xFF1A1A1A),
+          backgroundColor: sectionBg,
           elevation: 0,
           actions: [
             IconButton(
               onPressed: () => _viewModel.fetch(context, forceRefresh: true),
-              icon: const Icon(Icons.refresh, color: Colors.white),
+              icon: const Icon(Icons.refresh, color: sectionText),
             ),
           ],
         ),
@@ -114,7 +115,7 @@ class _ChequeClearancePageState extends State<ChequeClearancePage>
                       child: const Center(
                         child: Text(
                           'No cheque clearance found for today',
-                          style: TextStyle(color: Colors.white70),
+                          style: TextStyle(color: sectionTextMuted),
                         ),
                       ),
                     ),
@@ -149,7 +150,7 @@ class _ChequeClearancePageState extends State<ChequeClearancePage>
                                   child: Text(
                                     'No matches for "$_searchQuery"',
                                     style: const TextStyle(
-                                      color: Colors.white70,
+                                      color: sectionTextMuted,
                                     ),
                                   ),
                                 ),
@@ -206,9 +207,9 @@ class _ChequeClearanceCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.12),
+          color: sectionCard,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+          border: Border.all(color: sectionCardBorder),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -219,7 +220,7 @@ class _ChequeClearanceCard extends StatelessWidget {
                   child: Text(
                     item.displaySerial,
                     style: const TextStyle(
-                      color: Colors.white,
+                      color: sectionText,
                       fontWeight: FontWeight.w700,
                       fontSize: 14,
                     ),
@@ -230,7 +231,7 @@ class _ChequeClearanceCard extends StatelessWidget {
                 // const SizedBox(width: 4),
                 // Icon(
                 //   Icons.chevron_right,
-                //   color: Colors.white.withValues(alpha: 0.55),
+                //   color: sectionTextMuted,
                 //   size: 20,
                 // ),
               ],
@@ -284,7 +285,7 @@ class _ChequeClearanceCard extends StatelessWidget {
               Text(
                 'Branch: ${item.displayBranch}',
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.65),
+                  color: sectionTextMuted,
                   fontSize: 11,
                 ),
               ),
@@ -311,7 +312,7 @@ class _Cell extends StatelessWidget {
         Text(
           label,
           style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.55),
+            color: sectionTextMuted,
             fontSize: 9,
           ),
         ),

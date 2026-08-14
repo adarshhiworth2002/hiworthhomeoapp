@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/invoice_summary_model.dart';
+import '../theme.dart';
 import 'customer_invoice_detail_page.dart';
 
 /// Compact single-line list row: Number · [Status] · Balance · Subtotal · Total.
@@ -22,11 +23,7 @@ class InvoiceListCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final card = Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-      ),
+      decoration: sectionCardDecoration(),
       child: Row(
         children: [
           Expanded(
@@ -71,7 +68,7 @@ class InvoiceListCard extends StatelessWidget {
             const SizedBox(width: 4),
             Icon(
               Icons.chevron_right,
-              color: Colors.white.withValues(alpha: 0.55),
+              color: sectionAccent,
               size: 20,
             ),
           ],
@@ -115,8 +112,8 @@ class _LineCell extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           textAlign: align,
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.55),
+          style: const TextStyle(
+            color: sectionTextMuted,
             fontSize: 9,
             fontWeight: FontWeight.w600,
           ),
@@ -128,7 +125,7 @@ class _LineCell extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           textAlign: align,
           style: TextStyle(
-            color: Colors.white,
+            color: sectionText,
             fontWeight: emphasize ? FontWeight.w700 : FontWeight.w600,
             fontSize: emphasize ? 12 : 11,
           ),
@@ -174,7 +171,7 @@ class InvoiceListError extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70, fontSize: 14),
+              style: const TextStyle(color: sectionTextMuted, fontSize: 14),
             ),
             const SizedBox(height: 16),
             TextButton(onPressed: onRetry, child: const Text('Retry')),
