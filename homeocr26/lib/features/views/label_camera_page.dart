@@ -4,6 +4,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import '../widgets/app_responsive.dart';
 
 /// In-app camera for label photos (stays inside the app, no system camera).
 class LabelCameraPage extends StatefulWidget {
@@ -175,9 +176,15 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
           ),
         ),
         Center(
-          child: Container(
-            width: MediaQuery.sizeOf(context).width * 0.82,
-            height: MediaQuery.sizeOf(context).height * 0.28,
+          child: Builder(
+            builder: (context) {
+              final frame = AppResponsive.of(context).scannerFrame(
+                widthFactor: 0.82,
+                heightFactor: 0.28,
+              );
+              return Container(
+            width: frame.width,
+            height: frame.height,
             decoration: BoxDecoration(
               border: Border.all(
                 color: const Color(0xFFE07A2F).withValues(alpha: 0.85),
@@ -185,6 +192,8 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
               ),
               borderRadius: BorderRadius.circular(12),
             ),
+          );
+            },
           ),
         ),
         Positioned(

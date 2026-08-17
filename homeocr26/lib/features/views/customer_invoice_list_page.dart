@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../services/prefix_search.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../viewModels/customer_invoice_viewmodel.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'customer_new_invoice_page.dart';
 import 'invoice_list_widgets.dart';
@@ -80,13 +81,14 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
             ),
           ],
         ),
-        body: Consumer<CustomerInvoiceViewModel>(
+        body: ResponsiveBody(
+          child: Consumer<CustomerInvoiceViewModel>(
           builder: (context, model, _) {
             final loadingCatalog = model.loading && model.items.isEmpty;
             return Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+                  padding: SystemSafe.horizontalPadding(context, top: 10, bottom: 8),
                   child: _NewBillGradientButton(
                     loading: loadingCatalog,
                     onPressed:
@@ -140,6 +142,7 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
               ],
             );
           },
+        ),
         ),
       ),
     );

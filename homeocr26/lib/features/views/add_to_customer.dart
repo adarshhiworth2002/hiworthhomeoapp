@@ -16,6 +16,7 @@ import 'label_camera_page.dart';
 import 'label_text_select_page.dart';
 import '../widgets/invoice_prefix_field.dart';
 import '../widgets/show_dialog_custom.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import '../theme.dart';
 
@@ -61,14 +62,15 @@ class AddToCustomerPage extends StatefulWidget {
       barrierDismissible: true,
       builder: (ctx) {
         final size = MediaQuery.sizeOf(ctx);
+        final r = AppResponsive.of(ctx);
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
+          insetPadding: r.dialogInsets,
           backgroundColor: Colors.transparent,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(16),
             child: SizedBox(
-              width: size.width,
-              height: size.height * 0.88,
+              width: min(size.width, r.contentMaxWidth),
+              height: r.sheetHeight(fraction: 0.88),
               child: AddToCustomerPage(
                 lockedInvoiceNumber: lockedInvoiceNumber,
                 asPopup: true,
@@ -440,14 +442,15 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     double height,
     CustomerMedViewmodel viewModel,
   ) {
-    final scannerHeight = min(height * 0.28, 220.0);
+    final frame = AppResponsive.of(context).scannerFrame();
+    final scannerHeight = frame.height;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(25),
           child: SizedBox(
-            width: width * .8,
+            width: frame.width,
             height: scannerHeight,
             child: Stack(
               alignment: Alignment.center,

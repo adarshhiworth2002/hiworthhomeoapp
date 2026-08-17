@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:homeocr26/features/views/selction_screen.dart';
 import 'package:homeocr26/features/widgets/app_backdrop.dart';
+import 'package:homeocr26/features/widgets/app_responsive.dart';
 import 'package:homeocr26/viewModels/login_viewmodel.dart';
 import 'package:provider/provider.dart';
 
@@ -49,8 +50,17 @@ class _LoginPageState extends State<LoginPage> {
           child: SafeArea(
             child: Center(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
-                child: Column(
+                padding: EdgeInsets.fromLTRB(
+                  AppResponsive.of(context).pagePadding + 8,
+                  16,
+                  AppResponsive.of(context).pagePadding + 8,
+                  28,
+                ),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: AppResponsive.of(context).formMaxWidth,
+                  ),
+                  child: Column(
                   children: [
                     const Text(
                       'HOMEO\nATHURASRAMAM',
@@ -225,6 +235,7 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                     ),
                   ],
+                ),
                 ),
               ),
             ),

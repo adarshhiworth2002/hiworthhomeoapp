@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
+import '../widgets/app_responsive.dart';
 import 'login_page.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -44,11 +46,13 @@ class _SplashScreenState extends State<SplashScreen>
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(
           pageBuilder: (context, animation, secondaryAnimation) =>
-              // const QrScanScreen(),
-              LoginPage(),
+              const LoginPage(),
           transitionDuration: const Duration(milliseconds: 500),
           transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(opacity: animation, child: child);
+            return FadeTransition(
+              opacity: animation,
+              child: child,
+            );
           },
         ),
       );
@@ -63,67 +67,93 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final r = AppResponsive.of(context);
+    final short = size.height < 560;
+    final scale = AppResponsive.scaleClamp(size.shortestSide);
+    final iconSize = (short ? 64.0 : 90.0) * scale;
+    final titleSize = (short ? 18.0 : 22.0) * scale;
+    final subtitleSize = (short ? 12.0 : 14.0) * scale;
+    final iconPad = (short ? 16.0 : 25.0) * scale;
+    final bottomGap = math.min(40.0, size.height * 0.06);
+
     return Scaffold(
-      body: SafeArea(
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [appBlack, appBlackSoft, appOrangeDeep],
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-            ),
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [appBlack, appBlackSoft, appOrangeDeep],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
           ),
-          child: Center(
-            child: FadeTransition(
-              opacity: _fadeAnimation,
-              child: ScaleTransition(
-                scale: _scaleAnimation,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Spacer(),
-                    Container(
-                      padding: const EdgeInsets.all(25),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white.withOpacity(.08),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: FadeTransition(
+            opacity: _fadeAnimation,
+            child: Align(
+              alignment: Alignment.center,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: r.formMaxWidth),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: r.pagePadding),
+                  child: Column(
+                    children: [
+                      const Spacer(flex: 3),
+                      ScaleTransition(
+                        scale: _scaleAnimation,
+                        child: Container(
+                          padding: EdgeInsets.all(iconPad),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withValues(alpha: 0.08),
+                          ),
+                          child: Icon(
+                            Icons.medical_services_rounded,
+                            size: iconSize,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
-                      child: const Icon(
-                        Icons.medical_services_rounded,
-                        size: 90,
-                        color: Colors.white,
+                      SizedBox(height: short ? 16 : 28),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          'HOMEO ATHURASRAMAM',
+                          maxLines: 1,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: titleSize,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: short ? 1.2 : 2,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 30),
-                    const Text(
-                      "HOMEO ATHURASRAMAM",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 2,
-                        color: Colors.white,
+                      const SizedBox(height: 8),
+                      Text(
+                        'Natural Healing • Trusted Care',
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: subtitleSize,
+                          color: Colors.white.withValues(alpha: 0.7),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      "Natural Healing • Trusted Care",
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.white.withOpacity(.7),
+                      const Spacer(flex: 2),
+                      const SizedBox(
+                        width: 28,
+                        height: 28,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.5,
+                          color: appOrange,
+                        ),
                       ),
-                    ),
-                    const Spacer(),
-                    const SizedBox(
-                      width: 30,
-                      height: 30,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 1.5,
-                        color: appOrange,
-                      ),
-                    ),
-                    SizedBox(height: MediaQuery.of(context).size.height * .1),
-                  ],
+                      SizedBox(height: bottomGap),
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/amount_book_model.dart';
 import '../../viewModels/amount_book_viewmodel.dart';
 import '../theme.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'amount_book_customer_detail_page.dart';
 import 'live_refresh_mixin.dart';
@@ -127,7 +128,8 @@ class _AmountBookPageState extends State<AmountBookPage>
             ),
           ],
         ),
-        body: TabBarView(
+        body: ResponsiveBody(
+          child: TabBarView(
           controller: _tabController,
           children: [
             _CustomerTab(
@@ -136,6 +138,7 @@ class _AmountBookPageState extends State<AmountBookPage>
             ),
             const _SupplierPlaceholder(),
           ],
+        ),
         ),
       ),
     );

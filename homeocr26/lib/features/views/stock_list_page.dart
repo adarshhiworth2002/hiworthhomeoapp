@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../models/stock_item_model.dart';
 import '../../viewModels/stock_viewmodel.dart';
 import 'invoice_list_widgets.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'live_refresh_mixin.dart';
 import 'stock_detail_page.dart';
@@ -74,51 +75,54 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
   Widget build(BuildContext context) {
     return ChangeNotifierProvider.value(
       value: _viewModel,
-      child: Scaffold(
-        backgroundColor: sectionBg,
+      child: Theme(
+        data: stockTheme(),
+        child: Scaffold(
+        backgroundColor: stockBg,
         appBar: AppBar(
-          iconTheme: const IconThemeData(color: sectionText),
+          iconTheme: const IconThemeData(color: stockText),
           title: const Text(
             'Stock',
             style: TextStyle(
-              color: sectionText,
+              color: stockText,
               fontWeight: FontWeight.w500,
               fontSize: 15,
             ),
           ),
-          backgroundColor: sectionBg,
+          backgroundColor: stockBg,
           elevation: 0,
           actions: [
             IconButton(
               onPressed: () => _viewModel.fetchStockList(context, forceRefresh: true),
-              icon: const Icon(Icons.refresh, color: sectionText),
+              icon: const Icon(Icons.refresh, color: stockText),
             ),
           ],
         ),
-        body: Consumer<StockViewModel>(
+        body: ResponsiveBody(
+          child: Consumer<StockViewModel>(
           builder: (context, model, _) {
             final visible = model.visibleItems;
 
             return Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  padding: SystemSafe.horizontalPadding(context, top: 10, bottom: 0),
                   child: TextField(
                     controller: _searchController,
                     onChanged: _onSearchChanged,
-                    style: const TextStyle(color: sectionText, fontSize: 14),
+                    style: const TextStyle(color: stockText, fontSize: 14),
                     decoration: InputDecoration(
                       hintText: 'Search medicine (first letters)…',
                       hintStyle: TextStyle(
-                        color: sectionTextMuted,
+                        color: stockTextMuted,
                       ),
                       prefixIcon:
-                          const Icon(Icons.search, color: sectionTextMuted),
+                          const Icon(Icons.search, color: stockTextMuted),
                       suffixIcon: _searchController.text.isEmpty
                           ? null
                           : IconButton(
                               icon: const Icon(Icons.clear,
-                                  color: sectionTextMuted),
+                                  color: stockTextMuted),
                               onPressed: () {
                                 _searchController.clear();
                                 _viewModel.setSearchQuery('',
@@ -149,7 +153,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
                               : 'Loading…')
                           : model.statusText,
                       style: TextStyle(
-                        color: sectionTextMuted,
+                        color: stockTextMuted,
                         fontSize: 11,
                       ),
                     ),
@@ -159,6 +163,8 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
             );
           },
         ),
+        ),
+      ),
       ),
     );
   }
@@ -174,7 +180,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
             Text(
               model.statusText.isEmpty ? 'Loading stock…' : model.statusText,
               style: TextStyle(
-                color: sectionTextMuted,
+                color: stockTextMuted,
                 fontSize: 13,
               ),
             ),
@@ -202,7 +208,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
                 model.statusText.isEmpty ? 'Loading…' : model.statusText,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: sectionTextMuted,
+                  color: stockTextMuted,
                   fontSize: 13,
                 ),
               ),
@@ -226,7 +232,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
                         ? 'No matches for "${model.searchQuery}"'
                         : 'No stock records found',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: sectionTextMuted),
+                    style: const TextStyle(color: stockTextMuted),
                   ),
                 ),
               ),
@@ -298,12 +304,13 @@ class StockListCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final r = AppResponsive.of(context);
     final card = Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: sectionCard,
+        color: stockCard,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: sectionCardBorder),
+        border: Border.all(color: stockCardBorder),
       ),
       child: Row(
         children: [
@@ -315,34 +322,38 @@ class StockListCard extends StatelessWidget {
               emphasize: true,
             ),
           ),
-          Expanded(
-            flex: 2,
-            child: _LineCell(
-              label: 'Company',
-              value: item.company ?? '—',
+          if (r.showListTertiary)
+            Expanded(
+              flex: 2,
+              child: _LineCell(
+                label: 'Company',
+                value: item.company ?? '—',
+              ),
             ),
-          ),
-          Expanded(
-            flex: 2,
-            child: _LineCell(
-              label: 'Potency',
-              value: item.potency ?? '—',
+          if (r.showListSecondary)
+            Expanded(
+              flex: 2,
+              child: _LineCell(
+                label: 'Potency',
+                value: item.potency ?? '—',
+              ),
             ),
-          ),
-          Expanded(
-            flex: 2,
-            child: _LineCell(
-              label: 'Packing',
-              value: item.packing ?? '—',
+          if (r.showListSecondary)
+            Expanded(
+              flex: 2,
+              child: _LineCell(
+                label: 'Packing',
+                value: item.packing ?? '—',
+              ),
             ),
-          ),
-          Expanded(
-            flex: 2,
-            child: _LineCell(
-              label: 'Group',
-              value: item.group ?? '—',
+          if (r.showListTertiary)
+            Expanded(
+              flex: 2,
+              child: _LineCell(
+                label: 'Group',
+                value: item.group ?? '—',
+              ),
             ),
-          ),
           Expanded(
             flex: 2,
             child: _LineCell(
@@ -355,7 +366,7 @@ class StockListCard extends StatelessWidget {
             const SizedBox(width: 4),
             Icon(
               Icons.chevron_right,
-              color: sectionTextMuted,
+              color: stockTextMuted,
               size: 20,
             ),
           ],
@@ -400,7 +411,7 @@ class _LineCell extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           textAlign: align,
           style: TextStyle(
-            color: sectionTextMuted,
+            color: stockTextMuted,
             fontSize: 9,
             fontWeight: FontWeight.w600,
           ),
@@ -412,7 +423,7 @@ class _LineCell extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           textAlign: align,
           style: TextStyle(
-            color: sectionText,
+            color: stockText,
             fontWeight: emphasize ? FontWeight.w700 : FontWeight.w600,
             fontSize: emphasize ? 12 : 11,
           ),

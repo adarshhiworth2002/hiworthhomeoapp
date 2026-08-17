@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../models/payment_book_model.dart';
 import '../theme.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'invoice_list_widgets.dart';
 
@@ -70,7 +71,8 @@ class PaymentBookDetailPage extends StatelessWidget {
           ),
         ],
       ),
-      body: Column(
+      body: ResponsiveBody(
+        child: Column(
         children: [
           Expanded(
             child: ListView(
@@ -169,6 +171,7 @@ class PaymentBookDetailPage extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }

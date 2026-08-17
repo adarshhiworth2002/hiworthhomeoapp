@@ -23,6 +23,7 @@ import '../services/cheque_notification_service.dart';
 import '../services/home_prefetch_service.dart';
 import '../services/live_data_sync.dart';
 import '../theme.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 
 class SelectionScreen extends StatefulWidget {
@@ -216,8 +217,15 @@ class _SelectionScreenState extends State<SelectionScreen> {
           ),
           child: SafeArea(
             top: false,
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(20, 12, 20, SystemSafe.actionBarBottomPadding(context)),
+            child: ResponsiveBody(
+              maxWidth: AppResponsive.of(context).homeMaxWidth,
+              child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                AppResponsive.of(context).pagePadding,
+                12,
+                AppResponsive.of(context).pagePadding,
+                SystemSafe.actionBarBottomPadding(context),
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -259,12 +267,15 @@ class _SelectionScreenState extends State<SelectionScreen> {
                               applyFilter: PaymentBookFilter.today(),
                             );
                           },
-                          child: GridView.count(
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final r = AppResponsive.of(context);
+                              return GridView.count(
                           physics: const AlwaysScrollableScrollPhysics(),
-                          crossAxisCount: 2,
+                          crossAxisCount: r.homeCrossAxisCount,
                           mainAxisSpacing: 14,
                           crossAxisSpacing: 14,
-                          childAspectRatio: 1.05,
+                          childAspectRatio: r.homeTileAspect,
                           children: [
                             _HomeTile(
                               title: 'Stock',
@@ -362,7 +373,9 @@ class _SelectionScreenState extends State<SelectionScreen> {
                               },
                             ),
                           ],
-                        ),
+                              );
+                            },
+                          ),
                         );
                       },
                     ),
@@ -373,6 +386,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
           ),
         ),
       ),
+    ),
     );
   }
 }

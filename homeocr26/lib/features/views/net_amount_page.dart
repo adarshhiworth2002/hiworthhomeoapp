@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../services/prefix_search.dart';
 import '../../models/net_amount_model.dart';
 import '../../viewModels/net_amount_viewmodel.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'list_search_field.dart';
 import 'live_refresh_mixin.dart';
@@ -86,13 +87,14 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
             ),
           ],
         ),
-        body: Consumer<NetAmountViewModel>(
+        body: ResponsiveBody(
+          child: Consumer<NetAmountViewModel>(
           builder: (context, model, _) {
             if (model.detailLoading &&
                 model.youGotAmount == null &&
                 model.youGaveAmount == null) {
               return const Center(
-                child: CircularProgressIndicator(color: const Color(0xFFE07A2F)),
+                child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
               );
             }
 
@@ -151,6 +153,7 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
             );
           },
         ),
+        ),
       ),
     );
   }
@@ -178,14 +181,22 @@ class _AmountButton extends StatelessWidget {
     final onColor =
         ThemeData.estimateBrightnessForColor(color) == Brightness.dark
             ? Colors.white
-            : sectionBg;
+            : Colors.black;
     return Material(
-      color: color.withValues(alpha: 0.95),
+      color: color,
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: loading ? null : onTap,
-        child: Padding(
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: onColor == Colors.black
+                  ? const Color(0x40000000)
+                  : Colors.transparent,
+            ),
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
           child: Row(
             children: [
@@ -286,7 +297,8 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
         backgroundColor: sectionBg,
         elevation: 0,
       ),
-      body: Consumer<NetAmountViewModel>(
+      body: ResponsiveBody(
+        child: Consumer<NetAmountViewModel>(
         builder: (context, model, _) {
           final amount = model.amountFor(section);
           final rows = model.rowsFor(section).where((row) {
@@ -330,7 +342,7 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                padding: SystemSafe.horizontalPadding(context, top: 0, bottom: 8),
                 child: ListSearchField(
                   controller: _searchController,
                   hintText: isGave
@@ -386,6 +398,7 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
             ],
           );
         },
+      ),
       ),
     );
   }

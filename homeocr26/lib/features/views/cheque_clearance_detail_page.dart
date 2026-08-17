@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/cheque_clearance_model.dart';
 import '../services/cheque_payment_enrichment.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'customer_payment_from_cheque_page.dart';
 import '../theme.dart';
@@ -65,7 +66,8 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
         backgroundColor: sectionBg,
         elevation: 0,
       ),
-      body: Stack(
+      body: ResponsiveBody(
+        child: Stack(
         children: [
           ListView(
             padding: SystemSafe.listPadding(context),
@@ -212,6 +214,7 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
               ),
             ),
         ],
+      ),
       ),
     );
   }

@@ -5,6 +5,7 @@ import '../../models/invoice_summary_model.dart';
 import '../../models/payment_book_model.dart';
 import '../../viewModels/payment_book_viewmodel.dart';
 import '../theme.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'invoice_list_widgets.dart';
 import 'live_refresh_mixin.dart';
@@ -103,7 +104,8 @@ class _PaymentBookPageState extends State<PaymentBookPage>
             ),
           ],
         ),
-        body: Consumer<PaymentBookViewModel>(
+        body: ResponsiveBody(
+          child: Consumer<PaymentBookViewModel>(
           builder: (context, model, _) {
             if (model.loading && model.invoices.isEmpty) {
               return const Center(
@@ -190,6 +192,7 @@ class _PaymentBookPageState extends State<PaymentBookPage>
               ],
             );
           },
+        ),
         ),
       ),
     );
@@ -474,9 +477,9 @@ class _TotalFooter extends StatelessWidget {
     return Container(
       width: double.infinity,
       padding: EdgeInsets.fromLTRB(
-        16,
+        AppResponsive.of(context).pagePadding,
         12,
-        16,
+        AppResponsive.of(context).pagePadding,
         SystemSafe.actionBarBottomPadding(context),
       ),
       decoration: BoxDecoration(

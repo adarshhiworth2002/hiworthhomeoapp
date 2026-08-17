@@ -5,6 +5,7 @@ import '../../models/amount_book_model.dart';
 import '../../viewModels/amount_book_viewmodel.dart';
 import '../services/amount_book_pdf_service.dart';
 import '../theme.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 
 class AmountBookCustomerDetailPage extends StatelessWidget {
@@ -49,7 +50,8 @@ class AmountBookCustomerDetailPage extends StatelessWidget {
           ),
         ],
       ),
-      body: Column(
+      body: ResponsiveBody(
+        child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -90,6 +92,7 @@ class AmountBookCustomerDetailPage extends StatelessWidget {
                   ),
           ),
         ],
+      ),
       ),
     );
   }

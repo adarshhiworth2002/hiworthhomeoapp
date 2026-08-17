@@ -5,6 +5,7 @@ import '../../models/employee_performance_model.dart';
 import '../../models/employee_timer_log_model.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../viewModels/employee_performance_viewmodel.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'employee_performance_page.dart';
 import '../theme.dart';
@@ -103,11 +104,11 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
   Widget _dateTheme(BuildContext context, Widget? child) {
     return Theme(
       data: Theme.of(context).copyWith(
-        colorScheme: const ColorScheme.dark(
+        colorScheme: const ColorScheme.light(
           primary: Color(0xFFE07A2F),
           onPrimary: Colors.white,
-          surface: Color(0xFF2A2A2A),
-          onSurface: Colors.white,
+          surface: Colors.white,
+          onSurface: Colors.black,
         ),
       ),
       child: child!,
@@ -149,7 +150,8 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
           ),
         ),
       ),
-      body: Column(
+      body: ResponsiveBody(
+        child: Column(
         children: [
           Padding(
             padding: SystemSafe.horizontalPadding(context, bottom: 8),
@@ -251,7 +253,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
                               color: sectionCard,
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.18),
+                                color: sectionCardBorder,
                               ),
                             ),
                             child: Row(
@@ -326,6 +328,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -428,7 +431,8 @@ class _ActiveSessionsTimerLogsPageState
           ? const Center(
               child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
             )
-          : RefreshIndicator(
+          : ResponsiveBody(
+              child: RefreshIndicator(
               color: const Color(0xFFE07A2F),
               onRefresh: () => _load(forceRefresh: true),
               child: ListView(
@@ -485,7 +489,7 @@ class _ActiveSessionsTimerLogsPageState
                               color: sectionCard,
                               borderRadius: BorderRadius.circular(14),
                               border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.18),
+                                color: sectionCardBorder,
                               ),
                             ),
                             child: Column(
@@ -519,7 +523,7 @@ class _ActiveSessionsTimerLogsPageState
                                             ? 'Running'
                                             : (log.status ?? 'Running'),
                                         style: const TextStyle(
-                                          color: sectionText,
+                                          color: Colors.white,
                                           fontWeight: FontWeight.w700,
                                           fontSize: 11,
                                         ),
@@ -528,8 +532,7 @@ class _ActiveSessionsTimerLogsPageState
                                     const SizedBox(width: 4),
                                     Icon(
                                       Icons.chevron_right,
-                                      color:
-                                          Colors.white.withValues(alpha: 0.5),
+                                      color: sectionTextMuted,
                                     ),
                                   ],
                                 ),
@@ -560,6 +563,7 @@ class _ActiveSessionsTimerLogsPageState
                       ),
                     ),
               ],
+            ),
             ),
             ),
     );
@@ -622,7 +626,8 @@ class _ActiveSessionBillDetailPageState
           ),
         ),
       ),
-      body: Column(
+      body: ResponsiveBody(
+        child: Column(
         children: [
           Expanded(
             child: RefreshIndicator(
@@ -638,7 +643,7 @@ class _ActiveSessionBillDetailPageState
                     color: sectionCard,
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.18),
+                      color: sectionCardBorder,
                     ),
                   ),
                   child: Column(
@@ -738,6 +743,7 @@ class _ActiveSessionBillDetailPageState
           ),
         ],
       ),
+      ),
     );
   }
 }
@@ -770,7 +776,7 @@ class _DetailField extends StatelessWidget {
             child: Text(
               value,
               style: TextStyle(
-                color: emphasize ? const Color(0xFFFF8A80) : Colors.white,
+                color: emphasize ? const Color(0xFFE53935) : sectionText,
                 fontSize: 13,
                 fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
               ),
@@ -811,7 +817,7 @@ class _UserTimingsTab extends StatelessWidget {
           decoration: BoxDecoration(
             color: sectionCard,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+            border: Border.all(color: sectionCardBorder),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -875,7 +881,7 @@ class _AllBillSessionsTab extends StatelessWidget {
           decoration: BoxDecoration(
             color: sectionCard,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+            border: Border.all(color: sectionCardBorder),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1077,7 +1083,8 @@ class _EmployeePerformanceGraphPageState
           ),
         ),
       ),
-      body: RefreshIndicator(
+      body: ResponsiveBody(
+        child: RefreshIndicator(
         color: const Color(0xFFE07A2F),
         onRefresh: _onRefresh,
         child: ListView(
@@ -1106,12 +1113,18 @@ class _EmployeePerformanceGraphPageState
               child: DropdownButton<EmployeeGraphMeasure>(
                 value: _measure,
                 isExpanded: true,
-                dropdownColor: const Color(0xFF2A2A2A),
-                iconEnabledColor: Colors.white,
-                style: const TextStyle(color: sectionText, fontSize: 14),
+                dropdownColor: Colors.white,
+                iconEnabledColor: Colors.black,
+                style: const TextStyle(color: Colors.black, fontSize: 14),
                 items: [
                   for (final m in EmployeeGraphMeasure.values)
-                    DropdownMenuItem(value: m, child: Text(m.label)),
+                    DropdownMenuItem(
+                      value: m,
+                      child: Text(
+                        m.label,
+                        style: const TextStyle(color: Colors.black),
+                      ),
+                    ),
                 ],
                 onChanged: (v) {
                   if (v == null) return;
@@ -1141,8 +1154,8 @@ class _EmployeePerformanceGraphPageState
                     const SizedBox(width: 6),
                     Text(
                       _measure.label,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.8),
+                      style: const TextStyle(
+                        color: sectionText,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -1205,7 +1218,7 @@ class _EmployeePerformanceGraphPageState
                         Expanded(
                           child: Text(
                             _employees[i].employeeName,
-                            style: const TextStyle(color: Colors.white),
+                            style: const TextStyle(color: sectionText),
                           ),
                         ),
                         Text(
@@ -1228,6 +1241,7 @@ class _EmployeePerformanceGraphPageState
               ),
             ),
         ],
+      ),
       ),
       ),
     );
@@ -1303,12 +1317,12 @@ class _DateField extends StatelessWidget {
           labelText: label,
           labelStyle: TextStyle(color: sectionTextMuted),
           filled: true,
-          fillColor: Colors.white.withValues(alpha: 0.08),
+          fillColor: sectionCard,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         ),
-        child: Text(value, style: const TextStyle(color: Colors.white)),
+        child: Text(value, style: const TextStyle(color: sectionText)),
       ),
     );
   }
@@ -1326,19 +1340,19 @@ class _FilterChipLabel extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: active
-            ? const Color(0xFF7B5EA7).withValues(alpha: 0.35)
-            : Colors.white.withValues(alpha: 0.1),
+            ? const Color(0xFF7B5EA7).withValues(alpha: 0.18)
+            : sectionCard,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: active
               ? const Color(0xFF7B5EA7)
-              : Colors.white.withValues(alpha: 0.2),
+              : sectionCardBorder,
         ),
       ),
       child: Text(
         text,
         style: TextStyle(
-          color: Colors.white.withValues(alpha: active ? 1 : 0.75),
+          color: active ? const Color(0xFF7B5EA7) : sectionText,
           fontSize: 12,
           fontWeight: FontWeight.w600,
         ),
@@ -1364,7 +1378,7 @@ class _StatusPill extends StatelessWidget {
       child: Text(
         status,
         style: const TextStyle(
-          color: sectionText,
+          color: Colors.white,
           fontWeight: FontWeight.w700,
           fontSize: 11,
         ),
@@ -1402,7 +1416,7 @@ class _Line extends StatelessWidget {
               value,
               style: TextStyle(
                 color: color ??
-                    (emphasize ? const Color(0xFFFF8A80) : Colors.white),
+                    (emphasize ? const Color(0xFFE53935) : sectionText),
                 fontSize: 12,
                 fontWeight: emphasize ? FontWeight.w700 : FontWeight.w600,
               ),

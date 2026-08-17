@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../../models/cheque_clearance_model.dart';
 import '../../viewModels/login_viewmodel.dart';
 import '../services/odoo_rpc_helper.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import '../theme.dart';
 
@@ -383,7 +384,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
           builder: (ctx, setModal) {
             return SafeArea(
               child: SizedBox(
-                height: MediaQuery.of(ctx).size.height * 0.85,
+                height: AppResponsive.of(ctx).sheetHeight(fraction: 0.85),
                 child: Column(
                   children: [
                     Padding(
@@ -642,7 +643,8 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                     ),
                   ),
                 )
-              : Stack(
+              : ResponsiveBody(
+                  child: Stack(
                   children: [
                     ListView(
                       padding: SystemSafe.listPadding(context),
@@ -851,6 +853,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                         ),
                       ),
                   ],
+                ),
                 ),
     );
   }

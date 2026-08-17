@@ -41,3 +41,45 @@ BoxDecoration sectionCardDecoration({double radius = 12}) {
     ],
   );
 }
+
+/// Stock section only — original black + orange.
+const Color stockBg = Color(0xFF1A1A1A);
+const Color stockCard = Color(0xFF2A2A2A);
+const Color stockText = Color(0xFFFFFFFF);
+const Color stockTextMuted = Color(0xFFB8B0A8);
+const Color stockAccent = Color(0xFFE07A2F);
+const Color stockCardBorder = Color(0x33FFFFFF);
+
+ThemeData stockTheme() {
+  return ThemeData(
+    brightness: Brightness.dark,
+    scaffoldBackgroundColor: stockBg,
+    colorScheme: const ColorScheme.dark(
+      primary: stockAccent,
+      secondary: stockAccent,
+      surface: stockCard,
+      onPrimary: Colors.white,
+      onSurface: stockText,
+    ),
+    appBarTheme: const AppBarTheme(
+      backgroundColor: stockBg,
+      foregroundColor: stockText,
+      elevation: 0,
+      iconTheme: IconThemeData(color: stockText),
+      titleTextStyle: TextStyle(
+        color: stockText,
+        fontWeight: FontWeight.w600,
+        fontSize: 15,
+      ),
+    ),
+    progressIndicatorTheme: const ProgressIndicatorThemeData(
+      color: stockAccent,
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        backgroundColor: stockAccent,
+        foregroundColor: Colors.white,
+      ),
+    ),
+  );
+}

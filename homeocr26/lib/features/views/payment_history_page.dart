@@ -5,6 +5,7 @@ import '../services/prefix_search.dart';
 import '../services/settled_payment_store.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../viewModels/payment_history_viewmodel.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'invoice_list_widgets.dart';
 import 'list_search_field.dart';
@@ -195,7 +196,8 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
             ),
           ),
         ),
-        body: Consumer<PaymentHistoryViewModel>(
+        body: ResponsiveBody(
+          child: Consumer<PaymentHistoryViewModel>(
           builder: (context, model, _) {
             if (model.loading && model.items.isEmpty && !_settledReady) {
               return const Center(
@@ -237,6 +239,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
               ],
             );
           },
+        ),
         ),
       ),
     );

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/cheque_clearance_model.dart';
 import '../../viewModels/cheque_clearance_viewmodel.dart';
 import '../services/prefix_search.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 // Detail navigation temporarily disabled — list-only for now.
 // import 'cheque_clearance_detail_page.dart';
@@ -90,7 +91,8 @@ class _ChequeClearancePageState extends State<ChequeClearancePage>
             ),
           ],
         ),
-        body: Consumer<ChequeClearanceViewModel>(
+        body: ResponsiveBody(
+          child: Consumer<ChequeClearanceViewModel>(
           builder: (context, model, _) {
             if (model.loading && model.items.isEmpty) {
               return const Center(
@@ -187,6 +189,7 @@ class _ChequeClearancePageState extends State<ChequeClearancePage>
               ],
             );
           },
+        ),
         ),
       ),
     );

@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'app_responsive.dart';
+
 /// System inset helpers so content stays clear of status bar, notch, and
 /// navigation/gesture bars on all devices.
 class SystemSafe {
@@ -47,15 +49,16 @@ class SystemSafe {
   /// Standard list / scroll padding for full-width pages.
   static EdgeInsets listPadding(
     BuildContext context, {
-    double horizontal = 16,
+    double? horizontal,
     double top = 8,
     double extraBottom = 16,
     double fabClearance = 0,
   }) {
+    final h = horizontal ?? AppResponsive.of(context).pagePadding;
     return EdgeInsets.fromLTRB(
-      horizontal,
+      h,
       top,
-      horizontal,
+      h,
       bottomInset(
         context,
         extra: extraBottom,
@@ -66,8 +69,9 @@ class SystemSafe {
 
   /// Horizontal-only padding for column layouts (search + list).
   static EdgeInsets horizontalPadding(BuildContext context,
-      {double horizontal = 16, double top = 8, double bottom = 4}) {
-    return EdgeInsets.fromLTRB(horizontal, top, horizontal, bottom);
+      {double? horizontal, double top = 8, double bottom = 4}) {
+    final h = horizontal ?? AppResponsive.of(context).pagePadding;
+    return EdgeInsets.fromLTRB(h, top, h, bottom);
   }
 
   /// Android 3-button nav bar is taller than gesture bar — add a little room.

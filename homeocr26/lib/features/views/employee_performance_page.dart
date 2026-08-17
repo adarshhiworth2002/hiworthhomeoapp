@@ -5,6 +5,7 @@ import '../services/prefix_search.dart';
 import '../../models/employee_performance_model.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../viewModels/employee_performance_viewmodel.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'employee_kpi_pages.dart';
 import 'list_search_field.dart';
@@ -108,7 +109,8 @@ class _EmployeePerformancePageState extends State<EmployeePerformancePage>
             ),
           ],
         ),
-        body: Consumer<EmployeePerformanceViewModel>(
+        body: ResponsiveBody(
+          child: Consumer<EmployeePerformanceViewModel>(
           builder: (context, model, _) {
             final hasEmployees = model.employees.isNotEmpty;
             final hasKpis = model.summary.effectiveKpiCards.isNotEmpty;
@@ -175,7 +177,7 @@ class _EmployeePerformancePageState extends State<EmployeePerformancePage>
               ),
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+                padding: SystemSafe.listPadding(context, top: 10, extraBottom: 24),
                 children: [
                   if (model.summary.reportDate != null)
                     Padding(
@@ -249,6 +251,7 @@ class _EmployeePerformancePageState extends State<EmployeePerformancePage>
               ),
             );
           },
+        ),
         ),
       ),
     );
@@ -432,7 +435,8 @@ class EmployeeKpiDashboardPage extends StatelessWidget {
           ),
         ),
       ),
-      body: Consumer<EmployeePerformanceViewModel>(
+      body: ResponsiveBody(
+        child: Consumer<EmployeePerformanceViewModel>(
         builder: (context, model, _) {
           return RefreshIndicator(
             color: const Color(0xFFE07A2F),
@@ -443,7 +447,7 @@ class EmployeeKpiDashboardPage extends StatelessWidget {
             ),
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+              padding: SystemSafe.listPadding(context, top: 10, extraBottom: 24),
               children: [
                 if (model.summary.reportDate != null)
                   Padding(
@@ -464,6 +468,7 @@ class EmployeeKpiDashboardPage extends StatelessWidget {
             ),
           );
         },
+      ),
       ),
     );
   }
@@ -532,11 +537,11 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage> {
       lastDate: DateTime.now().add(const Duration(days: 365)),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.dark(
+          colorScheme: const ColorScheme.light(
             primary: Color(0xFFE07A2F),
             onPrimary: Colors.white,
-            surface: Color(0xFF2A2A2A),
-            onSurface: Colors.white,
+            surface: Colors.white,
+            onSurface: Colors.black,
           ),
         ),
         child: child!,
@@ -559,11 +564,11 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage> {
       lastDate: DateTime.now().add(const Duration(days: 365)),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.dark(
+          colorScheme: const ColorScheme.light(
             primary: Color(0xFFE07A2F),
             onPrimary: Colors.white,
-            surface: Color(0xFF2A2A2A),
-            onSurface: Colors.white,
+            surface: Colors.white,
+            onSurface: Colors.black,
           ),
         ),
         child: child!,
@@ -612,7 +617,8 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage> {
           ),
         ),
       ),
-      body: Column(
+      body: ResponsiveBody(
+        child: Column(
         children: [
           Padding(
             padding: SystemSafe.horizontalPadding(context, bottom: 0),
@@ -701,6 +707,7 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage> {
           ),
         ],
       ),
+      ),
     );
   }
 }
@@ -727,7 +734,7 @@ class _DateRangeFilterBar extends StatelessWidget {
       decoration: BoxDecoration(
         color: sectionCard,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -805,7 +812,7 @@ class _DateChip extends StatelessWidget {
           decoration: BoxDecoration(
             color: sectionCard,
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+            border: Border.all(color: sectionCardBorder),
           ),
           child: Row(
             children: [
@@ -930,12 +937,13 @@ class EmployeeInvoiceOpenPage extends StatelessWidget {
           ),
         ),
       ),
-      body: RefreshIndicator(
+      body: ResponsiveBody(
+        child: RefreshIndicator(
         color: const Color(0xFFE07A2F),
         onRefresh: () async {},
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+        padding: SystemSafe.listPadding(context, top: 10, extraBottom: 24),
         children: [
           Container(
             padding: const EdgeInsets.all(14),
@@ -998,6 +1006,7 @@ class EmployeeInvoiceOpenPage extends StatelessWidget {
         ],
       ),
       ),
+      ),
     );
   }
 }
@@ -1025,12 +1034,13 @@ class EmployeeBillDetailsPage extends StatelessWidget {
           ),
         ),
       ),
-      body: RefreshIndicator(
+      body: ResponsiveBody(
+        child: RefreshIndicator(
         color: const Color(0xFFE07A2F),
         onRefresh: () async {},
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+        padding: SystemSafe.listPadding(context, top: 10, extraBottom: 24),
         children: [
           Container(
             padding: const EdgeInsets.all(14),
@@ -1045,7 +1055,7 @@ class EmployeeBillDetailsPage extends StatelessWidget {
                 Text(
                   invoice.displayNumber,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: sectionText,
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
                   ),
@@ -1071,6 +1081,7 @@ class EmployeeBillDetailsPage extends StatelessWidget {
         ],
       ),
       ),
+      ),
     );
   }
 }
@@ -1089,7 +1100,7 @@ class _KpiDashboard extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
-        final crossAxisCount = width >= 700 ? 4 : 2;
+        final crossAxisCount = width >= 700 ? 4 : width >= 500 ? 3 : 2;
         final spacing = 10.0;
         final itemWidth =
             (width - spacing * (crossAxisCount - 1)) / crossAxisCount;
@@ -1315,12 +1326,13 @@ class _EmployeeKpiDetailPage extends StatelessWidget {
           ),
         ),
       ),
-      body: RefreshIndicator(
+      body: ResponsiveBody(
+        child: RefreshIndicator(
         color: const Color(0xFFE07A2F),
         onRefresh: () async {},
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+        padding: SystemSafe.listPadding(context, top: 10, extraBottom: 24),
         children: [
           if (subtitle != null && subtitle!.trim().isNotEmpty)
             Padding(
@@ -1358,7 +1370,7 @@ class _EmployeeKpiDetailPage extends StatelessWidget {
                         color: sectionCard,
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.18),
+                          color: sectionCardBorder,
                         ),
                       ),
                       child: Row(
@@ -1408,6 +1420,7 @@ class _EmployeeKpiDetailPage extends StatelessWidget {
                 ),
               ),
         ],
+      ),
       ),
       ),
     );
@@ -1470,8 +1483,8 @@ class _EmployeeCard extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: onTap,
             style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.white,
-              side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+              foregroundColor: sectionText,
+              side: const BorderSide(color: sectionCardBorder),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -1502,7 +1515,7 @@ class _EmpStatChip extends StatelessWidget {
       child: Text(
         '$label $value',
         style: TextStyle(
-          color: Colors.white.withValues(alpha: 0.78),
+          color: sectionText,
           fontSize: 11,
         ),
       ),
@@ -1672,7 +1685,7 @@ class _MiniField extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.58),
+              color: sectionTextMuted,
               fontSize: 10,
             ),
           ),
@@ -1682,7 +1695,7 @@ class _MiniField extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontSize: emphasize ? 13 : 12,
               fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
             ),
@@ -1721,7 +1734,7 @@ class _Meta extends StatelessWidget {
             child: Text(
               value,
               style: TextStyle(
-                color: emphasize ? const Color(0xFFFF8A80) : Colors.white,
+                color: emphasize ? const Color(0xFFE53935) : sectionText,
                 fontSize: 12,
                 fontWeight: emphasize ? FontWeight.w700 : FontWeight.w400,
               ),
@@ -1745,7 +1758,7 @@ class _AmountChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.2),
+          color: appOrangeSoft,
           borderRadius: BorderRadius.circular(10),
         ),
         child: Column(

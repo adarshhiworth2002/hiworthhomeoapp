@@ -19,6 +19,7 @@ import '../services/invoice_draft_helper.dart';
 import '../services/invoice_helper.dart';
 import '../services/invoice_stock_restore_helper.dart';
 import '../services/odoo_rpc_helper.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import '../../models/qr_model.dart';
 import 'add_to_customer.dart';
@@ -2815,7 +2816,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           ),
         ],
       ),
-      body: ListView(
+      body: ResponsiveBody(
+      child: ListView(
         padding: SystemSafe.listPadding(context, extraBottom: 110),
         children: [
           const Row(
@@ -3291,13 +3293,14 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                 ),
               ],
             ),
+            ),
       bottomNavigationBar: SafeArea(
         top: false,
         child: Padding(
           padding: EdgeInsets.fromLTRB(
-            16,
+            AppResponsive.of(context).pagePadding,
             8,
-            16,
+            AppResponsive.of(context).pagePadding,
             SystemSafe.actionBarBottomPadding(context),
           ),
           child: Row(
@@ -3800,12 +3803,9 @@ class _CompactLineRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        children: [
-          Expanded(child: left),
-          const SizedBox(width: 8),
-          Expanded(child: right),
-        ],
+      child: AdaptiveSplit(
+        start: left,
+        end: right,
       ),
     );
   }

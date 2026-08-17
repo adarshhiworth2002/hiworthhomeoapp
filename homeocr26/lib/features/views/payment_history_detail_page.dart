@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/invoice_summary_model.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import '../theme.dart';
 
@@ -30,7 +31,8 @@ class PaymentHistoryDetailPage extends StatelessWidget {
         backgroundColor: sectionBg,
         elevation: 0,
       ),
-      body: RefreshIndicator(
+      body: ResponsiveBody(
+        child: RefreshIndicator(
         color: const Color(0xFFE07A2F),
         onRefresh: () async {},
         child: ListView(
@@ -93,6 +95,7 @@ class PaymentHistoryDetailPage extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
       ),
     );

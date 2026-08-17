@@ -11,6 +11,7 @@ import '../services/invoice_helper.dart';
 import '../services/invoice_search_service.dart';
 import '../widgets/invoice_prefix_field.dart';
 import '../widgets/show_dialog_custom.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import '../theme.dart';
 
@@ -318,8 +319,8 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
       alignment: Alignment.center,
       children: [
         SizedBox(
-          width: MediaQuery.of(context).size.width * .6,
-          height: MediaQuery.of(context).size.height * .25,
+          width: AppResponsive.of(context).scannerFrame(widthFactor: 0.6).width,
+          height: AppResponsive.of(context).scannerFrame(heightFactor: 0.25).height,
         ),
 
         Positioned(top: 0, left: 0, child: _cornerIndicator()),

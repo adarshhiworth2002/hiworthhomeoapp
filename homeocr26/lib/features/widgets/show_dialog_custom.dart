@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:homeocr26/features/theme.dart';
+import 'package:homeocr26/features/widgets/app_responsive.dart';
 
 class StatusDialog {
   /// Shows the status popup. Completes when the user taps OK.
@@ -30,6 +31,7 @@ class StatusDialog {
     return showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        insetPadding: AppResponsive.of(context).dialogInsets,
         backgroundColor: bg2,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(25),

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/stock_item_model.dart';
 import '../../viewModels/login_viewmodel.dart';
 import '../services/odoo_rpc_helper.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import '../theme.dart';
 
@@ -225,25 +226,27 @@ class _StockDetailPageState extends State<StockDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: sectionBg,
+    return Theme(
+      data: stockTheme(),
+      child: Scaffold(
+      backgroundColor: stockBg,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: sectionText),
+        iconTheme: const IconThemeData(color: stockText),
         title: const Text(
           'Stock Details',
           style: TextStyle(
-            color: sectionText,
+            color: stockText,
             fontWeight: FontWeight.w500,
             fontSize: 15,
           ),
         ),
-        backgroundColor: sectionBg,
+        backgroundColor: stockBg,
         elevation: 0,
         actions: [
           if (_editing)
             TextButton(
               onPressed: _saving ? null : _toggleEdit,
-              child: const Text('Cancel', style: TextStyle(color: sectionTextMuted)),
+              child: const Text('Cancel', style: TextStyle(color: stockTextMuted)),
             ),
           IconButton(
             tooltip: _editing ? 'Save' : 'Edit',
@@ -269,21 +272,22 @@ class _StockDetailPageState extends State<StockDetailPage> {
                     _editing ? Icons.check : Icons.edit_outlined,
                     color: _editing
                         ? const Color(0xFFE07A2F)
-                        : Colors.white,
+                        : stockText,
                   ),
           ),
         ],
       ),
-      body: ListView(
+      body: ResponsiveBody(
+        child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: SystemSafe.listPadding(context),
         children: [
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: sectionCard,
+              color: stockCard,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: sectionCardBorder),
+              border: Border.all(color: stockCardBorder),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -294,7 +298,7 @@ class _StockDetailPageState extends State<StockDetailPage> {
                   Text(
                     _item.medicineLabel,
                     style: const TextStyle(
-                      color: sectionText,
+                      color: stockText,
                       fontWeight: FontWeight.w700,
                       fontSize: 15,
                     ),
@@ -389,6 +393,8 @@ class _StockDetailPageState extends State<StockDetailPage> {
           ),
         ],
       ),
+      ),
+    ),
     );
   }
 
@@ -430,7 +436,7 @@ class _Meta extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: sectionTextMuted,
+                color: stockTextMuted,
                 fontSize: 11,
               ),
             ),
@@ -438,7 +444,7 @@ class _Meta extends StatelessWidget {
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(color: sectionText, fontSize: 12),
+              style: const TextStyle(color: stockText, fontSize: 12),
             ),
           ),
         ],
@@ -465,11 +471,11 @@ class _EditField extends StatelessWidget {
       child: TextField(
         controller: controller,
         keyboardType: keyboardType,
-        style: const TextStyle(color: sectionText, fontSize: 13),
+        style: const TextStyle(color: stockText, fontSize: 13),
         decoration: InputDecoration(
           labelText: label,
           labelStyle: TextStyle(
-            color: sectionTextMuted,
+            color: stockTextMuted,
             fontSize: 12,
           ),
           filled: true,
@@ -483,7 +489,7 @@ class _EditField extends StatelessWidget {
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
             borderSide: BorderSide(
-              color: sectionCard,
+              color: stockCard,
             ),
           ),
           focusedBorder: OutlineInputBorder(
@@ -517,7 +523,7 @@ class _AmountChip extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                color: sectionTextMuted,
+                color: stockTextMuted,
                 fontSize: 10,
               ),
             ),
@@ -525,7 +531,7 @@ class _AmountChip extends StatelessWidget {
             Text(
               StockItemModel.money(value),
               style: const TextStyle(
-                color: sectionText,
+                color: stockText,
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
               ),

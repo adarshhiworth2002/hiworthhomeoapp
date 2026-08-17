@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/invoice_summary_model.dart';
 import '../theme.dart';
+import '../widgets/app_responsive.dart';
 import 'customer_invoice_detail_page.dart';
 
 /// Compact single-line list row: Number · [Status] · Balance · Subtotal · Total.
@@ -21,6 +22,7 @@ class InvoiceListCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final r = AppResponsive.of(context);
     final card = Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: sectionCardDecoration(),
@@ -34,7 +36,7 @@ class InvoiceListCard extends StatelessWidget {
               emphasize: true,
             ),
           ),
-          if (statusValue != null)
+          if (statusValue != null && r.showListSecondary)
             Expanded(
               flex: 2,
               child: _LineCell(
@@ -42,20 +44,22 @@ class InvoiceListCard extends StatelessWidget {
                 value: statusValue!,
               ),
             ),
-          Expanded(
-            flex: 2,
-            child: _LineCell(
-              label: 'Balance',
-              value: InvoiceSummaryModel.formatMoney(invoice.balance),
+          if (r.showListSecondary)
+            Expanded(
+              flex: 2,
+              child: _LineCell(
+                label: 'Balance',
+                value: InvoiceSummaryModel.formatMoney(invoice.balance),
+              ),
             ),
-          ),
-          Expanded(
-            flex: 2,
-            child: _LineCell(
-              label: 'Subtotal',
-              value: InvoiceSummaryModel.formatMoney(invoice.subtotal),
+          if (r.showListTertiary)
+            Expanded(
+              flex: 2,
+              child: _LineCell(
+                label: 'Subtotal',
+                value: InvoiceSummaryModel.formatMoney(invoice.subtotal),
+              ),
             ),
-          ),
           Expanded(
             flex: 2,
             child: _LineCell(
@@ -171,7 +175,12 @@ class InvoiceListError extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: sectionTextMuted, fontSize: 14),
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface.withValues(
+                      alpha: 0.7,
+                    ),
+                fontSize: 14,
+              ),
             ),
             const SizedBox(height: 16),
             TextButton(onPressed: onRetry, child: const Text('Retry')),

@@ -4,6 +4,7 @@ import '../../models/invoice_summary_model.dart';
 import '../../models/qr_model.dart';
 import '../services/invoice_calc_helper.dart';
 import '../services/invoice_detail_service.dart';
+import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'add_to_customer.dart';
 import 'customer_new_invoice_page.dart';
@@ -302,17 +303,18 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
             IconButton(
               tooltip: 'Edit bill',
               onPressed: _loadingLines ? null : _openEdit,
-              icon: const Icon(Icons.edit_outlined, color: Colors.white),
+              icon: const Icon(Icons.edit_outlined, color: sectionText),
             ),
           if (canScan)
             IconButton(
               tooltip: 'Scan QR into this bill',
               onPressed: _openScanner,
-              icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+              icon: const Icon(Icons.qr_code_scanner, color: sectionText),
             ),
         ],
       ),
-      body: RefreshIndicator(
+      body: ResponsiveBody(
+        child: RefreshIndicator(
         color: const Color(0xFFE07A2F),
         onRefresh: () async {
           setState(() => _loadingLines = true);
@@ -473,6 +475,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
         ],
       ),
       ),
+      ),
     );
   }
 }
@@ -492,7 +495,7 @@ class _StatusChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: selected
-              ? sectionBg
+              ? sectionAccent
               : Colors.black.withValues(alpha: 0.2),
         ),
       ),
@@ -500,7 +503,7 @@ class _StatusChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (selected) ...[
-            const Icon(Icons.check, size: 14, color: sectionBg),
+            const Icon(Icons.check, size: 14, color: sectionAccent),
             const SizedBox(width: 4),
           ],
           Text(
@@ -614,7 +617,7 @@ class _MoneyRow extends StatelessWidget {
           Text(
             InvoiceSummaryModel.formatMoney(value),
             style: TextStyle(
-              color: Colors.white,
+              color: sectionText,
               fontSize: emphasize ? 15 : 12,
               fontWeight: emphasize ? FontWeight.w800 : FontWeight.w500,
             ),
@@ -642,7 +645,7 @@ class _LineTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.18),
+        color: appOrangeSoft,
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
