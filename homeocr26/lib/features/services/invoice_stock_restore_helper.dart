@@ -17,6 +17,12 @@ class InvoiceStockRestoreHelper {
     String? batch,
     String? potency,
     int? stockEntryId,
+    /// Only true when the line was added via RPC that deducted `item_qty`.
+    /// Flutter `add_to_invoice` leaves `item_qty` alone — restoring it
+    /// double-counts sellable stock on discard.
+    bool restoreItemQty = false,
+    /// False when add never deducted sellable `stock` — clamp after unlink.
+    bool sellableStockDeducted = true,
     String? login,
     String? password,
     String db = 'HOMEO_JULY',
@@ -47,6 +53,8 @@ class InvoiceStockRestoreHelper {
         potency: potency,
         quantity: qty,
         stockEntryId: stockEntryId,
+        restoreItemQty: restoreItemQty,
+        sellableStockDeducted: sellableStockDeducted,
       );
     } catch (e) {
       if (kDebugMode) debugPrint('restoreAfterLineDelete odoo failed: $e');

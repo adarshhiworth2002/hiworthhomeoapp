@@ -1,16 +1,21 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../services/prefix_search.dart';
 import '../../models/invoice_summary_model.dart';
+import '../../models/payment_book_model.dart';
 import '../../viewModels/customer_invoice_viewmodel.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'customer_new_invoice_page.dart';
 import 'invoice_list_widgets.dart';
+import 'invoice_search_filter_sheet.dart';
 import 'list_search_field.dart';
 import 'live_refresh_mixin.dart';
 import '../theme.dart';
+import '../widgets/payment_book_style.dart';
 
 class CustomerInvoiceListPage extends StatefulWidget {
   const CustomerInvoiceListPage({super.key});
@@ -26,25 +31,19 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
   late final TextEditingController _searchController;
   String _searchQuery = '';
 
-  static const _tabs = [
-    ('all', 'All'),
-    ('draft', 'Draft'),
-    ('open', 'Open'),
-    ('paid', 'Paid'),
-  ];
-
   @override
   void initState() {
     super.initState();
     _viewModel = CustomerInvoiceViewModel();
     _searchController = TextEditingController();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _viewModel.fetch(context, state: 'all');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      await _viewModel.fetch(context, forceRefresh: true, silent: true);
+      unawaited(_viewModel.fetch(context, state: 'all'));
     });
     startLiveRefresh(
       () => _viewModel.fetch(context, forceRefresh: true, silent: true),
+      interval: const Duration(seconds: 30),
+      immediate: false,
     );
   }
 
@@ -54,6 +53,28 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
     _searchController.dispose();
     _viewModel.dispose();
     super.dispose();
+  }
+
+  Future<void> _openFilter() async {
+    final result = await showModalBottomSheet<InvoiceSearchFilterResult>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: sectionBg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) => InvoiceSearchFilterSheet(
+        initialFilter: _viewModel.listFilter,
+        parentContext: context,
+      ),
+    );
+    if (!mounted || result == null) return;
+    if (result.clear) {
+      _viewModel.clearListFilter();
+      return;
+    }
+    _viewModel.applyListFilter(result.filter);
   }
 
   @override
@@ -69,15 +90,16 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
             style: TextStyle(
               color: sectionText,
               fontWeight: FontWeight.w500,
-              fontSize: 15,
+              fontSize: 17,
             ),
           ),
           backgroundColor: sectionBg,
           elevation: 0,
           actions: [
             IconButton(
-              onPressed: () => _viewModel.fetch(context, forceRefresh: true),
-              icon: const Icon(Icons.refresh, color: sectionText),
+              tooltip: 'Filter',
+              onPressed: _openFilter,
+              icon: const Icon(Icons.filter_list, color: sectionText),
             ),
           ],
         ),
@@ -85,6 +107,21 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
           child: Consumer<CustomerInvoiceViewModel>(
           builder: (context, model, _) {
             final loadingCatalog = model.loading && model.items.isEmpty;
+            final visible = _filterInvoices(model.visibleItems);
+            final includeCancelInFooter = model.selectedState == 'cancel';
+            final visibleTotal = model.selectedState == 'all'
+                ? InvoiceSummaryModel.sumTotals(visible, includeCancel: false)
+                : InvoiceSummaryModel.sumTotals(
+                    visible,
+                    includeCancel: includeCancelInFooter ||
+                        model.selectedState != 'all',
+                  );
+            final visibleBalance = model.selectedState == 'all'
+                ? InvoiceSummaryModel.sumBalances(visible, includeCancel: false)
+                : InvoiceSummaryModel.sumBalances(visible, includeCancel: true);
+            final visibleCount = model.selectedState == 'all'
+                ? InvoiceSummaryModel.countBills(visible, includeCancel: false)
+                : visible.length;
             return Column(
               children: [
                 Padding(
@@ -103,42 +140,32 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
                     onChanged: (value) => setState(() => _searchQuery = value),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: _tabs.map((tab) {
-                        final selected = model.selectedState == tab.$1;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: FilterChip(
-                            label: Text(tab.$2),
-                            selected: selected,
-                            showCheckmark: true,
-                            checkmarkColor: const Color(0xFFE07A2F),
-                            onSelected: (_) =>
-                                model.fetch(context, state: tab.$1),
-                            selectedColor: Colors.white,
-                            backgroundColor: Colors.white,
-                            side: BorderSide(
-                              color: selected
-                                  ? const Color(0xFFE07A2F)
-                                  : Colors.black.withValues(alpha: 0.2),
-                            ),
-                            labelStyle: TextStyle(
-                              color: selected
-                                  ? const Color(0xFFE07A2F)
-                                  : Colors.black,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        );
-                      }).toList(),
+                if (model.listFilter.isActive)
+                  Padding(
+                    padding: SystemSafe.horizontalPadding(context, bottom: 8),
+                    child: _InvoiceFilterChips(
+                      filter: model.listFilter,
+                      onClear: model.clearListFilter,
                     ),
                   ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  child: InvoiceStatusFilterChips(
+                    selected: model.selectedState,
+                    onSelected: (state) =>
+                        model.fetch(context, state: state),
+                  ),
                 ),
-                Expanded(child: _buildBody(model)),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: PaymentBookColorLegend(),
+                ),
+                Expanded(child: _buildBody(model, visible)),
+                _InvoiceListTotals(
+                  count: visibleCount,
+                  total: visibleTotal,
+                  balance: visibleBalance,
+                ),
               ],
             );
           },
@@ -175,10 +202,14 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
       );
       return;
     }
+    // Discard / back: force a fresh catalog so deleted drafts disappear.
     await _viewModel.fetch(this.context, forceRefresh: true);
   }
 
-  Widget _buildBody(CustomerInvoiceViewModel model) {
+  Widget _buildBody(
+    CustomerInvoiceViewModel model,
+    List<InvoiceSummaryModel> filtered,
+  ) {
     if (model.loading && model.items.isEmpty) {
       return const Center(
         child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
@@ -191,11 +222,11 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
       );
     }
 
-    final filtered = _filterInvoices(model.items);
     if (model.items.isEmpty) {
       return RefreshIndicator(
         color: const Color(0xFFE07A2F),
-        onRefresh: () => model.fetch(context, forceRefresh: true),
+        displacement: 28,
+        onRefresh: () => model.fetch(context, forceRefresh: true, silent: true),
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
@@ -215,7 +246,8 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
     if (filtered.isEmpty) {
       return RefreshIndicator(
         color: const Color(0xFFE07A2F),
-        onRefresh: () => model.fetch(context, forceRefresh: true),
+        displacement: 28,
+        onRefresh: () => model.fetch(context, forceRefresh: true, silent: true),
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
@@ -234,10 +266,11 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
     }
     return RefreshIndicator(
       color: const Color(0xFFE07A2F),
-      onRefresh: () => model.fetch(context, forceRefresh: true),
+      displacement: 28,
+      onRefresh: () => model.fetch(context, forceRefresh: true, silent: true),
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: SystemSafe.listPadding(context),
+        padding: SystemSafe.listPadding(context, extraBottom: 8),
         itemCount: filtered.length,
         separatorBuilder: (_, _) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
@@ -254,12 +287,82 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
   List<InvoiceSummaryModel> _filterInvoices(List<InvoiceSummaryModel> items) {
     return items
         .where(
-          (item) => PrefixSearch.matchesAny(
-            [item.displayCustomer, item.displayNumber, item.invoiceNumber],
-            _searchQuery,
+          (item) => PrefixSearch.matchesCustomerOrInvoice(
+            query: _searchQuery,
+            customer: item.customer,
+            displayCustomer: item.displayCustomer,
+            displayNumber: item.displayNumber,
+            invoiceNumber: item.invoiceNumber,
           ),
         )
         .toList(growable: false);
+  }
+}
+
+class _InvoiceListTotals extends StatelessWidget {
+  const _InvoiceListTotals({
+    required this.count,
+    required this.total,
+    required this.balance,
+  });
+
+  final int count;
+  final double total;
+  final double balance;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        AppResponsive.of(context).pagePadding,
+        12,
+        AppResponsive.of(context).pagePadding,
+        SystemSafe.actionBarBottomPadding(context),
+      ),
+      decoration: BoxDecoration(
+        color: sectionFooter,
+        border: Border(
+          top: BorderSide(color: sectionCardBorder),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              count == 1 ? 'Total (1 bill)' : 'Total ($count bills)',
+              style: TextStyle(
+                color: sectionTextMuted,
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                'Balance  ${InvoiceSummaryModel.formatMoney(balance)}',
+                style: TextStyle(
+                  color: sectionTextMuted,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                InvoiceSummaryModel.formatMoney(total),
+                style: const TextStyle(
+                  color: Color(0xFFE07A2F),
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -335,7 +438,7 @@ class _NewBillGradientButton extends StatelessWidget {
                 loading ? 'Loading invoices…' : 'New Bill',
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 15,
+                  fontSize: 17,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 0.3,
                 ),
@@ -343,6 +446,59 @@ class _NewBillGradientButton extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _InvoiceFilterChips extends StatelessWidget {
+  const _InvoiceFilterChips({
+    required this.filter,
+    required this.onClear,
+  });
+
+  final PaymentBookFilter filter;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = filter.chipParts;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+      decoration: BoxDecoration(
+        color: sectionCard,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: sectionCardBorder),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.filter_alt_outlined,
+            size: 14,
+            color: Color(0xFFE07A2F),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              parts.isEmpty ? 'Filtered' : parts.join(' · '),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: sectionText,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Clear filters',
+            onPressed: onClear,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+            icon: const Icon(Icons.close, size: 18, color: sectionText),
+          ),
+        ],
       ),
     );
   }

@@ -3,12 +3,15 @@ import 'package:provider/provider.dart';
 
 import '../services/prefix_search.dart';
 import '../../models/net_amount_model.dart';
+import '../../models/payment_book_model.dart';
 import '../../viewModels/net_amount_viewmodel.dart';
 import '../widgets/app_responsive.dart';
+import '../widgets/compact_field_rows.dart';
 import '../widgets/system_safe.dart';
 import 'list_search_field.dart';
 import 'live_refresh_mixin.dart';
 import 'net_amount_detail_page.dart';
+import '../widgets/payment_book_style.dart';
 import '../theme.dart';
 
 class NetAmountPage extends StatefulWidget {
@@ -72,20 +75,11 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
             style: TextStyle(
               color: sectionText,
               fontWeight: FontWeight.w500,
-              fontSize: 15,
+              fontSize: 17,
             ),
           ),
           backgroundColor: sectionBg,
           elevation: 0,
-          actions: [
-            IconButton(
-              onPressed: () => _viewModel.fetchBoth(
-                context,
-                forceRefresh: true,
-              ),
-              icon: const Icon(Icons.refresh, color: sectionText),
-            ),
-          ],
         ),
         body: ResponsiveBody(
           child: Consumer<NetAmountViewModel>(
@@ -114,7 +108,7 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
                         'Report date: ${model.reportDate}',
                         style: TextStyle(
                           color: sectionTextMuted,
-                          fontSize: 12,
+                          fontSize: 14,
                         ),
                       ),
                     ),
@@ -128,22 +122,22 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
                       ),
                     ),
                   _AmountButton(
-                    title: 'You Got (Paid)',
+                    title: 'You Got (Customer)',
                     amountLabel: NetAmountViewModel.formatAmount(
-                      model.youGotAmount,
+                      model.amountFor(NetAmountSection.youGot),
                     ),
-                    subtitle: '${model.youGotInvoices.length} invoice(s)',
+                    subtitle: 'Paid',
                     color: const Color(0xFFE07A2F),
                     loading: model.detailLoading,
                     onTap: () => _openSection(NetAmountSection.youGot),
                   ),
                   const SizedBox(height: 16),
                   _AmountButton(
-                    title: 'You Gave (Paid)',
+                    title: 'You Gave (Supplier)',
                     amountLabel: NetAmountViewModel.formatAmount(
-                      model.youGaveAmount,
+                      model.amountFor(NetAmountSection.youGave),
                     ),
-                    subtitle: '${model.youGaveBills.length} bill(s)',
+                    subtitle: 'Not paid',
                     color: Colors.white,
                     loading: model.detailLoading,
                     onTap: () => _openSection(NetAmountSection.youGave),
@@ -208,7 +202,7 @@ class _AmountButton extends StatelessWidget {
                       title,
                       style: TextStyle(
                         color: onColor,
-                        fontSize: 16,
+                        fontSize: 18,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -217,7 +211,7 @@ class _AmountButton extends StatelessWidget {
                       subtitle,
                       style: TextStyle(
                         color: onColor.withValues(alpha: 0.75),
-                        fontSize: 12,
+                        fontSize: 14,
                       ),
                     ),
                   ],
@@ -237,7 +231,7 @@ class _AmountButton extends StatelessWidget {
                   amountLabel,
                   style: TextStyle(
                     color: onColor,
-                    fontSize: 18,
+                    fontSize: 20,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
@@ -261,7 +255,8 @@ class NetAmountSectionPage extends StatefulWidget {
   State<NetAmountSectionPage> createState() => _NetAmountSectionPageState();
 }
 
-class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
+class _NetAmountSectionPageState extends State<NetAmountSectionPage>
+    with LiveRefreshMixin {
   late final TextEditingController _searchController;
   String _searchQuery = '';
 
@@ -269,10 +264,28 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
   void initState() {
     super.initState();
     _searchController = TextEditingController();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final model = context.read<NetAmountViewModel>();
+      // You Gave has no Open chip — reset if left on Open from You Got.
+      if (widget.section == NetAmountSection.youGave &&
+          model.statusFilter == 'open') {
+        model.setStatusFilter('all');
+      }
+    });
+    startLiveRefresh(() {
+      if (!mounted) return Future.value();
+      return context.read<NetAmountViewModel>().fetchBoth(
+            context,
+            forceRefresh: true,
+            silent: true,
+          );
+    });
   }
 
   @override
   void dispose() {
+    stopLiveRefresh();
     _searchController.dispose();
     super.dispose();
   }
@@ -291,7 +304,7 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
           style: const TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
         backgroundColor: sectionBg,
@@ -300,7 +313,6 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
       body: ResponsiveBody(
         child: Consumer<NetAmountViewModel>(
         builder: (context, model, _) {
-          final amount = model.amountFor(section);
           final rows = model.rowsFor(section).where((row) {
             return PrefixSearch.matchesAny(
               [
@@ -311,34 +323,53 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
               _searchQuery,
             );
           }).toList(growable: false);
+          final visibleTotal = model.statusFilter == 'all'
+              ? rows.fold<double>(0, (sum, row) {
+                  if (row.sectionKey == 'cancel') return sum;
+                  return sum + (row.total ?? 0);
+                })
+              : rows.fold<double>(0, (sum, row) => sum + (row.total ?? 0));
+          final visibleBalance = model.statusFilter == 'all'
+              ? rows.fold<double>(0, (sum, row) {
+                  if (row.sectionKey == 'cancel') return sum;
+                  return sum + (row.balance ?? 0);
+                })
+              : rows.fold<double>(0, (sum, row) => sum + (row.balance ?? 0));
+          final visiblePaid = model.statusFilter == 'all'
+              ? rows.fold<double>(0, (sum, row) {
+                  if (row.sectionKey == 'cancel') return sum;
+                  return sum + row.paidAmount;
+                })
+              : rows.fold<double>(0, (sum, row) => sum + row.paidAmount);
+          final visibleCount = model.statusFilter == 'all'
+              ? rows.where((r) => r.sectionKey != 'cancel').length
+              : rows.length;
 
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        model.reportDate == null
-                            ? 'Yesterday'
-                            : 'Date: ${model.reportDate}',
-                        style: TextStyle(
-                          color: sectionTextMuted,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      NetAmountViewModel.formatAmount(amount),
-                      style: const TextStyle(
-                        color: sectionText,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
+                child: const PaymentBookColorLegend(),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: InvoiceStatusFilterChips(
+                  selected: model.statusFilter,
+                  onSelected: model.setStatusFilter,
+                  hideKeys: isGave ? const {'open'} : const {},
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  model.reportDate == null
+                      ? 'Yesterday'
+                      : 'Date: ${model.reportDate}',
+                  style: TextStyle(
+                    color: sectionTextMuted,
+                    fontSize: 14,
+                  ),
                 ),
               ),
               Padding(
@@ -376,7 +407,11 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
                         )
                       : ListView.separated(
                           physics: const AlwaysScrollableScrollPhysics(),
-                          padding: SystemSafe.listPadding(context, top: 0),
+                          padding: SystemSafe.listPadding(
+                            context,
+                            top: 0,
+                            extraBottom: 12,
+                          ),
                           itemCount: rows.length,
                           separatorBuilder: (_, _) =>
                               const SizedBox(height: 8),
@@ -395,6 +430,12 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
                         ),
                 ),
               ),
+              _NetAmountTotalsFooter(
+                count: visibleCount,
+                paid: visiblePaid,
+                total: visibleTotal,
+                balance: visibleBalance,
+              ),
             ],
           );
         },
@@ -404,8 +445,8 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage> {
   }
 }
 
-/// Single-line row: Number · Date · Tax · Total · Status (You Got).
-/// You Gave: Supplier · Date · Total · Status.
+/// Single-line row: Number · Date · Tax · Total/Paid/Balance.
+/// Status badge sits at the top-right. Text colour follows Payment Book.
 class _NetAmountListCard extends StatelessWidget {
   const _NetAmountListCard({
     required this.row,
@@ -419,74 +460,161 @@ class _NetAmountListCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = row.displayPaymentHistoryStatus;
+    final invoice = row.toInvoiceSummary(asSupplier: isGave);
+    final style = invoice.paymentBookRowStyle;
+    final color = PaymentBookStyleColors.of(style);
+    final weight = PaymentBookStyleColors.weightOf(style);
+    final status = row.displayBillStatus;
+    final fields = <Widget>[
+      _Cell(
+        label: isGave ? 'Supplier' : 'Number',
+        value: isGave ? NetAmountRow.text(row.supplier) : row.displayNumber,
+        emphasize: true,
+        color: color,
+        weight: FontWeight.w800,
+      ),
+      _Cell(
+        label: 'Date',
+        value: NetAmountRow.formatDate(row.invoiceDate),
+        color: color,
+        weight: weight,
+      ),
+      if (!isGave)
+        _Cell(
+          label: 'Tax',
+          value: NetAmountRow.money(row.displayTaxAmount),
+          color: color,
+          weight: weight,
+        ),
+      _Cell(
+        label: 'Paid',
+        value: NetAmountRow.money(row.paidAmount),
+        color: const Color(0xFF2E7D32),
+        weight: FontWeight.w700,
+      ),
+      _Cell(
+        label: 'Balance',
+        value: NetAmountRow.money(row.balance),
+        color: const Color(0xFFD32F2F),
+        weight: FontWeight.w700,
+      ),
+      _Cell(
+        label: 'Total',
+        value: NetAmountRow.money(row.total),
+        color: color,
+        weight: weight,
+      ),
+    ];
 
     return InkWell(
       borderRadius: BorderRadius.circular(12),
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
         decoration: BoxDecoration(
           color: sectionCard,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: sectionCardBorder),
         ),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
-              flex: 3,
-              child: _Cell(
-                label: isGave ? 'Supplier' : 'Number',
-                value: isGave
-                    ? NetAmountRow.text(row.supplier)
-                    : row.displayNumber,
-                emphasize: true,
-              ),
+              child: CompactFieldRows(fields: fields),
             ),
-            Expanded(
-              flex: 2,
-              child: Padding(
-                padding: EdgeInsets.only(right: isGave ? 0 : 6),
-                child: _Cell(
-                  label: 'Date',
-                  value: NetAmountRow.formatDate(row.invoiceDate),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                InvoiceBillStatusBadge(status: status),
+                const SizedBox(height: 8),
+                const Icon(
+                  Icons.chevron_right,
+                  color: sectionTextMuted,
+                  size: 20,
                 ),
-              ),
-            ),
-            if (!isGave) ...[
-              const SizedBox(width: 10),
-              Expanded(
-                flex: 2,
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: _Cell(
-                    label: 'Tax',
-                    value: NetAmountRow.money(row.displayTaxAmount),
-                  ),
-                ),
-              ),
-            ],
-            Expanded(
-              flex: 2,
-              child: _Cell(
-                label: 'Total',
-                value: NetAmountRow.money(row.total),
-              ),
-            ),
-            Expanded(
-              flex: 2,
-              child: _Cell(
-                label: 'Status',
-                value: status,
-              ),
-            ),
-            Icon(
-              Icons.chevron_right,
-              color: sectionTextMuted,
-              size: 20,
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _NetAmountTotalsFooter extends StatelessWidget {
+  const _NetAmountTotalsFooter({
+    required this.count,
+    required this.paid,
+    required this.total,
+    required this.balance,
+  });
+
+  final int count;
+  final double paid;
+  final double total;
+  final double balance;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        AppResponsive.of(context).pagePadding,
+        12,
+        AppResponsive.of(context).pagePadding,
+        SystemSafe.actionBarBottomPadding(context),
+      ),
+      decoration: BoxDecoration(
+        color: sectionFooter,
+        border: Border(
+          top: BorderSide(color: sectionCardBorder),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              count == 1 ? 'Total (1 bill)' : 'Total ($count bills)',
+              style: TextStyle(
+                color: sectionTextMuted,
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                'Paid  ${NetAmountRow.money(paid)}',
+                style: const TextStyle(
+                  color: Color(0xFF2E7D32),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Balance  ${NetAmountRow.money(balance)}',
+                style: const TextStyle(
+                  color: Color(0xFFD32F2F),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Total  ${NetAmountRow.money(total)}',
+                style: const TextStyle(
+                  color: sectionText,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -497,11 +625,15 @@ class _Cell extends StatelessWidget {
     required this.label,
     required this.value,
     this.emphasize = false,
+    this.color = sectionText,
+    this.weight,
   });
 
   final String label;
   final String value;
   final bool emphasize;
+  final Color color;
+  final FontWeight? weight;
 
   @override
   Widget build(BuildContext context) {
@@ -515,7 +647,7 @@ class _Cell extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             color: sectionTextMuted,
-            fontSize: 9,
+            fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -525,9 +657,10 @@ class _Cell extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: sectionText,
-            fontWeight: emphasize ? FontWeight.w700 : FontWeight.w600,
-            fontSize: emphasize ? 12 : 11,
+            color: color,
+            fontWeight: weight ??
+                (emphasize ? FontWeight.w700 : FontWeight.w600),
+            fontSize: emphasize ? 14 : 13,
           ),
         ),
       ],

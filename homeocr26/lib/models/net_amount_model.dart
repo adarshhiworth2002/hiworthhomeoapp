@@ -1,3 +1,5 @@
+import '../features/services/calendar_date.dart';
+import '../features/services/invoice_gst_kind.dart';
 import 'invoice_summary_model.dart';
 
 class NetAmountModel {
@@ -165,6 +167,13 @@ class NetAmountRow {
     this.moveState,
     this.paymentState,
     this.isPaid = false,
+    this.paymentMode,
+    this.advanceAmount,
+    this.oldBalance,
+    this.isCreditCustomer = false,
+    this.sequencePrefix,
+    this.invoiceType,
+    this.b2bFlag,
   });
 
   final int? id;
@@ -188,6 +197,13 @@ class NetAmountRow {
   final String? moveState;
   final String? paymentState;
   final bool isPaid;
+  final String? paymentMode;
+  final double? advanceAmount;
+  final double? oldBalance;
+  final bool isCreditCustomer;
+  final String? sequencePrefix;
+  final String? invoiceType;
+  final bool? b2bFlag;
 
   String get displayNumber {
     for (final v in [invoiceNumber, number, invoicePaid]) {
@@ -195,6 +211,38 @@ class NetAmountRow {
       if (t.isNotEmpty && t != '—') return t;
     }
     return '—';
+  }
+
+  /// Customer Invoice-style bucket: `draft` | `open` | `paid` | `cancel`.
+  String get sectionKey => toInvoiceSummary().sectionKey;
+
+  String get displayBillStatus {
+    switch (sectionKey) {
+      case 'paid':
+        return 'Paid';
+      case 'draft':
+        return 'Draft';
+      case 'open':
+        return 'Open';
+      case 'cancel':
+        return 'Cancel';
+      default:
+        final raw = displayPaymentHistoryStatus;
+        if (raw.toLowerCase() == 'posted') return 'Open';
+        if (raw.toLowerCase().startsWith('cancel')) return 'Cancel';
+        return raw;
+    }
+  }
+
+  /// Amount already collected (total minus open balance).
+  double get paidAmount {
+    final t = total ?? 0;
+    final b = balance ?? 0;
+    if (isPaid || invoicePaidFlag) {
+      return b.abs() <= 0.0001 ? t : (t - b).clamp(0, t);
+    }
+    final paid = t - b;
+    return paid < 0 ? 0 : paid;
   }
 
   /// Seed for the shared Cash/Credit Tax Invoice detail (with line items).
@@ -216,6 +264,41 @@ class NetAmountRow {
       moveState: moveState,
       paymentState: paymentState,
       isPaid: isPaid || invoicePaidFlag,
+      paymentMode: paymentMode,
+      advanceAmount: advanceAmount,
+      oldBalance: oldBalance,
+      isCreditCustomer: isCreditCustomer,
+      sequencePrefix: sequencePrefix,
+      invoiceType: invoiceType,
+      b2bFlag: b2bFlag,
+    );
+  }
+
+  factory NetAmountRow.fromInvoice(InvoiceSummaryModel invoice) {
+    return NetAmountRow(
+      id: invoice.id,
+      customer: invoice.displayCustomer ?? invoice.customer,
+      invoiceNumber: invoice.displayNumber == 'Unknown'
+          ? invoice.invoiceNumber
+          : invoice.displayNumber,
+      invoiceDate: invoice.invoiceDate,
+      billedBy: invoice.billedBy ?? invoice.responsiblePerson,
+      taxAmount: invoice.taxAmount,
+      balance: invoice.balance,
+      subtotal: invoice.subtotal,
+      total: invoice.total,
+      status: invoice.status,
+      moveState: invoice.moveState,
+      paymentState: invoice.paymentState,
+      isPaid: invoice.isPaid,
+      invoicePaidFlag: invoice.isPaid,
+      paymentMode: invoice.paymentMode,
+      advanceAmount: invoice.advanceAmount,
+      oldBalance: invoice.oldBalance,
+      isCreditCustomer: invoice.isCreditCustomer,
+      sequencePrefix: invoice.sequencePrefix,
+      invoiceType: invoice.invoiceType,
+      b2bFlag: invoice.b2bFlag,
     );
   }
 
@@ -360,6 +443,13 @@ class NetAmountRow {
       moveState: detail.moveState ?? moveState,
       paymentState: detail.paymentState ?? paymentState,
       isPaid: detail.isPaid || isPaid,
+      paymentMode: detail.paymentMode ?? paymentMode,
+      advanceAmount: detail.advanceAmount ?? advanceAmount,
+      oldBalance: detail.oldBalance ?? oldBalance,
+      isCreditCustomer: detail.isCreditCustomer || isCreditCustomer,
+      sequencePrefix: detail.sequencePrefix ?? sequencePrefix,
+      invoiceType: detail.invoiceType ?? invoiceType,
+      b2bFlag: detail.b2bFlag ?? b2bFlag,
     );
   }
 
@@ -384,6 +474,13 @@ class NetAmountRow {
     String? moveState,
     String? paymentState,
     bool? isPaid,
+    String? paymentMode,
+    double? advanceAmount,
+    double? oldBalance,
+    bool? isCreditCustomer,
+    String? sequencePrefix,
+    String? invoiceType,
+    bool? b2bFlag,
   }) {
     return NetAmountRow(
       id: id ?? this.id,
@@ -406,6 +503,13 @@ class NetAmountRow {
       moveState: moveState ?? this.moveState,
       paymentState: paymentState ?? this.paymentState,
       isPaid: isPaid ?? this.isPaid,
+      paymentMode: paymentMode ?? this.paymentMode,
+      advanceAmount: advanceAmount ?? this.advanceAmount,
+      oldBalance: oldBalance ?? this.oldBalance,
+      isCreditCustomer: isCreditCustomer ?? this.isCreditCustomer,
+      sequencePrefix: sequencePrefix ?? this.sequencePrefix,
+      invoiceType: invoiceType ?? this.invoiceType,
+      b2bFlag: b2bFlag ?? this.b2bFlag,
     );
   }
 
@@ -533,10 +637,11 @@ class NetAmountRow {
       invoiceDate: _str(flat, const [
         'invoice_date',
         'bill_date',
-        'date',
-        'invoice_bill_date',
-        'create_date',
         'date_invoice',
+        'invoice_bill_date',
+        // Prefer accounting `date` only after real invoice dates.
+        // Never use create_date here — it is UTC and shifts the calendar day.
+        'date',
       ]),
       expiry: _str(flat, const [
         'expiry',
@@ -559,6 +664,9 @@ class NetAmountRow {
         'billed_by',
         'billed_by_name',
         'billed_by_id',
+        'responsible_person',
+        'responsible_person_name',
+        'responsible',
         'invoice_user_id',
         'user_id',
         'create_uid',
@@ -589,6 +697,31 @@ class NetAmountRow {
       moveState: moveState,
       paymentState: paymentState,
       isPaid: isPaid,
+      paymentMode: _str(flat, const [
+        'payment_mode',
+        'payment_type',
+        'journal_type',
+      ]),
+      // Cash Book / website: only partner-level fields. Generic advance/old
+      // keys are often 0 on payment-history rows and would hide real values.
+      advanceAmount: _num(flat, const [
+        'customer_advance_amount',
+      ]),
+      oldBalance: _num(flat, const [
+        'customer_old_balance',
+      ]),
+      isCreditCustomer: flat['is_credit_customer'] == true ||
+          flat['is_credit_customer'] == 1 ||
+          (flat['customer_type']?.toString().toLowerCase().trim() ==
+              'credit'),
+      sequencePrefix: _str(flat, const [
+        'sequence_prefix',
+        'invoice_series',
+        'series',
+        'journal_code',
+      ]),
+      invoiceType: InvoiceGstKindParser.labelFromJson(flat),
+      b2bFlag: InvoiceSummaryModel.b2bFlagFromJson(flat),
     );
   }
 
@@ -624,11 +757,13 @@ class NetAmountRow {
     return value.toStringAsFixed(2);
   }
 
-  /// Website-style MM/DD/YYYY from ISO date strings.
+  /// Website-style date from ISO / Odoo date strings (calendar-safe).
   static String formatDate(String? value) {
-    if (value == null || value.trim().isEmpty) return '—';
-    final parsed = DateTime.tryParse(value.trim());
-    if (parsed == null) return value.trim();
+    final parsed = CalendarDate.parse(value);
+    if (parsed == null) {
+      final t = (value ?? '').trim();
+      return t.isEmpty ? '—' : t;
+    }
     final month = parsed.month.toString().padLeft(2, '0');
     final day = parsed.day.toString().padLeft(2, '0');
     return '$month/$day/${parsed.year}';

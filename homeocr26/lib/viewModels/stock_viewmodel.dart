@@ -184,6 +184,13 @@ class StockViewModel extends ChangeNotifier {
   }
 
   /// Apply stock detail edits to the in-memory list without a full reload.
+  void prependLocalItem(StockItemModel created) {
+    items = [created, ...items];
+    _rebuildSearchHits();
+    _saveSnapshot();
+    notifyListeners();
+  }
+
   void replaceLocalItem(StockItemModel updated) {
     final entryId = updated.entryStockId;
     final displayId = updated.stockDisplayId;

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:ui' as ui;
 
@@ -12,6 +13,8 @@ import '../../viewModels/customer_med_viewModel.dart';
 import '../../models/qr_model.dart';
 import '../services/invoice_helper.dart';
 import '../services/label_ocr_service.dart';
+import '../services/live_data_sync.dart';
+import '../services/scan_feedback.dart';
 import 'label_camera_page.dart';
 import 'label_text_select_page.dart';
 import '../widgets/invoice_prefix_field.dart';
@@ -26,23 +29,36 @@ class AddToCustomerResult {
     required this.data,
     required this.qty,
     this.invoiceId,
+    this.invoiceName,
+    this.rpcAdjustedItemQty = false,
+    this.sellableStockDeducted = true,
   });
 
   final QrData data;
   final double qty;
   final int? invoiceId;
+  final String? invoiceName;
+  /// True when add used Odoo RPC that deducted `entry.stock.item_qty`.
+  final bool rpcAdjustedItemQty;
+  /// False when Flutter add created a line but never deducted sellable `stock`
+  /// (tax-error path) — remove must clamp so unlink does not inflate stock.
+  final bool sellableStockDeducted;
 }
 
 class AddToCustomerPage extends StatefulWidget {
   const AddToCustomerPage({
     super.key,
     this.lockedInvoiceNumber,
+    this.lockedInvoiceId,
     this.asPopup = false,
     this.onAdded,
   });
 
   /// When set (e.g. from invoice detail), medicine is always added to this bill.
   final String? lockedInvoiceNumber;
+
+  /// Odoo `account.move` id when scanning into an existing draft bill.
+  final int? lockedInvoiceId;
 
   /// Compact chrome for dialog / bottom-sheet use.
   final bool asPopup;
@@ -55,6 +71,7 @@ class AddToCustomerPage extends StatefulWidget {
   static Future<AddToCustomerResult?> showPopup(
     BuildContext context, {
     String? lockedInvoiceNumber,
+    int? lockedInvoiceId,
     void Function(QrData data, double qty, int? invoiceId)? onAdded,
   }) {
     return showDialog<AddToCustomerResult?>(
@@ -73,6 +90,7 @@ class AddToCustomerPage extends StatefulWidget {
               height: r.sheetHeight(fraction: 0.88),
               child: AddToCustomerPage(
                 lockedInvoiceNumber: lockedInvoiceNumber,
+                lockedInvoiceId: lockedInvoiceId,
                 asPopup: true,
                 onAdded: onAdded,
               ),
@@ -112,19 +130,26 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
 
   String get _fullInvoiceNumber {
     final locked = (widget.lockedInvoiceNumber ?? '').trim();
-    if (locked.contains('/')) return locked;
-    if (locked.isNotEmpty) {
-      return InvoiceHelper.formatFull(InvoiceHelper.prefixFromFull(locked));
+    // Locked bill number must stay as-is (e.g. R0090). Do not append /year.
+    if (locked.isNotEmpty) return locked;
+    final prefix = invoicePrefixController.text.trim();
+    if (prefix.isEmpty) return '';
+    if (prefix.contains('/') || RegExp(r'^[A-Za-z]').hasMatch(prefix)) {
+      return prefix;
     }
-    return InvoiceHelper.formatFull(invoicePrefixController.text);
+    return InvoiceHelper.formatFull(prefix);
   }
 
   Future<void> _finishSuccessfulAdd({
     required QrData data,
     required double qty,
     int? invoiceId,
+    String? invoiceName,
+    bool rpcAdjustedItemQty = false,
+    bool sellableStockDeducted = true,
   }) async {
     widget.onAdded?.call(data, qty, invoiceId);
+    unawaited(LiveDataSync.syncNow());
     await StatusDialog.show(
       context: context,
       title: 'Success',
@@ -136,7 +161,14 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     } catch (_) {}
     if (!context.mounted) return;
     Navigator.of(context).maybePop(
-      AddToCustomerResult(data: data, qty: qty, invoiceId: invoiceId),
+      AddToCustomerResult(
+        data: data,
+        qty: qty,
+        invoiceId: invoiceId,
+        invoiceName: invoiceName,
+        rpcAdjustedItemQty: rpcAdjustedItemQty,
+        sellableStockDeducted: sellableStockDeducted,
+      ),
     );
   }
 
@@ -238,6 +270,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
 
       await model.applyLabelOcrText(context, selectedText.trim());
       if (mounted && _isLabelScanSuccessful(model)) {
+        await ScanFeedback.successBuzz();
         restartScanner = false;
         await cameraController.stop();
       }
@@ -277,6 +310,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     try {
       await model.fetchQrDetails(context);
       if (mounted && _isScanSuccessful(model)) {
+        await ScanFeedback.successBuzz();
         cameraController.stop();
       }
     } finally {
@@ -305,7 +339,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
           style: const TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
         backgroundColor: sectionBg,
@@ -388,7 +422,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
           ? const Center(
               child: Text(
                 "Camera permission required",
-                style: TextStyle(color: Colors.white, fontSize: 16),
+                style: TextStyle(color: sectionText, fontSize: 18),
               ),
             )
           : SafeArea(
@@ -500,7 +534,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                                 'Photo label',
                                 style: TextStyle(
                                   color: Colors.white,
-                                  fontSize: 12,
+                                  fontSize: 14,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -543,9 +577,9 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
           Text(
             isLabel ? 'Medicine found in stock' : 'Successfully Scanned',
             style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
+              color: sectionText,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],
@@ -628,7 +662,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                     ? model.labelOcrError
                     : 'Product not found',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white, fontSize: 16),
+                style: const TextStyle(color: sectionText, fontSize: 18),
               ),
             ],
           ),
@@ -649,7 +683,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
         child: Center(
           child: Text(
             model.qrFetchError,
-            style: TextStyle(color: Colors.white, fontSize: 16),
+            style: TextStyle(color: sectionText, fontSize: 18),
           ),
         ),
       );
@@ -662,10 +696,10 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
           filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15), // blur for glass effect
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15), // semi-transparent
+              color: sectionCard,
               borderRadius: BorderRadius.circular(30),
               border: Border.all(
-                color: Colors.white.withValues(alpha: 0.2),
+                color: sectionCardBorder,
                 width: 1.5,
               ),
               boxShadow: [
@@ -727,10 +761,10 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
           filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15),
+              color: sectionCard,
               borderRadius: BorderRadius.circular(30),
               border: Border.all(
-                color: Colors.white.withValues(alpha: 0.2),
+                color: sectionCardBorder,
                 width: 1.5,
               ),
               boxShadow: [
@@ -810,8 +844,8 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
               const Text(
                 'Invoice Number',
                 style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
+                  color: sectionTextMuted,
+                  fontSize: 14,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -830,9 +864,10 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
               child: Text(
                 _fullInvoiceNumber,
                 style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
+                  color: sectionText,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.3,
                 ),
               ),
             )
@@ -873,7 +908,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                 child: Text(
                   title,
                   style: const TextStyle(
-                      color: sectionTextMuted, fontSize: 11, fontWeight: FontWeight.bold),
+                      color: sectionTextMuted, fontSize: 13, fontWeight: FontWeight.bold),
                 ),
               ),
 
@@ -882,8 +917,12 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
           Padding(
             padding: const EdgeInsets.only(left: 8.0),
             child: Text(
-              value,
-              style: const TextStyle(fontSize: 11,color: Colors.white),
+              value.isEmpty ? '—' : value,
+              style: const TextStyle(
+                fontSize: 15,
+                color: sectionText,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -913,8 +952,8 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
             child: Text(
               title,
               style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
+                color: sectionText,
+                fontSize: 14,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -924,17 +963,19 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
               keyboardType: keyboardType,
               controller: controller,
               style: const TextStyle(
-                fontSize: 13,
-                color: sectionTextMuted,
+                fontSize: 15,
+                color: sectionText,
+                fontWeight: FontWeight.w700,
               ),
+              cursorColor: sectionText,
               decoration: const InputDecoration(
                 isDense: true,
                 border: UnderlineInputBorder(),
                 enabledBorder: UnderlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white30),
+                  borderSide: BorderSide(color: sectionCardBorder),
                 ),
                 focusedBorder: UnderlineInputBorder(
-                  borderSide: BorderSide(color: const Color(0xFFE07A2F)),
+                  borderSide: BorderSide(color: Color(0xFFE07A2F)),
                 ),
               ),
             ),
@@ -960,9 +1001,14 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      SizedBox( height: 20,
-                          width: 20,child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)),
-
+                      SizedBox(
+                        height: 24,
+                        width: 24,
+                        child: CircularProgressIndicator(
+                          color: sectionAccent,
+                          strokeWidth: 3,
+                        ),
+                      ),
                     ],
                   ),
                 ): Expanded(
@@ -975,10 +1021,9 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                           double quantity =
                               double.tryParse(requiredQtyController.text.trim()) ?? 0.0;
 
-                          final prefix = invoicePrefixController.text.trim();
-                          final invoiceNumber = _fullInvoiceNumber;
+                          final invoiceNumber = _fullInvoiceNumber.trim();
 
-                          if (prefix.isEmpty) {
+                          if (invoiceNumber.isEmpty) {
                             StatusDialog.show(
                               context: context,
                               title: 'Invoice Error',
@@ -1026,6 +1071,8 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                               qty: quantity,
                               context: context,
                               invoiceNumber: invoiceNumber,
+                              invoiceId: widget.lockedInvoiceId ??
+                                  model.lastAddedInvoiceId,
                             );
 
                             if (!context.mounted) return;
@@ -1037,6 +1084,11 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                                   data: model.qrDataFromLabelStock(addedStock),
                                   qty: quantity,
                                   invoiceId: model.lastAddedInvoiceId,
+                                  invoiceName: model.lastAddedInvoiceName,
+                                  rpcAdjustedItemQty:
+                                      model.lastAddUsedRpcStockAdjust,
+                                  sellableStockDeducted:
+                                      model.lastAddDeductedSellableStock,
                                 );
                               }
                             } else if (context.mounted) {
@@ -1074,6 +1126,8 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                               qty: quantity,
                               context: context,
                               invoiceNumber: invoiceNumber,
+                              invoiceId: widget.lockedInvoiceId ??
+                                  model.lastAddedInvoiceId,
                             );
 
                             if (!context.mounted) return;
@@ -1085,6 +1139,11 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                                   data: addedData,
                                   qty: quantity,
                                   invoiceId: model.lastAddedInvoiceId,
+                                  invoiceName: model.lastAddedInvoiceName,
+                                  rpcAdjustedItemQty:
+                                      model.lastAddUsedRpcStockAdjust,
+                                  sellableStockDeducted:
+                                      model.lastAddDeductedSellableStock,
                                 );
                               }
                             } else if (context.mounted) {
@@ -1188,8 +1247,8 @@ class _LabelDropdown extends StatelessWidget {
               Text(
                 label,
                 style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
+                  color: sectionText,
+                  fontSize: 14,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -1212,12 +1271,16 @@ class _LabelDropdown extends StatelessWidget {
                   items.isEmpty ? 'Not available' : 'Select',
                   style: TextStyle(
                     color: sectionTextMuted,
-                    fontSize: 12,
+                    fontSize: 14,
                   ),
                 ),
-                dropdownColor: const Color(0xff2c505c),
-                iconEnabledColor: Colors.white70,
-                style: const TextStyle(color: sectionText, fontSize: 12),
+                dropdownColor: Colors.white,
+                iconEnabledColor: sectionTextMuted,
+                style: const TextStyle(
+                  color: sectionText,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
                 items: items
                     .map(
                       (e) => DropdownMenuItem<String>(

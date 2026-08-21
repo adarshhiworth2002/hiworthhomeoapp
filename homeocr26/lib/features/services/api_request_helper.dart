@@ -15,6 +15,8 @@ class ApiRequestHelper {
   }) {
     return {
       'jsonrpc': '2.0',
+      // 'method': 'call',
+      // 'id': 1,
       'params': {
         'db': db,
         'login': login,

@@ -1,4 +1,6 @@
 /// Today Paid Cheque Clearance row + nested payment / invoice detail.
+import '../features/services/calendar_date.dart';
+
 class ChequeClearanceModel {
   const ChequeClearanceModel({
     this.id,
@@ -473,16 +475,10 @@ class ChequeClearanceModel {
   }
 
   static String formatDate(String? value) {
-    if (value == null || value.trim().isEmpty) return '—';
-    final raw = value.trim();
-    final parsed = DateTime.tryParse(raw);
-    if (parsed != null) {
-      final d = parsed.day.toString().padLeft(2, '0');
-      final m = parsed.month.toString().padLeft(2, '0');
-      return '$d/$m/${parsed.year}';
-    }
-    // Already DD/MM/YYYY or similar.
-    return raw;
+    final parsed = CalendarDate.parse(value);
+    if (parsed != null) return CalendarDate.dmy(parsed);
+    final raw = (value ?? '').trim();
+    return raw.isEmpty ? '—' : raw;
   }
 
   static String _text(String? value) {

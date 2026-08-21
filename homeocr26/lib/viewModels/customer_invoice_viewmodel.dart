@@ -1,64 +1,134 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../features/services/WebApi/web_api_impl.dart';
-import '../features/services/api_request_helper.dart';
-import '../features/services/api_response_helper.dart';
-import '../features/services/endPoints.dart';
-import '../features/services/odoo_rpc_helper.dart';
+import '../features/services/invoice_b2b_index.dart';
+import '../features/services/payment_history_service.dart';
 import '../models/invoice_summary_model.dart';
+import '../models/payment_book_model.dart';
 import 'login_viewmodel.dart';
 
 class CustomerInvoiceViewModel extends ChangeNotifier {
+  CustomerInvoiceViewModel() {
+    _hydrateFromCaches();
+  }
+
+  bool _disposed = false;
   bool loading = false;
   String error = '';
 
-  /// UI filter: `all` | `draft` | `open` | `paid` (website-aligned).
+  /// UI filter: `all` | `draft` | `open` | `paid` | `cancel`.
   String selectedState = 'all';
   List<InvoiceSummaryModel> items = [];
+  PaymentBookFilter listFilter = const PaymentBookFilter();
 
   List<InvoiceSummaryModel> _catalog = [];
   DateTime? _catalogLoadedAt;
-  static const _catalogTtl = Duration(seconds: 60);
 
   static List<InvoiceSummaryModel> _sharedCatalog = [];
   static DateTime? _sharedCatalogLoadedAt;
+  static Future<List<InvoiceSummaryModel>>? _inFlight;
 
   /// Warm the catalog from the home screen so the list opens instantly.
   static Future<void> prefetchCatalog(
     BuildContext context, {
     bool forceRefresh = false,
   }) async {
-    if (!forceRefresh &&
-        _isCacheFresh(_sharedCatalogLoadedAt, _sharedCatalog)) {
-      return;
-    }
+    if (!forceRefresh && _sharedCatalog.isNotEmpty) return;
 
     try {
       final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
-      if (loginModel.sessionId == null || loginModel.sessionId!.isEmpty) {
-        return;
-      }
+      final sessionId = loginModel.sessionId;
+      if (sessionId == null || sessionId.isEmpty) return;
 
-      final catalog = await _loadCatalogFromApi(
-        sessionId: loginModel.sessionId!,
-        login: loginModel.loginEmail,
-        password: loginModel.loginPassword,
-        db: LoginViewmodel.dbName,
+      await PaymentHistoryService.prefetch(
+        sessionId,
+        forceRefresh: forceRefresh,
       );
-      _sharedCatalog = catalog;
-      _sharedCatalogLoadedAt = DateTime.now();
+      seedFromPaymentHistory();
     } catch (e, s) {
       if (kDebugMode) debugPrint('Customer invoice prefetch: $e\n$s');
     }
   }
 
+  static void seedFromPaymentHistory() {
+    final cached = PaymentHistoryService.cachedInvoices;
+    if (cached == null || cached.isEmpty) return;
+    _sharedCatalog = List<InvoiceSummaryModel>.from(cached);
+    _sharedCatalogLoadedAt = DateTime.now();
+  }
+
+  void applyListFilter(PaymentBookFilter filter) {
+    listFilter = filter;
+    _notify();
+  }
+
+  void clearListFilter() {
+    listFilter = const PaymentBookFilter();
+    _notify();
+  }
+
+  List<InvoiceSummaryModel> get visibleItems {
+    return items.where(listFilter.matches).toList(growable: false);
+  }
+
+  static Future<List<InvoiceSummaryModel>> fetchCatalog({
+    required String sessionId,
+    String? login,
+    String? password,
+    String db = 'HOMEO_JULY',
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh && _sharedCatalog.isNotEmpty) {
+      return List<InvoiceSummaryModel>.from(_sharedCatalog);
+    }
+    final catalog = await _loadCatalogFromApi(
+      sessionId: sessionId,
+      login: login,
+      password: password,
+      db: db,
+      forceRefresh: forceRefresh,
+    );
+    _sharedCatalog = catalog;
+    _sharedCatalogLoadedAt = DateTime.now();
+    return catalog;
+  }
+
   static void clearGlobalCache() {
     _sharedCatalog = [];
     _sharedCatalogLoadedAt = null;
+  }
+
+  /// Drop a discarded draft from shared + instance catalogs immediately.
+  static void evictInvoice(int invoiceId) {
+    if (invoiceId <= 0) return;
+    _sharedCatalog =
+        _sharedCatalog.where((i) => i.id != invoiceId).toList(growable: false);
+    PaymentHistoryService.removeInvoice(invoiceId);
+  }
+
+  void removeInvoiceLocally(int invoiceId) {
+    if (invoiceId <= 0) return;
+    evictInvoice(invoiceId);
+    _catalog = _catalog.where((i) => i.id != invoiceId).toList(growable: false);
+    items = _filterCatalog(selectedState);
+    _notify();
+  }
+
+  bool _hydrateFromCaches() {
+    if (_sharedCatalog.isEmpty) seedFromPaymentHistory();
+    if (_sharedCatalog.isEmpty) {
+      final history = PaymentHistoryService.cachedInvoices;
+      if (history == null || history.isEmpty) return false;
+      _sharedCatalog = List<InvoiceSummaryModel>.from(history);
+      _sharedCatalogLoadedAt = DateTime.now();
+    }
+    _catalog = List<InvoiceSummaryModel>.from(_sharedCatalog);
+    _catalogLoadedAt = _sharedCatalogLoadedAt;
+    items = _filterCatalog(selectedState);
+    loading = false;
+    error = '';
+    return _catalog.isNotEmpty;
   }
 
   Future<void> fetch(
@@ -69,35 +139,30 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
   }) async {
     if (state != null) selectedState = state;
 
-    if (forceRefresh) {
-      clearGlobalCache();
-      _catalog = [];
-      _catalogLoadedAt = null;
-    } else if (_isCacheFresh(_catalogLoadedAt, _catalog)) {
-      items = _filterCatalog(selectedState);
-      error = '';
-      notifyListeners();
-      return;
-    } else if (_isCacheFresh(_sharedCatalogLoadedAt, _sharedCatalog)) {
-      _catalog = List<InvoiceSummaryModel>.from(_sharedCatalog);
-      _catalogLoadedAt = _sharedCatalogLoadedAt;
-      items = _filterCatalog(selectedState);
-      error = '';
-      notifyListeners();
-      return;
-    }
+    final shown = _hydrateFromCaches();
+    if (shown) _notify();
 
     try {
-      if (!silent) {
-        loading = true;
-        error = '';
-        if (_catalog.isEmpty) {
-          items = [];
-        }
-        notifyListeners();
+      final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
+      if (!InvoiceB2bIndex.isReady) {
+        await InvoiceB2bIndex.loadFromCredentials(
+          db: LoginViewmodel.dbName,
+          login: loginModel.loginEmail,
+          password: loginModel.loginPassword,
+        );
+      }
+      if (!context.mounted) return;
+      if (shown && !forceRefresh) {
+        _notify();
+        return;
       }
 
-      final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
+      if (!silent && !shown) {
+        loading = true;
+        error = '';
+        _notify();
+      }
+
       if (loginModel.sessionId == null || loginModel.sessionId!.isEmpty) {
         error = 'Session expired. Please log in again.';
         return;
@@ -108,6 +173,7 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
         login: loginModel.loginEmail,
         password: loginModel.loginPassword,
         db: LoginViewmodel.dbName,
+        forceRefresh: forceRefresh,
       );
       _catalogLoadedAt = DateTime.now();
       _sharedCatalog = List<InvoiceSummaryModel>.from(_catalog);
@@ -116,20 +182,24 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
       error = '';
     } catch (e, s) {
       if (kDebugMode) debugPrint('$e\n$s');
-      error = 'Network error. Please check your connection and try again.';
+      if (!shown) {
+        error = 'Network error. Please check your connection and try again.';
+      }
     } finally {
       loading = false;
-      notifyListeners();
+      _notify();
     }
   }
 
-  static bool _isCacheFresh(
-    DateTime? loadedAt,
-    List<InvoiceSummaryModel> catalog,
-  ) {
-    return catalog.isNotEmpty &&
-        loadedAt != null &&
-        DateTime.now().difference(loadedAt) < _catalogTtl;
+  void _notify() {
+    if (_disposed) return;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 
   static Future<List<InvoiceSummaryModel>> _loadCatalogFromApi({
@@ -137,61 +207,28 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
     String? login,
     String? password,
     String db = 'HOMEO_JULY',
+    bool forceRefresh = false,
   }) async {
-    final webApi = WebApiImpl();
+    final pending = _inFlight;
+    if (!forceRefresh && pending != null) return pending;
 
-    // Fetch draft / posted / paid buckets in parallel (was 3 sequential calls).
-    final batches = await Future.wait([
-      _fetchApiState(webApi, sessionId, 'draft'),
-      _fetchApiState(webApi, sessionId, 'posted'),
-      _fetchApiState(webApi, sessionId, 'paid'),
-    ]);
+    final future = () async {
+      final merged = await PaymentHistoryService.fetchInvoices(
+        sessionId: sessionId,
+        forceRefresh: forceRefresh,
+      );
+      seedFromPaymentHistory();
+      return merged;
+    }();
 
-    for (final batch in batches) {
-      if (batch.error != null) {
-        throw StateError(batch.error!);
+    _inFlight = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_inFlight, future)) {
+        _inFlight = null;
       }
     }
-
-    var merged = _mergeBatches(batches);
-
-    // Flutter draft API often returns empty for pharmacy drafts (name='/').
-    // Always supplement from Odoo when Flutter returned few/no drafts.
-    final apiDrafts =
-        merged.where((e) => e.sectionKey == 'draft').length;
-    if (apiDrafts < 5) {
-      try {
-        var odooSid = sessionId;
-        final email = (login ?? '').trim();
-        final pass = password ?? '';
-        if (email.isNotEmpty && pass.isNotEmpty) {
-          final webSid = await OdooRpcHelper.cachedWebSessionId(
-            db: db,
-            login: email,
-            password: pass,
-          );
-          if (webSid != null && webSid.isNotEmpty) odooSid = webSid;
-        }
-        final odooDrafts =
-            await OdooRpcHelper.listDraftCustomerInvoices(odooSid);
-        if (kDebugMode) {
-          debugPrint(
-            'invoice catalog: flutterDrafts=$apiDrafts '
-            'odooDrafts=${odooDrafts.length}',
-          );
-        }
-        if (odooDrafts.isNotEmpty) {
-          merged = _mergeBatches([
-            _InvoiceBatch(invoices: merged),
-            _InvoiceBatch(invoices: odooDrafts),
-          ]);
-        }
-      } catch (e) {
-        if (kDebugMode) debugPrint('odoo draft supplement failed: $e');
-      }
-    }
-
-    return merged;
   }
 
   List<InvoiceSummaryModel> _filterCatalog(String state) {
@@ -209,99 +246,9 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
     return list;
   }
 
-  static Future<_InvoiceBatch> _fetchApiState(
-    WebApiImpl webApi,
-    String sessionId,
-    String apiState,
-  ) async {
-    final response = await webApi.fetchInvoiceList(
-      endpointPath: EndPoint.customerInvoiceList.path,
-      userDetails: ApiRequestHelper.jsonRpcCall({
-        'limit': 100,
-        'state': apiState,
-      }),
-      sessionId: sessionId,
-      logResponseBody: false,
-    );
-
-    if (response.statusCode != 200) {
-      return _InvoiceBatch.error(
-        'Unable to load customer invoices (HTTP ${response.statusCode})',
-      );
-    }
-
-    final Map<String, dynamic> body = json.decode(response.body);
-    if (body['result'] is Map &&
-        (body['result'] as Map)['status'] == 'error') {
-      return _InvoiceBatch.error(
-        ApiResponseHelper.errorMessage(
-          body,
-          fallback: 'Failed to load customer invoices',
-        ),
-      );
-    }
-
-    return _InvoiceBatch(
-      invoices: InvoiceSummaryModel.parseList(body),
-    );
-  }
-
-  static List<InvoiceSummaryModel> _mergeBatches(List<_InvoiceBatch> batches) {
-    final merged = <int, InvoiceSummaryModel>{};
-    final withoutId = <InvoiceSummaryModel>[];
-
-    for (final batch in batches) {
-      for (final inv in batch.invoices) {
-        final id = inv.id;
-        if (id == null) {
-          withoutId.add(inv);
-          continue;
-        }
-        final existing = merged[id];
-        if (existing == null ||
-            _sectionPriority(inv) >= _sectionPriority(existing)) {
-          merged[id] = inv;
-        }
-      }
-    }
-
-    final list = [...merged.values, ...withoutId];
-    list.sort((a, b) {
-      final da = a.invoiceDate ?? '';
-      final db = b.invoiceDate ?? '';
-      final byDate = db.compareTo(da);
-      if (byDate != 0) return byDate;
-      return b.displayNumber.compareTo(a.displayNumber);
-    });
-    return list;
-  }
-
-  static int _sectionPriority(InvoiceSummaryModel inv) {
-    switch (inv.sectionKey) {
-      case 'paid':
-        return 3;
-      case 'open':
-        return 2;
-      case 'draft':
-        return 1;
-      default:
-        return 0;
-    }
-  }
-
   void clearCache() {
     _catalog = [];
     _catalogLoadedAt = null;
     clearGlobalCache();
   }
-}
-
-class _InvoiceBatch {
-  const _InvoiceBatch({this.invoices = const [], this.error});
-
-  factory _InvoiceBatch.error(String message) =>
-      _InvoiceBatch(error: message);
-
-  final List<InvoiceSummaryModel> invoices;
-  final String? error;
 }

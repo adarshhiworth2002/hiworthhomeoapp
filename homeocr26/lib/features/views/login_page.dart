@@ -66,7 +66,7 @@ class _LoginPageState extends State<LoginPage> {
                       'HOMEO\nATHURASRAMAM',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 34,
+                        fontSize: 36,
                         height: 1.05,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 0.6,
@@ -77,7 +77,7 @@ class _LoginPageState extends State<LoginPage> {
                     Text(
                       'Pharmacy billing & stock',
                       style: TextStyle(
-                        fontSize: 14,
+                        fontSize: 16,
                         fontWeight: FontWeight.w500,
                         color: _muted.withValues(alpha: 0.95),
                       ),
@@ -93,7 +93,7 @@ class _LoginPageState extends State<LoginPage> {
                             const Text(
                               'Sign in',
                               style: TextStyle(
-                                fontSize: 22,
+                                fontSize: 24,
                                 fontWeight: FontWeight.w700,
                                 color: _ink,
                               ),
@@ -102,7 +102,7 @@ class _LoginPageState extends State<LoginPage> {
                             const Text(
                               'Use your Odoo account to continue',
                               style: TextStyle(
-                                fontSize: 13,
+                                fontSize: 15,
                                 color: _muted,
                               ),
                             ),
@@ -132,23 +132,23 @@ class _LoginPageState extends State<LoginPage> {
                               },
                             ),
                             const SizedBox(height: 8),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: TextButton(
-                                onPressed: () {},
-                                style: TextButton.styleFrom(
-                                  foregroundColor: _accent,
-                                  padding: EdgeInsets.zero,
-                                  minimumSize: Size.zero,
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                ),
-                                child: const Text(
-                                  'Forgot Password?',
-                                  style: TextStyle(fontWeight: FontWeight.w600),
-                                ),
-                              ),
-                            ),
+                            // Align(
+                            //   alignment: Alignment.centerRight,
+                            //   child: TextButton(
+                            //     onPressed: () {},
+                            //     style: TextButton.styleFrom(
+                            //       foregroundColor: _accent,
+                            //       padding: EdgeInsets.zero,
+                            //       minimumSize: Size.zero,
+                            //       tapTargetSize:
+                            //           MaterialTapTargetSize.shrinkWrap,
+                            //     ),
+                            //     child: const Text(
+                            //       'Forgot Password?',
+                            //       style: TextStyle(fontWeight: FontWeight.w600),
+                            //     ),
+                            //   ),
+                            // ),
                             const SizedBox(height: 18),
                             Consumer<LoginViewmodel>(
                               builder: (context, viewModel, _) {
@@ -222,7 +222,7 @@ class _LoginPageState extends State<LoginPage> {
                                       'LOGIN',
                                       style: TextStyle(
                                         fontWeight: FontWeight.w800,
-                                        fontSize: 16,
+                                        fontSize: 18,
                                         letterSpacing: 0.8,
                                       ),
                                     ),

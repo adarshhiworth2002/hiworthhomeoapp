@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:homeocr26/features/views/amount_book_page.dart';
 import 'package:homeocr26/features/views/cheque_clearance_page.dart';
 import 'package:homeocr26/features/views/customer_invoice_list_page.dart';
@@ -15,6 +17,7 @@ import 'package:homeocr26/features/widgets/app_backdrop.dart';
 import 'package:provider/provider.dart';
 
 import '../../viewModels/cheque_clearance_viewmodel.dart';
+import '../../viewModels/login_viewmodel.dart';
 import '../../viewModels/net_amount_viewmodel.dart';
 import '../../viewModels/payment_book_viewmodel.dart';
 import '../../models/payment_book_model.dart';
@@ -130,16 +133,16 @@ class _SelectionScreenState extends State<SelectionScreen> {
     );
   }
 
-  Future<bool?> _showLogoutDialog() {
-    return showDialog<bool>(
+  Future<void> _showLogoutDialog() async {
+    final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         return AlertDialog(
           title: const Text('Logout'),
           content: const Text('Are you sure you want to log out ?'),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => Navigator.pop(dialogContext, false),
               child: const Text('Cancel', style: TextStyle(color: appMuted)),
             ),
             FilledButton(
@@ -147,39 +150,56 @@ class _SelectionScreenState extends State<SelectionScreen> {
                 backgroundColor: WidgetStatePropertyAll(appOrange),
                 foregroundColor: WidgetStatePropertyAll(Colors.white),
               ),
-              onPressed: () {
-                Navigator.pop(context, true);
-                Navigator.of(context).pushReplacement(
-                  PageRouteBuilder(
-                    pageBuilder: (context, animation, secondaryAnimation) =>
-                        const LoginPage(),
-                    transitionDuration: const Duration(milliseconds: 500),
-                    transitionsBuilder:
-                        (context, animation, secondaryAnimation, child) {
-                      return FadeTransition(
-                        opacity: animation,
-                        child: child,
-                      );
-                    },
-                  ),
-                );
-              },
+              onPressed: () => Navigator.pop(dialogContext, true),
               child: const Text('Logout'),
             ),
           ],
         );
       },
     );
+    if (confirmed != true || !mounted) return;
+    await context.read<LoginViewmodel>().logout();
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const LoginPage(),
+        transitionDuration: const Duration(milliseconds: 500),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: animation,
+            child: child,
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _moveToBackground() async {
+    if (Platform.isAndroid) {
+      try {
+        await const MethodChannel('com.example.homeocr26/lifecycle')
+            .invokeMethod('moveToBackground');
+        return;
+      } catch (_) {}
+    }
+    await SystemNavigator.pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider.value(value: _netAmountViewModel),
-        ChangeNotifierProvider.value(value: _paymentBookViewModel),
-      ],
-      child: Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        unawaited(_moveToBackground());
+      },
+      child: MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: _netAmountViewModel),
+          ChangeNotifierProvider.value(value: _paymentBookViewModel),
+        ],
+        child: Scaffold(
         backgroundColor: Colors.transparent,
         extendBodyBehindAppBar: true,
         appBar: AppBar(
@@ -188,7 +208,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
             style: TextStyle(
               color: Colors.white,
               fontWeight: FontWeight.w700,
-              fontSize: 15,
+              fontSize: 17,
               letterSpacing: 0.4,
             ),
           ),
@@ -234,7 +254,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                   //   'Home',
                   //   style: TextStyle(
                   //     color: Colors.white,
-                  //     fontSize: 28,
+                  //     fontSize: 30,
                   //     fontWeight: FontWeight.w800,
                   //     letterSpacing: 0.2,
                   //   ),
@@ -244,7 +264,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                   //   'Choose a section to continue',
                   //   style: TextStyle(
                   //     color: Colors.white.withValues(alpha: 0.82),
-                  //     fontSize: 13,
+                  //     fontSize: 15,
                   //     fontWeight: FontWeight.w500,
                   //   ),
                   // ),
@@ -277,27 +297,44 @@ class _SelectionScreenState extends State<SelectionScreen> {
                           crossAxisSpacing: 14,
                           childAspectRatio: r.homeTileAspect,
                           children: [
-                            _HomeTile(
-                              title: 'Stock',
-                              icon: Icons.inventory_2_outlined,
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const StockListPage(),
-                                  ),
-                                );
-                              },
-                            ),
+                            
                             _HomeTile(
                               title: 'Net Amount\n(Yesterday)',
                               icon: Icons.currency_rupee_outlined,
                               subtitle: netModel.homeLoading
                                   ? '...'
                                   : NetAmountViewModel.formatAmount(
-                                      netModel.youGotAmount,
+                                      netModel.displayYouGotPaid,
                                     ),
                               accentSubtitle: true,
                               onTap: _openNetAmount,
+                            ),
+                            _HomeTile(
+                              title: 'Cash\nBook',
+                              icon: Icons.menu_book_outlined,
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const AmountBookPage(),
+                                  ),
+                                );
+                              },
+                            ),
+                            _HomeTile(
+                              title: 'Today Cheque\nClearance',
+                              icon: Icons.price_check_outlined,
+                              onTap: _openChequeClearance,
+                            ),
+                            _HomeTile(
+                              title: 'Payment\nHistory',
+                              icon: Icons.history_outlined,
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const PaymentHistoryPage(),
+                                  ),
+                                );
+                              },
                             ),
                             _HomeTile(
                               title: 'Customer\nInvoice',
@@ -312,21 +349,17 @@ class _SelectionScreenState extends State<SelectionScreen> {
                               },
                             ),
                             _HomeTile(
-                              title: 'Payment\nHistory',
-                              icon: Icons.history_outlined,
+                              title: 'Payment\nBook',
+                              icon: Icons.payments_outlined,
                               onTap: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
-                                    builder: (_) => const PaymentHistoryPage(),
+                                    builder: (_) => const PaymentBookPage(),
                                   ),
                                 );
                               },
                             ),
-                            _HomeTile(
-                              title: 'Today Cheque\nClearance',
-                              icon: Icons.price_check_outlined,
-                              onTap: _openChequeClearance,
-                            ),
+
                             _HomeTile(
                               title: 'Customer\nWeb View',
                               icon: Icons.language_outlined,
@@ -339,23 +372,12 @@ class _SelectionScreenState extends State<SelectionScreen> {
                               },
                             ),
                             _HomeTile(
-                              title: 'Cash\nBook',
-                              icon: Icons.menu_book_outlined,
+                              title: 'Stock',
+                              icon: Icons.inventory_2_outlined,
                               onTap: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
-                                    builder: (_) => const AmountBookPage(),
-                                  ),
-                                );
-                              },
-                            ),
-                            _HomeTile(
-                              title: 'Payment\nBook',
-                              icon: Icons.payments_outlined,
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const PaymentBookPage(),
+                                    builder: (_) => const StockListPage(),
                                   ),
                                 );
                               },
@@ -385,8 +407,9 @@ class _SelectionScreenState extends State<SelectionScreen> {
             ),
           ),
         ),
+        ),
       ),
-    ),
+      ),
     );
   }
 }
@@ -448,7 +471,7 @@ class _HomeTile extends StatelessWidget {
               Text(
                 title,
                 style: const TextStyle(
-                  fontSize: 15,
+                  fontSize: 17,
                   fontWeight: FontWeight.w700,
                   height: 1.2,
                   color: _ink,
@@ -459,7 +482,7 @@ class _HomeTile extends StatelessWidget {
                 Text(
                   subtitle!,
                   style: TextStyle(
-                    fontSize: 16,
+                    fontSize: 18,
                     fontWeight: FontWeight.w800,
                     color: accentSubtitle
                         ? const Color(0xFFE07A2F)

@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/amount_book_model.dart';
+import '../../models/payment_book_model.dart';
 import '../../viewModels/amount_book_viewmodel.dart';
 import '../theme.dart';
 import '../widgets/app_responsive.dart';
@@ -30,13 +33,32 @@ class _AmountBookPageState extends State<AmountBookPage>
     _ownsViewModel = widget.viewModel == null;
     _viewModel = widget.viewModel ?? AmountBookViewModel();
     _tabController = TabController(length: 2, vsync: this);
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _viewModel.fetch(context, silent: true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      await _viewModel.fetch(context, forceRefresh: true, silent: true);
+      // Cache paints instantly; head-only sync keeps it fresh without full reload.
+      unawaited(
+        _viewModel.fetch(
+          context,
+          silent: true,
+          headOnly: _viewModel.hasData,
+        ),
+      );
+      // Start balance prefetch immediately so customer taps feel instant.
+      unawaited(_viewModel.prefetchBalances(context));
     });
     startLiveRefresh(
-      () => _viewModel.fetch(context, forceRefresh: true, silent: true),
+      () async {
+        await _viewModel.fetch(
+          context,
+          silent: true,
+          headOnly: true,
+        );
+        if (!mounted) return;
+        await _viewModel.prefetchBalances(context, refreshStale: true);
+      },
+      // Head + stale balance refresh so website advance/old edits appear.
+      interval: const Duration(seconds: 12),
+      immediate: false,
     );
   }
 
@@ -69,20 +91,21 @@ class _AmountBookPageState extends State<AmountBookPage>
 
     if (result.clear) {
       _viewModel.clearFilter();
-      await _viewModel.fetch(context, forceRefresh: true);
       return;
     }
 
     _viewModel.applyFilter(result.filter);
-    await _viewModel.fetch(
-      context,
-      forceRefresh: true,
-      dateFrom: result.filter.dateFrom,
-      dateTo: result.filter.dateTo,
-    );
   }
 
   void _openCustomerDetail(AmountBookCustomerSummary summary) {
+    // Force re-read during transition so website edits are not stuck in cache.
+    unawaited(
+      _viewModel.ensureBalancesForCustomer(
+        context,
+        summary.customerName,
+        force: true,
+      ),
+    );
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ChangeNotifierProvider.value(
@@ -102,11 +125,11 @@ class _AmountBookPageState extends State<AmountBookPage>
         appBar: AppBar(
           iconTheme: const IconThemeData(color: sectionText),
           title: const Text(
-            'Amount Book',
+            'Cash Book',
             style: TextStyle(
               color: sectionText,
               fontWeight: FontWeight.w500,
-              fontSize: 15,
+              fontSize: 17,
             ),
           ),
           backgroundColor: sectionAppBar,
@@ -123,8 +146,9 @@ class _AmountBookPageState extends State<AmountBookPage>
           ),
           actions: [
             IconButton(
-              onPressed: () => _viewModel.fetch(context, forceRefresh: true),
-              icon: const Icon(Icons.refresh, color: sectionText),
+              tooltip: 'Filter',
+              onPressed: _openFilterSheet,
+              icon: const Icon(Icons.filter_list, color: sectionText),
             ),
           ],
         ),
@@ -133,7 +157,6 @@ class _AmountBookPageState extends State<AmountBookPage>
           controller: _tabController,
           children: [
             _CustomerTab(
-              onOpenFilter: _openFilterSheet,
               onOpenCustomer: _openCustomerDetail,
             ),
             const _SupplierPlaceholder(),
@@ -173,6 +196,8 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
   late final TextEditingController _nameController;
   DateTime? _from;
   DateTime? _to;
+  late PaymentBookCustomerType _customerType;
+  late PaymentBookPaymentMode _paymentMode;
 
   @override
   void initState() {
@@ -180,6 +205,8 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
     _nameController = TextEditingController(text: widget.initialFilter.nameQuery);
     _from = widget.initialFilter.dateFrom;
     _to = widget.initialFilter.dateTo;
+    _customerType = widget.initialFilter.customerType;
+    _paymentMode = widget.initialFilter.paymentMode;
   }
 
   @override
@@ -271,7 +298,7 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
             const Text(
               'Search & filter',
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 18,
                 fontWeight: FontWeight.w700,
                 color: sectionText,
               ),
@@ -279,7 +306,7 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
             const SizedBox(height: 16),
             TextField(
               controller: _nameController,
-              style: const TextStyle(color: sectionText, fontSize: 14),
+              style: const TextStyle(color: sectionText, fontSize: 16),
               cursorColor: sectionAccent,
               textInputAction: TextInputAction.done,
               decoration: _fieldDecoration(
@@ -327,6 +354,98 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Leave dates empty to show all dates.',
+                style: TextStyle(
+                  color: sectionTextMuted,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<PaymentBookCustomerType>(
+              initialValue: _customerType,
+              dropdownColor: Colors.white,
+              iconEnabledColor: Colors.black,
+              style: const TextStyle(color: Colors.black, fontSize: 16),
+              decoration: _fieldDecoration(
+                label: 'Customer Type',
+                icon: Icons.groups_outlined,
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: PaymentBookCustomerType.all,
+                  child: Text('All Customers',
+                      style: TextStyle(color: Colors.black)),
+                ),
+                DropdownMenuItem(
+                  value: PaymentBookCustomerType.credit,
+                  child: Text('Credit Customers',
+                      style: TextStyle(color: Colors.black)),
+                ),
+                DropdownMenuItem(
+                  value: PaymentBookCustomerType.normal,
+                  child: Text('Normal Customers',
+                      style: TextStyle(color: Colors.black)),
+                ),
+                DropdownMenuItem(
+                  value: PaymentBookCustomerType.b2b,
+                  child: Text('B2B', style: TextStyle(color: Colors.black)),
+                ),
+                DropdownMenuItem(
+                  value: PaymentBookCustomerType.b2c,
+                  child: Text('B2C', style: TextStyle(color: Colors.black)),
+                ),
+              ],
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => _customerType = value);
+              },
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<PaymentBookPaymentMode>(
+              initialValue: _paymentMode,
+              dropdownColor: Colors.white,
+              iconEnabledColor: Colors.black,
+              style: const TextStyle(color: Colors.black, fontSize: 16),
+              decoration: _fieldDecoration(
+                label: 'Payment Mode',
+                icon: Icons.payments_outlined,
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: PaymentBookPaymentMode.all,
+                  child: Text('All', style: TextStyle(color: Colors.black)),
+                ),
+                DropdownMenuItem(
+                  value: PaymentBookPaymentMode.cash,
+                  child: Text('Cash', style: TextStyle(color: Colors.black)),
+                ),
+                DropdownMenuItem(
+                  value: PaymentBookPaymentMode.credit,
+                  child: Text('Credit', style: TextStyle(color: Colors.black)),
+                ),
+                DropdownMenuItem(
+                  value: PaymentBookPaymentMode.cheque,
+                  child: Text('Cheque', style: TextStyle(color: Colors.black)),
+                ),
+                DropdownMenuItem(
+                  value: PaymentBookPaymentMode.card,
+                  child: Text('Card', style: TextStyle(color: Colors.black)),
+                ),
+                DropdownMenuItem(
+                  value: PaymentBookPaymentMode.upi,
+                  child: Text('UPI', style: TextStyle(color: Colors.black)),
+                ),
+              ],
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => _paymentMode = value);
+              },
+            ),
             const SizedBox(height: 16),
             Row(
               children: [
@@ -365,6 +484,8 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
                             nameQuery: _nameController.text,
                             dateFrom: _from,
                             dateTo: _to,
+                            customerType: _customerType,
+                            paymentMode: _paymentMode,
                           ),
                         ),
                       );
@@ -383,11 +504,9 @@ class _AmountBookFilterSheetState extends State<_AmountBookFilterSheet> {
 
 class _CustomerTab extends StatelessWidget {
   const _CustomerTab({
-    required this.onOpenFilter,
     required this.onOpenCustomer,
   });
 
-  final VoidCallback onOpenFilter;
   final void Function(AmountBookCustomerSummary summary) onOpenCustomer;
 
   @override
@@ -396,83 +515,237 @@ class _CustomerTab extends StatelessWidget {
       builder: (context, model, _) {
         final summaries = model.customerSummaries;
 
-        if (model.loading &&
-            model.youGotAmount == null &&
-            model.youGaveAmount == null) {
+        if (model.loading && model.youGotInvoices.isEmpty) {
           return const Center(
             child: CircularProgressIndicator(color: sectionAccent),
           );
         }
 
-        return RefreshIndicator(
-          color: sectionAccent,
-          onRefresh: () => model.fetch(context, forceRefresh: true),
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: SystemSafe.listPadding(context),
-            children: [
-              const SizedBox(height: 8),
-              _SummaryCard(
-                youGot: model.youGotAmount,
-                youGave: model.youGaveAmount,
-                loading: model.loading,
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
+        return Column(
+          children: [
+            Expanded(
+              child: RefreshIndicator(
+                color: sectionAccent,
+                onRefresh: () => model.fetch(context, forceRefresh: true),
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: SystemSafe.listPadding(context, extraBottom: 12),
+                  children: [
+                    const SizedBox(height: 8),
+                    _SummaryCard(
+                      youGot: model.allYouGot,
+                      youGave: model.allYouGave,
+                      loading: model.loading,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
                       model.filter.isActive
-                          ? 'Filtered results'
+                          ? 'Filtered customers'
                           : 'All customers',
                       style: TextStyle(
                         color: sectionTextMuted,
-                        fontSize: 13,
+                        fontSize: 15,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ),
-                  IconButton(
-                    tooltip: 'Search & filter',
-                    onPressed: onOpenFilter,
-                    icon: const Icon(Icons.search, color: sectionText),
-                  ),
-                ],
+                    const SizedBox(height: 8),
+                    if (model.filter.isActive)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _FilterChipBar(
+                          filter: model.filter,
+                          onClear: model.clearFilter,
+                        ),
+                      ),
+                    if (model.error.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          model.error,
+                          style: const TextStyle(
+                            color: sectionTextMuted,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    if (summaries.isEmpty)
+                      SizedBox(
+                        height: MediaQuery.sizeOf(context).height * 0.35,
+                        child: Center(
+                          child: Text(
+                            model.filter.isActive
+                                ? 'No customers match your filter'
+                                : 'No customer entries found',
+                            style: const TextStyle(color: sectionTextMuted),
+                          ),
+                        ),
+                      )
+                    else
+                      ...summaries.map(
+                        (summary) => Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _CustomerCard(
+                            summary: summary,
+                            onTap: () => onOpenCustomer(summary),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-              if (model.error.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    model.error,
-                    style: const TextStyle(color: sectionTextMuted, fontSize: 13),
-                  ),
-                ),
-              if (summaries.isEmpty)
-                SizedBox(
-                  height: MediaQuery.sizeOf(context).height * 0.35,
-                  child: Center(
-                    child: Text(
-                      model.filter.isActive
-                          ? 'No customers match your filter'
-                          : 'No customer entries found',
-                      style: const TextStyle(color: sectionTextMuted),
-                    ),
-                  ),
-                )
-              else
-                ...summaries.map(
-                  (summary) => Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: _CustomerCard(
-                      summary: summary,
-                      onTap: () => onOpenCustomer(summary),
-                    ),
-                  ),
-                ),
-            ],
-          ),
+            ),
+            _FilteredTotalsFooter(
+              youGot: model.filteredYouGot,
+              youGave: model.filteredYouGave,
+              balance: model.filteredBalance,
+              filtered: model.filter.isActive,
+            ),
+          ],
         );
       },
+    );
+  }
+}
+
+class _FilterChipBar extends StatelessWidget {
+  const _FilterChipBar({
+    required this.filter,
+    required this.onClear,
+  });
+
+  final AmountBookFilter filter;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = <String>[];
+    if (filter.hasName) parts.add(filter.nameQuery.trim());
+    if (filter.dateFrom != null || filter.dateTo != null) {
+      final from = filter.dateFrom == null
+          ? '…'
+          : AmountBookLedgerBuilder.formatDisplayDate(filter.dateFrom);
+      final to = filter.dateTo == null
+          ? '…'
+          : AmountBookLedgerBuilder.formatDisplayDate(filter.dateTo);
+      parts.add(from == to ? from : '$from → $to');
+    }
+    if (filter.hasCustomerType) parts.add(filter.customerTypeLabel);
+    if (filter.hasPaymentMode) parts.add(filter.paymentModeLabel);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+      decoration: BoxDecoration(
+        color: sectionCard,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: sectionCardBorder),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.filter_alt_outlined,
+            size: 14,
+            color: sectionAccent,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              parts.isEmpty ? 'Filtered' : parts.join(' · '),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: sectionText,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Clear filters',
+            onPressed: onClear,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+            icon: const Icon(Icons.close, size: 18, color: sectionText),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilteredTotalsFooter extends StatelessWidget {
+  const _FilteredTotalsFooter({
+    required this.youGot,
+    required this.youGave,
+    required this.balance,
+    required this.filtered,
+  });
+
+  final double youGot;
+  final double youGave;
+  final double balance;
+  final bool filtered;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        AppResponsive.of(context).pagePadding,
+        12,
+        AppResponsive.of(context).pagePadding,
+        SystemSafe.actionBarBottomPadding(context),
+      ),
+      decoration: BoxDecoration(
+        color: sectionFooter,
+        border: Border(
+          top: BorderSide(color: sectionCardBorder),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              filtered ? 'Filtered totals' : 'All dates',
+              style: TextStyle(
+                color: sectionTextMuted,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                'YOU GOT  ${AmountBookViewModel.formatAmount(youGot)}',
+                style: const TextStyle(
+                  color: cashYouGot,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'YOU GAVE  ${AmountBookViewModel.formatAmount(youGave)}',
+                style: const TextStyle(
+                  color: cashYouGave,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'BALANCE  ${AmountBookViewModel.formatAmount(balance)}',
+                style: const TextStyle(
+                  color: sectionText,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -503,20 +776,20 @@ class _SummaryCard extends StatelessWidget {
             child: _SummaryColumn(
               label: 'YOU GOT',
               amount: youGot,
-              color: sectionAccent,
+              color: cashYouGot,
               loading: loading,
             ),
           ),
           Container(
             width: 1,
             height: 48,
-            color: Colors.white.withValues(alpha: 0.18),
+            color: sectionCardBorder,
           ),
           Expanded(
             child: _SummaryColumn(
               label: 'YOU GAVE',
               amount: youGave,
-              color: sectionText,
+              color: cashYouGave,
               loading: loading,
             ),
           ),
@@ -546,7 +819,7 @@ class _SummaryColumn extends StatelessWidget {
         Text(
           label,
           style: TextStyle(
-            fontSize: 11,
+            fontSize: 13,
             fontWeight: FontWeight.w700,
             color: color.withValues(alpha: 0.9),
           ),
@@ -565,7 +838,7 @@ class _SummaryColumn extends StatelessWidget {
           Text(
             AmountBookViewModel.formatAmount(amount),
             style: TextStyle(
-              fontSize: 18,
+              fontSize: 20,
               fontWeight: FontWeight.w800,
               color: color,
             ),
@@ -608,7 +881,7 @@ class _CustomerCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontWeight: FontWeight.w700,
-                      fontSize: 14,
+                      fontSize: 16,
                       color: sectionText,
                     ),
                   ),
@@ -616,7 +889,7 @@ class _CustomerCard extends StatelessWidget {
                   Text(
                     '${summary.entryCount} entr${summary.entryCount == 1 ? 'y' : 'ies'}',
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: 13,
                       color: sectionTextMuted,
                     ),
                   ),
@@ -629,17 +902,28 @@ class _CustomerCard extends StatelessWidget {
                 Text(
                   'Balance',
                   style: TextStyle(
-                    fontSize: 9,
+                    fontSize: 11,
                     color: sectionTextMuted,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                Text(
-                  AmountBookViewModel.formatAmount(summary.lastBalance),
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: sectionAccent,
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: cashYouGaveSoft,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    AmountBookViewModel.formatAmount(summary.lastBalance),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      color: cashYouGave,
+                    ),
                   ),
                 ),
               ],
@@ -661,35 +945,48 @@ class _SupplierPlaceholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.store_outlined,
-              size: 48,
-              color: Colors.white.withValues(alpha: 0.35),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Supplier Amount Book',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: sectionTextMuted,
+    final model = context.watch<AmountBookViewModel>();
+    return RefreshIndicator(
+      color: sectionAccent,
+      onRefresh: () => model.fetch(context, forceRefresh: true),
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.55,
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.store_outlined,
+                      size: 48,
+                      color: sectionTextMuted,
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Supplier Cash Book',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: sectionTextMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Coming soon',
+                      style: TextStyle(
+                        color: sectionTextMuted,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 6),
-            Text(
-              'Coming soon',
-              style: TextStyle(
-                color: sectionTextMuted,
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

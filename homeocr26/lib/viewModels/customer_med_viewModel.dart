@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../features/services/WebApi/web_api_impl.dart';
 import '../features/services/api_request_helper.dart';
 import '../features/services/api_response_helper.dart';
+import '../features/services/invoice_calc_helper.dart';
 import '../features/services/invoice_draft_helper.dart';
 import '../features/services/invoice_search_service.dart';
 import '../features/services/label_ocr_parser.dart';
@@ -47,6 +48,11 @@ class CustomerMedViewmodel extends ChangeNotifier {
   /// From the last successful add_to_invoice (draft `name` is often `/`).
   int? lastAddedInvoiceId;
   String? lastAddedInvoiceName;
+  /// True when the last successful add used RPC that deducted `item_qty`.
+  bool lastAddUsedRpcStockAdjust = false;
+  /// True when last add deducted sellable `stock` (Flutter/RPC). False after
+  /// tax-error recovery when deduct failed — unlink would still bump stock.
+  bool lastAddDeductedSellableStock = true;
 
   /// Stock Quantity = Odoo sellable stock (`available_stock` / `stock_qty`).
   /// This is the same field add_to_invoice uses (`available_stock: 0`).
@@ -120,6 +126,7 @@ class CustomerMedViewmodel extends ChangeNotifier {
       productBarcode: stock.qrToken,
       productName: stock.medicineLabel,
       productId: stock.stockDisplayId,
+      stockDisplayId: stock.stockDisplayId,
       stockEntryId: stock.entryStockId,
       potency: stock.potency,
       packing: stock.packing,
@@ -128,7 +135,7 @@ class CustomerMedViewmodel extends ChangeNotifier {
       batch: stock.batch,
       mrp: stock.mrp,
       hsn: stock.hsn,
-      tax: stock.gst,
+      tax: InvoiceCalcHelper.normalizeCustomerTaxPercent(stock.gst),
       rack: stock.rack,
       availableStock: stock.availableStock,
       stockQty: stock.availableStock ?? stock.stock ?? stock.itemQty,
@@ -330,6 +337,8 @@ class CustomerMedViewmodel extends ChangeNotifier {
     final respo = json.decode(response.body) as Map<String, dynamic>;
     if (ApiResponseHelper.isSuccess(respo)) {
       _captureAddInvoiceMeta(respo);
+      lastAddUsedRpcStockAdjust = false;
+      lastAddDeductedSellableStock = true;
       return 'success';
     }
 
@@ -341,14 +350,26 @@ class CustomerMedViewmodel extends ChangeNotifier {
 
   Future<String?> _ensureCustomerInvoiceNumber(
     BuildContext context,
-    String invoiceNumber,
-  ) async {
+    String invoiceNumber, {
+    int? preferredInvoiceId,
+  }) async {
     final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
     final flutterSid = loginModel.sessionId ?? '';
     if (flutterSid.isEmpty) return null;
 
     final trimmed = invoiceNumber.trim();
-    if (trimmed.isEmpty) return null;
+    if (trimmed.isEmpty &&
+        (preferredInvoiceId == null || preferredInvoiceId <= 0)) {
+      return null;
+    }
+
+    // Already on a known move (draft name is often "/"). Never create another.
+    if (preferredInvoiceId != null && preferredInvoiceId > 0) {
+      lastAddedInvoiceId = preferredInvoiceId;
+      lastAddedInvoiceName =
+          trimmed.isNotEmpty ? trimmed : lastAddedInvoiceName;
+      return lastAddedInvoiceName ?? trimmed;
+    }
 
     final odooSid = await _resolveOdooWebSession(context) ?? flutterSid;
     final existingId =
@@ -383,9 +404,12 @@ class CustomerMedViewmodel extends ChangeNotifier {
     required double qty,
     required BuildContext context,
     required String invoiceNumber,
+    int? invoiceId,
   }) async {
     lastAddedInvoiceId = null;
     lastAddedInvoiceName = null;
+    lastAddUsedRpcStockAdjust = false;
+    lastAddDeductedSellableStock = true;
 
     final stock = selectedLabelStock;
     if (stock == null) {
@@ -403,15 +427,20 @@ class CustomerMedViewmodel extends ChangeNotifier {
       }
 
       final trimmedInvoice = invoiceNumber.trim();
-      if (trimmedInvoice.isEmpty) {
+      if (trimmedInvoice.isEmpty &&
+          (invoiceId == null || invoiceId <= 0)) {
         return 'Invoice number is required';
       }
 
-      final resolvedInvoice =
-          await _ensureCustomerInvoiceNumber(context, trimmedInvoice);
+      final resolvedInvoice = await _ensureCustomerInvoiceNumber(
+        context,
+        trimmedInvoice,
+        preferredInvoiceId: invoiceId,
+      );
       if (resolvedInvoice == null || resolvedInvoice.isEmpty) {
         return 'Invoice not found on server. Save the bill first, then retry.';
       }
+      final moveId = lastAddedInvoiceId ?? invoiceId;
 
       final qtyValue = qty == qty.roundToDouble() ? qty.toInt() : qty;
       final webApi = WebApiImpl();
@@ -441,17 +470,29 @@ class CustomerMedViewmodel extends ChangeNotifier {
             '';
       }
 
+      Map<String, dynamic> addParams(String qr) {
+        final params = <String, dynamic>{
+          'invoice_number': resolvedInvoice,
+          'qr_data': qr,
+          'quantity': qtyValue,
+        };
+        if (moveId != null && moveId > 0) {
+          params['invoice_id'] = moveId;
+        }
+        _putCustomerTaxParams(
+          params,
+          InvoiceCalcHelper.normalizeCustomerTaxPercent(stock.gst),
+        );
+        return params;
+      }
+
       if (qrToken.isNotEmpty) {
         final result = await _tryAddToInvoice(
           webApi: webApi,
           sessionId: flutterSid,
           invoiceNumber: resolvedInvoice,
           qtyValue: qtyValue,
-          params: {
-            'invoice_number': resolvedInvoice,
-            'qr_data': qrToken,
-            'quantity': qtyValue,
-          },
+          params: addParams(qrToken),
         );
         if (result == 'success') return result;
 
@@ -462,11 +503,7 @@ class CustomerMedViewmodel extends ChangeNotifier {
             sessionId: flutterSid,
             invoiceNumber: resolvedInvoice,
             qtyValue: qtyValue,
-            params: {
-              'invoice_number': resolvedInvoice,
-              'qr_data': alt,
-              'quantity': qtyValue,
-            },
+            params: addParams(alt),
           );
           if (retry == 'success') return retry;
         }
@@ -501,24 +538,28 @@ class CustomerMedViewmodel extends ChangeNotifier {
           );
         }
 
-        final invoiceId = lastAddedInvoiceId ??
+        final targetId = moveId ??
+            lastAddedInvoiceId ??
             await OdooRpcHelper.findCustomerInvoiceId(
               rpcSid,
               resolvedInvoice,
             );
-        if (invoiceId == null || invoiceId <= 0) {
+        if (targetId == null || targetId <= 0) {
           return 'Invoice not found on server.';
         }
 
         final ok = await OdooRpcHelper.addStockLineToCustomerInvoice(
           rpcSid,
-          invoiceId: invoiceId,
+          invoiceId: targetId,
           stockRow: stockRow,
           quantity: qty,
+          taxPercent: InvoiceCalcHelper.normalizeCustomerTaxPercent(stock.gst),
         );
         if (ok) {
-          lastAddedInvoiceId = invoiceId;
+          lastAddedInvoiceId = targetId;
           lastAddedInvoiceName = resolvedInvoice;
+          lastAddUsedRpcStockAdjust = true;
+          lastAddDeductedSellableStock = true;
           return 'success';
         }
       }
@@ -594,6 +635,7 @@ class CustomerMedViewmodel extends ChangeNotifier {
             if (responseUid != null && responseUid.isNotEmpty) {
               qrUid = responseUid;
             }
+            _normalizeQrCustomerTax();
             if (kDebugMode) {
               debugPrint(
                 'Stock Quantity from API: available_stock=${data?.availableStock} '
@@ -601,9 +643,12 @@ class CustomerMedViewmodel extends ChangeNotifier {
                 'entry_stock_qty=${data?.entryStockQty} '
                 'invoice_quantity=${data?.quantity} (not shown) '
                 'shown=${availableScanQuantity(data)} '
-                'uid=${data?.uid} barcode=${data?.productBarcode}',
+                'uid=${data?.uid} barcode=${data?.productBarcode} '
+                'tax=${qrResponse?.result?.data?.tax}',
               );
             }
+            await enrichQrDataFromOdoo(context);
+            _normalizeQrCustomerTax();
           }
         } else if (respo.containsKey("error")) {
           qrFetchError = ApiResponseHelper.errorMessage(
@@ -646,13 +691,144 @@ class CustomerMedViewmodel extends ChangeNotifier {
     );
   }
 
+  Future<void> enrichQrDataFromOdoo(BuildContext context) async {
+    final data = qrResponse?.result?.data;
+    if (data == null) return;
+
+    final odooSid = await _resolveOdooWebSession(context);
+    if (odooSid == null || odooSid.isEmpty) return;
+
+    Map<String, dynamic>? row = await OdooRpcHelper.findEntryStockRow(
+      odooSid,
+      stockDisplayId: data.stockDisplayId,
+      entryStockId: data.stockEntryId,
+      medicine: data.productName,
+      batch: data.batch,
+      potency: data.potency,
+    );
+
+    if (row == null) {
+      final token = _resolveAddToInvoiceQrData();
+      if (token != null && token.isNotEmpty) {
+        row = await OdooRpcHelper.findEntryStockRowByQrToken(odooSid, token);
+      }
+    }
+
+    if (row == null) return;
+
+    final enriched = _mergeQrDataWithStockRow(data, row);
+    qrResponse = QrResponseModel(
+      jsonrpc: qrResponse?.jsonrpc,
+      id: qrResponse?.id,
+      result: QrResult(status: qrResponse?.result?.status, data: enriched),
+    );
+    notifyListeners();
+  }
+
+  /// Customer invoice lines only allow GST 5 / 12 / 18.
+  void _normalizeQrCustomerTax() {
+    final data = qrResponse?.result?.data;
+    if (data == null) return;
+    final fixed = InvoiceCalcHelper.normalizeCustomerTaxPercent(data.tax);
+    if (data.tax != null && (data.tax! - fixed).abs() < 0.01) return;
+    data.tax = fixed;
+  }
+
+  void _putCustomerTaxParams(Map<String, dynamic> params, double? rawTax) {
+    final tax = InvoiceCalcHelper.normalizeCustomerTaxPercent(rawTax);
+    params['tax_percent'] = tax;
+    params['tax'] = tax;
+    params['gst'] = tax;
+    params['gst_percent'] = tax;
+  }
+
+  Future<void> _fixStockTaxIfNeeded(
+    String sessionId,
+    QrData? data,
+  ) async {
+    if (data == null) return;
+    final entryId = data.stockEntryId ?? data.stockDisplayId;
+    if (entryId == null || entryId <= 0) return;
+    final tax = InvoiceCalcHelper.normalizeCustomerTaxPercent(data.tax);
+    await OdooRpcHelper.updateEntryStock(
+      sessionId,
+      entryStockId: entryId,
+      gst: tax,
+    );
+    data.tax = tax;
+  }
+
+  static String? _pickString(String? primary, dynamic fallback) {
+    final left = primary?.trim();
+    if (left != null && left.isNotEmpty) return left;
+    final right = fallback?.toString().trim();
+    if (right == null || right.isEmpty || right == 'false') return null;
+    return right;
+  }
+
+  static double? _pickDouble(double? primary, dynamic fallback) {
+    if (primary != null && primary > 0) return primary;
+    if (fallback is num) return fallback.toDouble();
+    return double.tryParse(fallback?.toString() ?? '');
+  }
+
+  QrData _mergeQrDataWithStockRow(
+    QrData base,
+    Map<String, dynamic> row,
+  ) {
+    final entryId = OdooRpcHelper.displayIdFromEntryStockRow(row) ??
+        int.tryParse('${row['id']}');
+    final displayId = int.tryParse('${row['stock_display_id'] ?? row['display_id']}');
+
+    return QrData(
+      uid: _pickString(base.uid, row['uid']),
+      lineUid: _pickString(base.lineUid, row['uid']),
+      productBarcode: _pickString(
+        base.productBarcode,
+        row['product_barcode'] ?? row['barcode'] ?? row['qr_data'],
+      ),
+      productName: _pickString(base.productName, row['medicine_id_name']),
+      potency: _pickString(base.potency, row['potency_id_name']),
+      packing: _pickString(base.packing, row['packing_id_name']),
+      company: _pickString(base.company, row['pharmacy_company_id_name']),
+      group: _pickString(base.group, row['pharmacy_group_id_name']),
+      batch: _pickString(base.batch, row['batch_no'] ?? row['batch']),
+      rack: _pickString(base.rack, row['rack_id_name']),
+      hsn: _pickString(base.hsn, row['hsn']),
+      expiry: _pickString(base.expiry, row['exp_date'] ?? row['exp']),
+      mfd: _pickString(base.mfd, row['mfd_date'] ?? row['mfd']),
+      mrp: _pickDouble(base.mrp, row['mrp']),
+      tax: InvoiceCalcHelper.normalizeCustomerTaxPercent(
+        _pickDouble(base.tax, row['gst'] ?? row['tax_percent'] ?? row['gst_percent']),
+      ),
+      stockDisplayId: base.stockDisplayId ?? displayId ?? entryId,
+      stockEntryId: base.stockEntryId ?? entryId,
+      productId: base.productId ?? entryId,
+      availableStock: base.availableStock ??
+          _pickDouble(null, row['stock'] ?? row['item_qty']),
+      stockQty: base.stockQty ?? _pickDouble(null, row['stock'] ?? row['item_qty']),
+      warehouseStockQty:
+          base.warehouseStockQty ?? _pickDouble(null, row['stock']),
+      entryStockQty:
+          base.entryStockQty ?? _pickDouble(null, row['item_qty']),
+      unitPrice: base.unitPrice,
+      discountPercent: base.discountPercent,
+      quantity: base.quantity,
+      invoiceNo: base.invoiceNo,
+      documentType: base.documentType,
+    );
+  }
+
   Future<String> addRequiredMedicineQty({
     required double qty,
     required BuildContext context,
     required String invoiceNumber,
+    int? invoiceId,
   }) async {
     lastAddedInvoiceId = null;
     lastAddedInvoiceName = null;
+    lastAddUsedRpcStockAdjust = false;
+    lastAddDeductedSellableStock = true;
     try {
       addingLoading = true;
       notifyListeners();
@@ -664,8 +840,18 @@ class CustomerMedViewmodel extends ChangeNotifier {
       }
 
       final trimmedInvoice = invoiceNumber.trim();
-      if (trimmedInvoice.isEmpty) {
+      if (trimmedInvoice.isEmpty &&
+          (invoiceId == null || invoiceId <= 0)) {
         return 'Invoice number is required';
+      }
+
+      final resolvedInvoice = await _ensureCustomerInvoiceNumber(
+        context,
+        trimmedInvoice,
+        preferredInvoiceId: invoiceId,
+      );
+      if (resolvedInvoice == null || resolvedInvoice.isEmpty) {
+        return 'Invoice not found on server. Save the bill first, then retry.';
       }
 
       final webApi = WebApiImpl();
@@ -674,13 +860,31 @@ class CustomerMedViewmodel extends ChangeNotifier {
       }
 
       // Same as home-page / Postman flow:
-      // { invoice_number, qr_data, quantity }
+      // { invoice_number, qr_data, quantity } (+ invoice_id when locked)
+      // + tax_percent (5/12/18) — stock/QR can send invalid rates like 100.
       final qtyValue = qty == qty.roundToDouble() ? qty.toInt() : qty;
+      final moveId = lastAddedInvoiceId ?? invoiceId;
+      final scanData = qrResponse?.result?.data;
+      final rawTax = scanData?.tax;
+      final taxPct = InvoiceCalcHelper.normalizeCustomerTaxPercent(rawTax);
+
+      final odooSid = await _resolveOdooWebSession(context);
+      if (odooSid != null &&
+          odooSid.isNotEmpty &&
+          !InvoiceCalcHelper.isAllowedCustomerTax(rawTax)) {
+        await _fixStockTaxIfNeeded(odooSid, scanData);
+      }
+      _normalizeQrCustomerTax();
+
       final params = <String, dynamic>{
-        'invoice_number': trimmedInvoice,
+        'invoice_number': resolvedInvoice,
         'qr_data': qrData,
         'quantity': qtyValue,
       };
+      if (moveId != null && moveId > 0) {
+        params['invoice_id'] = moveId;
+      }
+      _putCustomerTaxParams(params, taxPct);
       if (kDebugMode) {
         debugPrint('add_to_invoice params: $params');
       }
@@ -697,6 +901,8 @@ class CustomerMedViewmodel extends ChangeNotifier {
 
         if (ApiResponseHelper.isSuccess(respo)) {
           _captureAddInvoiceMeta(respo);
+          lastAddUsedRpcStockAdjust = false;
+          lastAddDeductedSellableStock = true;
           return 'success';
         }
 
@@ -712,10 +918,14 @@ class CustomerMedViewmodel extends ChangeNotifier {
                 message.toLowerCase().contains('not found') ||
                 message.toLowerCase().contains('item'))) {
           final retryParams = <String, dynamic>{
-            'invoice_number': trimmedInvoice,
+            'invoice_number': resolvedInvoice,
             'qr_data': alt,
             'quantity': qtyValue,
           };
+          if (moveId != null && moveId > 0) {
+            retryParams['invoice_id'] = moveId;
+          }
+          _putCustomerTaxParams(retryParams, taxPct);
           if (kDebugMode) {
             debugPrint(
               'add_to_invoice retry with alternate qr_data: $alt '
@@ -732,6 +942,8 @@ class CustomerMedViewmodel extends ChangeNotifier {
             final retryBody = json.decode(retry.body) as Map<String, dynamic>;
             if (ApiResponseHelper.isSuccess(retryBody)) {
               _captureAddInvoiceMeta(retryBody);
+              lastAddUsedRpcStockAdjust = false;
+              lastAddDeductedSellableStock = true;
               return 'success';
             }
             message = ApiResponseHelper.errorMessage(
@@ -739,6 +951,98 @@ class CustomerMedViewmodel extends ChangeNotifier {
               fallback: message,
             );
           }
+        }
+
+        // Tax 100% (etc.) from QR/stock — server may still create the line.
+        // Fix tax on existing lines first; only then fall back to RPC add.
+        if (message.toLowerCase().contains('tax must be')) {
+          final targetId = moveId ?? lastAddedInvoiceId;
+          if (odooSid != null &&
+              odooSid.isNotEmpty &&
+              targetId != null &&
+              targetId > 0) {
+            final taxFix = await OdooRpcHelper.fixCustomerInvoiceLineTaxes(
+              odooSid,
+              invoiceId: targetId,
+              taxPercent: taxPct,
+            );
+            if (taxFix.fixed) {
+              lastAddedInvoiceId = targetId;
+              lastAddedInvoiceName = resolvedInvoice;
+              // Tax-error create often skips sellable stock decrement while
+              // unlink still restores it — deduct stock here so delete is net-zero.
+              final entryIds = <int>[...taxFix.stockEntryIds];
+              final scanEntry =
+                  scanData?.stockEntryId ?? scanData?.stockDisplayId;
+              if (scanEntry != null &&
+                  scanEntry > 0 &&
+                  !entryIds.contains(scanEntry)) {
+                entryIds.add(scanEntry);
+              }
+              if (entryIds.isEmpty && qtyValue > 0) {
+                Map<String, dynamic>? row;
+                final barcode = (scanData?.productBarcode ?? qrData).trim();
+                // Prefer full barcode / uid (not BK_…_companyId suffix).
+                if (barcode.isNotEmpty) {
+                  row = await OdooRpcHelper.findEntryStockRowByQrToken(
+                    odooSid,
+                    barcode,
+                  );
+                }
+                // BK_* barcodes are product keys, not entry.stock ids — resolve via
+                // medicine/batch/potency (or stockDisplayId from scan enrichment).
+                row ??= await OdooRpcHelper.findEntryStockRow(
+                  odooSid,
+                  medicine: scanData?.productName,
+                  batch: scanData?.batch,
+                  potency: scanData?.potency,
+                  stockDisplayId: scanData?.stockDisplayId,
+                  entryStockId: scanData?.stockEntryId,
+                );
+                final foundId = int.tryParse('${row?['id'] ?? ''}') ??
+                    int.tryParse('${row?['stock_display_id'] ?? ''}');
+                if (foundId != null && foundId > 0) {
+                  entryIds.add(foundId);
+                }
+              }
+              var deductedStock = false;
+              for (final entryId in entryIds) {
+                if (entryId <= 0 || qtyValue <= 0) continue;
+                final ok = await OdooRpcHelper.deductEntrySellableStock(
+                  sessionId: odooSid,
+                  entryId: entryId,
+                  qty: qtyValue.toDouble(),
+                );
+                if (ok) deductedStock = true;
+              }
+              lastAddUsedRpcStockAdjust = false;
+              // When deduct failed/skipped, unlink still restores stock → clamp.
+              lastAddDeductedSellableStock = deductedStock;
+              if (kDebugMode) {
+                debugPrint(
+                  'add_to_invoice tax error recovered by rewriting '
+                  'line tax → $taxPct on #$targetId'
+                  '${deductedStock ? ' + deducted stock -$qtyValue entries=$entryIds' : ' (stock deduct skipped entries=$entryIds)'}',
+                );
+              }
+              return 'success';
+            }
+          }
+          final rpcOk = await _addViaOdooStockLine(
+            context: context,
+            invoiceNumber: resolvedInvoice,
+            invoiceId: moveId,
+            qty: qty,
+            taxPercent: taxPct,
+          );
+          if (rpcOk) {
+            lastAddUsedRpcStockAdjust = true;
+            lastAddDeductedSellableStock = true;
+            return 'success';
+          }
+          return 'Tax must be 5%, 12%, or 18%. '
+              'This product had ${scanData?.tax ?? '?'}% — tried $taxPct%. '
+              'Update GST on stock and retry.';
         }
 
         if (message.contains('entry.stock')) {
@@ -765,6 +1069,79 @@ class CustomerMedViewmodel extends ChangeNotifier {
       addingLoading = false;
       notifyListeners();
     }
+  }
+
+  Future<bool> _addViaOdooStockLine({
+    required BuildContext context,
+    required String invoiceNumber,
+    required double qty,
+    int? invoiceId,
+    double? taxPercent,
+  }) async {
+    final data = qrResponse?.result?.data;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final rpcSid = await _resolveOdooWebSession(
+        context,
+        forceRefresh: attempt > 0,
+      );
+      if (rpcSid == null || rpcSid.isEmpty) break;
+
+      final stockRow = await OdooRpcHelper.findEntryStockRow(
+        rpcSid,
+        stockDisplayId: data?.stockDisplayId,
+        entryStockId: data?.stockEntryId,
+        medicine: data?.productName,
+        potency: data?.potency,
+        batch: data?.batch,
+      );
+      if (stockRow == null) {
+        final token = _resolveAddToInvoiceQrData();
+        if (token == null || token.isEmpty) continue;
+        final byToken =
+            await OdooRpcHelper.findEntryStockRowByQrToken(rpcSid, token);
+        if (byToken == null) continue;
+        final targetId = invoiceId ??
+            lastAddedInvoiceId ??
+            await OdooRpcHelper.findCustomerInvoiceId(rpcSid, invoiceNumber);
+        if (targetId == null || targetId <= 0) return false;
+        final ok = await OdooRpcHelper.addStockLineToCustomerInvoice(
+          rpcSid,
+          invoiceId: targetId,
+          stockRow: byToken,
+          quantity: qty,
+          taxPercent: taxPercent,
+        );
+        if (ok) {
+          lastAddedInvoiceId = targetId;
+          lastAddedInvoiceName = invoiceNumber;
+          lastAddUsedRpcStockAdjust = true;
+          lastAddDeductedSellableStock = true;
+          return true;
+        }
+        continue;
+      }
+
+      final targetId = invoiceId ??
+          lastAddedInvoiceId ??
+          await OdooRpcHelper.findCustomerInvoiceId(rpcSid, invoiceNumber);
+      if (targetId == null || targetId <= 0) return false;
+
+      final ok = await OdooRpcHelper.addStockLineToCustomerInvoice(
+        rpcSid,
+        invoiceId: targetId,
+        stockRow: stockRow,
+        quantity: qty,
+        taxPercent: taxPercent,
+      );
+      if (ok) {
+        lastAddedInvoiceId = targetId;
+        lastAddedInvoiceName = invoiceNumber;
+        lastAddUsedRpcStockAdjust = true;
+        lastAddDeductedSellableStock = true;
+        return true;
+      }
+    }
+    return false;
   }
 
   void _captureAddInvoiceMeta(Map<String, dynamic> respo) {

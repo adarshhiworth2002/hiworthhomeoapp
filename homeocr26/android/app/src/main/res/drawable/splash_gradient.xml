@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Same stops as Dart splash: appBlack → appBlackSoft → appOrangeDeep -->
+    <gradient
+        android:angle="270"
+        android:centerColor="@color/splash_black_soft"
+        android:centerY="0.5"
+        android:endColor="@color/splash_orange_deep"
+        android:startColor="@color/splash_background"
+        android:type="linear" />
+</shape>

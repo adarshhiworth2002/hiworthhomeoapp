@@ -23,34 +23,34 @@ class AmountBookPdfService {
         margin: const pw.EdgeInsets.all(32),
         build: (context) => [
           pw.Text(
-            'Amount Book — $customerName',
+            'Cash Book — $customerName',
             style: pw.TextStyle(
-              fontSize: 18,
+              fontSize: 20,
               fontWeight: pw.FontWeight.bold,
             ),
           ),
           if (rangeLabel.isNotEmpty) ...[
             pw.SizedBox(height: 4),
-            pw.Text(rangeLabel, style: const pw.TextStyle(fontSize: 10)),
+            pw.Text(rangeLabel, style: const pw.TextStyle(fontSize: 12)),
           ],
           pw.SizedBox(height: 16),
           pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.end,
             children: [
               pw.Text(
-                'YOU GAVE',
+                'YOU GOT',
                 style: pw.TextStyle(
-                  fontSize: 9,
-                  color: PdfColors.red800,
+                  fontSize: 11,
+                  color: PdfColors.green800,
                   fontWeight: pw.FontWeight.bold,
                 ),
               ),
               pw.SizedBox(width: 24),
               pw.Text(
-                'YOU GOT',
+                'YOU GAVE',
                 style: pw.TextStyle(
-                  fontSize: 9,
-                  color: PdfColors.green800,
+                  fontSize: 11,
+                  color: PdfColors.red800,
                   fontWeight: pw.FontWeight.bold,
                 ),
               ),
@@ -83,7 +83,7 @@ class AmountBookPdfService {
     String? lastDayKey;
 
     for (final entry in entries) {
-      final dayKey = _dayKey(entry.sortDate);
+      final dayKey = AmountBookLedgerBuilder.dayKey(entry.sortDate);
       if (dayKey != lastDayKey) {
         lastDayKey = dayKey;
         widgets.add(
@@ -92,7 +92,7 @@ class AmountBookPdfService {
             child: pw.Text(
               _formatDayHeader(entry.sortDate),
               style: pw.TextStyle(
-                fontSize: 10,
+                fontSize: 12,
                 fontWeight: pw.FontWeight.bold,
                 color: PdfColors.grey700,
               ),
@@ -118,9 +118,9 @@ class AmountBookPdfService {
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
                     pw.Text(
-                      entry.displayNumber,
+                      entry.displayDate,
                       style: pw.TextStyle(
-                        fontSize: 11,
+                        fontSize: 13,
                         fontWeight: pw.FontWeight.bold,
                       ),
                     ),
@@ -128,7 +128,7 @@ class AmountBookPdfService {
                     pw.Text(
                       'Bal. ₹ ${AmountBookViewModel.formatAmountPlain(entry.balance)}',
                       style: const pw.TextStyle(
-                        fontSize: 9,
+                        fontSize: 11,
                         color: PdfColors.red800,
                       ),
                     ),
@@ -140,14 +140,14 @@ class AmountBookPdfService {
                 child: pw.Align(
                   alignment: pw.Alignment.centerRight,
                   child: pw.Text(
-                    entry.isYouGave
+                    !entry.isYouGave
                         ? AmountBookViewModel.formatAmountPlain(
-                            entry.youGaveAmount,
+                            entry.youGotAmount,
                           )
                         : '',
                     style: pw.TextStyle(
-                      fontSize: 11,
-                      color: PdfColors.red800,
+                      fontSize: 13,
+                      color: PdfColors.green800,
                       fontWeight: pw.FontWeight.bold,
                     ),
                   ),
@@ -159,14 +159,14 @@ class AmountBookPdfService {
                 child: pw.Align(
                   alignment: pw.Alignment.centerRight,
                   child: pw.Text(
-                    !entry.isYouGave
+                    entry.isYouGave
                         ? AmountBookViewModel.formatAmountPlain(
-                            entry.youGotAmount,
+                            entry.youGaveAmount,
                           )
                         : '',
                     style: pw.TextStyle(
-                      fontSize: 11,
-                      color: PdfColors.green800,
+                      fontSize: 13,
+                      color: PdfColors.red800,
                       fontWeight: pw.FontWeight.bold,
                     ),
                   ),
@@ -187,11 +187,6 @@ class AmountBookPdfService {
     return 'Period: $f — $t';
   }
 
-  static String _dayKey(DateTime? date) {
-    if (date == null) return 'unknown';
-    return '${date.year}-${date.month}-${date.day}';
-  }
-
   static String _formatDayHeader(DateTime? date) {
     if (date == null) return '—';
     final months = [
@@ -209,6 +204,6 @@ class AmountBookPdfService {
         .replaceAll(RegExp(r'[^\w\s-]'), '')
         .trim()
         .replaceAll(RegExp(r'\s+'), '_');
-    return 'amount_book_${safe.isEmpty ? 'customer' : safe}.pdf';
+    return 'cash_book_${safe.isEmpty ? 'customer' : safe}.pdf';
   }
 }

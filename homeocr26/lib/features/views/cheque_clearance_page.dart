@@ -79,17 +79,11 @@ class _ChequeClearancePageState extends State<ChequeClearancePage>
             style: TextStyle(
               color: sectionText,
               fontWeight: FontWeight.w500,
-              fontSize: 15,
+              fontSize: 17,
             ),
           ),
           backgroundColor: sectionBg,
           elevation: 0,
-          actions: [
-            IconButton(
-              onPressed: () => _viewModel.fetch(context, forceRefresh: true),
-              icon: const Icon(Icons.refresh, color: sectionText),
-            ),
-          ],
         ),
         body: ResponsiveBody(
           child: Consumer<ChequeClearanceViewModel>(
@@ -225,7 +219,7 @@ class _ChequeClearanceCard extends StatelessWidget {
                     style: const TextStyle(
                       color: sectionText,
                       fontWeight: FontWeight.w700,
-                      fontSize: 14,
+                      fontSize: 16,
                     ),
                   ),
                 ),
@@ -289,7 +283,7 @@ class _ChequeClearanceCard extends StatelessWidget {
                 'Branch: ${item.displayBranch}',
                 style: TextStyle(
                   color: sectionTextMuted,
-                  fontSize: 11,
+                  fontSize: 13,
                 ),
               ),
             ],
@@ -316,7 +310,7 @@ class _Cell extends StatelessWidget {
           label,
           style: TextStyle(
             color: sectionTextMuted,
-            fontSize: 9,
+            fontSize: 11,
           ),
         ),
         const SizedBox(height: 2),
@@ -325,8 +319,8 @@ class _Cell extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: Colors.white,
-            fontSize: 12,
+            color: sectionText,
+            fontSize: 14,
             fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
           ),
         ),

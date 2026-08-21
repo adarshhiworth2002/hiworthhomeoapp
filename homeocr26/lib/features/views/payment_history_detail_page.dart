@@ -1,18 +1,59 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../models/invoice_summary_model.dart';
+import '../../viewModels/login_viewmodel.dart';
+import '../services/payment_history_service.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
+import 'live_refresh_mixin.dart';
 import '../theme.dart';
 
 /// Payment History session detail — same columns as the website list view.
-class PaymentHistoryDetailPage extends StatelessWidget {
+class PaymentHistoryDetailPage extends StatefulWidget {
   const PaymentHistoryDetailPage({super.key, required this.invoice});
 
   final InvoiceSummaryModel invoice;
 
   @override
+  State<PaymentHistoryDetailPage> createState() =>
+      _PaymentHistoryDetailPageState();
+}
+
+class _PaymentHistoryDetailPageState extends State<PaymentHistoryDetailPage>
+    with LiveRefreshMixin {
+  late InvoiceSummaryModel _invoice;
+
+  @override
+  void initState() {
+    super.initState();
+    _invoice = widget.invoice;
+    startLiveRefresh(() => _reload(silent: true));
+  }
+
+  @override
+  void dispose() {
+    stopLiveRefresh();
+    super.dispose();
+  }
+
+  Future<void> _reload({bool silent = false}) async {
+    final login = Provider.of<LoginViewmodel>(context, listen: false);
+    final sessionId = login.sessionId;
+    if (sessionId == null || sessionId.isEmpty) return;
+    final items = await PaymentHistoryService.fetchInvoices(
+      sessionId: sessionId,
+      limit: 200,
+      forceRefresh: true,
+    );
+    final next = InvoiceSummaryModel.matchInList(items, _invoice);
+    if (!mounted || next == null) return;
+    setState(() => _invoice = next);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final invoice = _invoice;
     final verify = invoice.displayVerifyStatus;
     final status = invoice.displayPaymentHistoryStatus;
 
@@ -25,7 +66,7 @@ class PaymentHistoryDetailPage extends StatelessWidget {
           style: TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
         backgroundColor: sectionBg,
@@ -34,7 +75,7 @@ class PaymentHistoryDetailPage extends StatelessWidget {
       body: ResponsiveBody(
         child: RefreshIndicator(
         color: const Color(0xFFE07A2F),
-        onRefresh: () async {},
+        onRefresh: () => _reload(),
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: SystemSafe.listPadding(context),
@@ -57,7 +98,7 @@ class PaymentHistoryDetailPage extends StatelessWidget {
                         style: const TextStyle(
                           color: sectionText,
                           fontWeight: FontWeight.w700,
-                          fontSize: 15,
+                          fontSize: 17,
                         ),
                       ),
                     ),
@@ -131,14 +172,14 @@ class _Meta extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 11,
+                fontSize: 13,
               ),
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(color: sectionText, fontSize: 12),
+              style: const TextStyle(color: sectionText, fontSize: 14),
             ),
           ),
         ],
@@ -169,7 +210,7 @@ class _AmountChip extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 10,
+                fontSize: 12,
               ),
             ),
             const SizedBox(height: 2),
@@ -178,7 +219,7 @@ class _AmountChip extends StatelessWidget {
               style: const TextStyle(
                 color: sectionText,
                 fontWeight: FontWeight.w700,
-                fontSize: 13,
+                fontSize: 15,
               ),
             ),
           ],
@@ -202,7 +243,7 @@ class _StatusPill extends StatelessWidget {
     } else if (lower.contains('hold')) {
       bg = const Color(0xFF1565C0);
     } else {
-      bg = Colors.white.withValues(alpha: 0.22);
+      bg = sectionAccent;
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -214,7 +255,7 @@ class _StatusPill extends StatelessWidget {
         label,
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 11,
+          fontSize: 13,
           fontWeight: FontWeight.w600,
         ),
       ),

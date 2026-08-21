@@ -1,4 +1,5 @@
 import '../features/services/invoice_calc_helper.dart';
+import '../features/services/invoice_gst_kind.dart';
 
 class InvoiceLineModel {
   const InvoiceLineModel({
@@ -228,6 +229,8 @@ class InvoiceSummaryModel {
     this.paymentState,
     this.isPaid = false,
     this.paymentMode,
+    this.advanceAmount,
+    this.oldBalance,
     this.gstType,
     this.discountCategory,
     this.discountType,
@@ -239,6 +242,9 @@ class InvoiceSummaryModel {
     this.workMinutes,
     this.workHours,
     this.isCreditCustomer = false,
+    this.sequencePrefix,
+    this.invoiceType,
+    this.b2bFlag,
     this.lines = const [],
   });
 
@@ -277,6 +283,8 @@ class InvoiceSummaryModel {
   final String? paymentState;
   final bool isPaid;
   final String? paymentMode;
+  final double? advanceAmount;
+  final double? oldBalance;
   final String? gstType;
   final String? discountCategory;
   final String? discountType;
@@ -288,11 +296,34 @@ class InvoiceSummaryModel {
   final String? workMinutes;
   final String? workHours;
   final bool isCreditCustomer;
+  /// Backend sequence / journal series (`A`, `R`, …) when provided.
+  final String? sequencePrefix;
+  /// Backend bill type when provided (`b2b`, `b2c`, GST treatment, …).
+  final String? invoiceType;
+  /// Explicit B2B (`true`) / B2C (`false`) flag from the API, if any.
+  final bool? b2bFlag;
   final List<InvoiceLineModel> lines;
 
   String get displayNumber => invoiceNumber?.trim().isNotEmpty == true
       ? invoiceNumber!.trim()
       : 'Unknown';
+
+  static InvoiceSummaryModel? matchInList(
+    List<InvoiceSummaryModel> items,
+    InvoiceSummaryModel seed,
+  ) {
+    if (seed.id != null) {
+      for (final item in items) {
+        if (item.id == seed.id) return item;
+      }
+    }
+    final number = seed.displayNumber.trim().toLowerCase();
+    if (number.isEmpty || number == 'unknown') return null;
+    for (final item in items) {
+      if (item.displayNumber.trim().toLowerCase() == number) return item;
+    }
+    return null;
+  }
 
   /// Website footer totals — prefer API values; recompute from lines when needed.
   InvoiceCalcResult websiteTotals() {
@@ -383,6 +414,8 @@ class InvoiceSummaryModel {
       paymentState: other.paymentState ?? paymentState,
       isPaid: other.isPaid || isPaid,
       paymentMode: other.paymentMode ?? paymentMode,
+      advanceAmount: other.advanceAmount ?? advanceAmount,
+      oldBalance: other.oldBalance ?? oldBalance,
       gstType: other.gstType ?? gstType,
       discountCategory: other.discountCategory ?? discountCategory,
       discountType: other.discountType ?? discountType,
@@ -394,6 +427,9 @@ class InvoiceSummaryModel {
       workMinutes: other.workMinutes ?? workMinutes,
       workHours: other.workHours ?? workHours,
       isCreditCustomer: other.isCreditCustomer || isCreditCustomer,
+      sequencePrefix: other.sequencePrefix ?? sequencePrefix,
+      invoiceType: other.invoiceType ?? invoiceType,
+      b2bFlag: other.b2bFlag ?? b2bFlag,
       lines: other.lines.isNotEmpty ? other.lines : lines,
     );
   }
@@ -423,12 +459,19 @@ class InvoiceSummaryModel {
         n == 'default user';
   }
 
-  /// Matches website filters: `draft` | `open` | `paid`.
+  /// Matches website filters: `draft` | `open` | `paid` | `cancel`.
   /// Paid invoices stay `state: posted` with `payment_state: paid` / `is_paid: true`.
   String get sectionKey {
     final move = (moveState ?? status ?? '').toLowerCase().trim();
     final payment = (paymentState ?? '').toLowerCase().trim();
 
+    if (move == 'cancel' ||
+        move == 'cancelled' ||
+        move == 'canceled' ||
+        payment == 'cancelled' ||
+        payment == 'canceled') {
+      return 'cancel';
+    }
     if (isPaid ||
         payment == 'paid' ||
         move == 'paid' ||
@@ -447,7 +490,7 @@ class InvoiceSummaryModel {
     return move.isNotEmpty ? move : payment;
   }
 
-  /// Website-aligned label for Customer Invoice: Draft / Open / Paid.
+  /// Website-aligned label: Draft / Open / Paid / Cancel.
   String get displayStatus {
     switch (sectionKey) {
       case 'draft':
@@ -456,12 +499,53 @@ class InvoiceSummaryModel {
         return 'Open';
       case 'paid':
         return 'Paid';
+      case 'cancel':
+        return 'Cancel';
       default:
         final raw = (status ?? moveState ?? paymentState ?? '').trim();
         if (raw.isEmpty) return 'Unknown';
         if (raw.toLowerCase() == 'posted') return 'Open';
+        if (raw.toLowerCase().startsWith('cancel')) return 'Cancel';
         return _titleCase(raw);
     }
+  }
+
+  /// Totals for footer: when [includeCancel] is false (All tab), cancel bills
+  /// are excluded so the bottom total is net of cancelled invoices.
+  static double sumTotals(
+    Iterable<InvoiceSummaryModel> items, {
+    bool includeCancel = false,
+  }) {
+    var sum = 0.0;
+    for (final item in items) {
+      if (!includeCancel && item.sectionKey == 'cancel') continue;
+      sum += item.total ?? 0;
+    }
+    return sum;
+  }
+
+  static double sumBalances(
+    Iterable<InvoiceSummaryModel> items, {
+    bool includeCancel = false,
+  }) {
+    var sum = 0.0;
+    for (final item in items) {
+      if (!includeCancel && item.sectionKey == 'cancel') continue;
+      sum += item.balance ?? 0;
+    }
+    return sum;
+  }
+
+  static int countBills(
+    Iterable<InvoiceSummaryModel> items, {
+    bool includeCancel = false,
+  }) {
+    var n = 0;
+    for (final item in items) {
+      if (!includeCancel && item.sectionKey == 'cancel') continue;
+      n++;
+    }
+    return n;
   }
 
   /// Payment History → Verify Status column: Verified | Draft.
@@ -579,9 +663,10 @@ class InvoiceSummaryModel {
       doctor: _str(json, const ['doctor', 'doctor_name']),
       invoiceDate: _str(json, const [
         'invoice_date',
-        'date',
         'date_invoice',
-        'create_date',
+        'bill_date',
+        // Never fall back to create_date (UTC datetime → wrong local day).
+        'date',
       ]),
       expiryMedicineBill: json['expiry_medicine_bill'] == true ||
           json['expiry_medicine_bill'] == 1,
@@ -652,6 +737,18 @@ class InvoiceSummaryModel {
       paymentState: paymentState,
       isPaid: isPaid,
       paymentMode: _str(json, const ['payment_mode', 'payment_type']),
+      advanceAmount: _num(json, const [
+        'customer_advance_amount',
+        'advance_amount',
+        'advance_amt',
+        'advance',
+      ]),
+      oldBalance: _num(json, const [
+        'customer_old_balance',
+        'old_balance',
+        'previous_balance',
+        'opening_balance',
+      ]),
       gstType: _str(json, const ['gst_type', 'gst_type_name']),
       discountCategory: _str(json, const [
         'discount_category',
@@ -676,8 +773,21 @@ class InvoiceSummaryModel {
       ]),
       isCreditCustomer: json['is_credit_customer'] == true ||
           json['is_credit_customer'] == 1,
+      sequencePrefix: _str(json, const [
+        'sequence_prefix',
+        'invoice_series',
+        'series',
+        'journal_code',
+        'journal_id_name',
+      ]),
+      invoiceType: InvoiceGstKindParser.labelFromJson(json),
+      b2bFlag: InvoiceSummaryModel.b2bFlagFromJson(json),
       lines: lines,
     );
+  }
+
+  static bool? b2bFlagFromJson(Map json) {
+    return InvoiceGstKindParser.flagFromJson(json);
   }
 
   /// Prefer website-style `0514/2026-27` over Odoo `INV/2026/00161`.
@@ -697,7 +807,8 @@ class InvoiceSummaryModel {
 
   static String? _extractPharmacyBillNo(String? value) {
     if (value == null) return null;
-    final match = RegExp(r'(\d{3,5}/\d{4}-\d{2})').firstMatch(value);
+    final match =
+        RegExp(r'(\d{2,5}/\d{4}(?:-\d{2})?)').firstMatch(value);
     return match?.group(1);
   }
 
@@ -716,6 +827,11 @@ class InvoiceSummaryModel {
       if (text.isEmpty || text == 'false') continue;
       final pharmacy = _extractPharmacyBillNo(text);
       if (pharmacy != null) return pharmacy;
+      if ((key == 'invoice_number' || key == 'invoice_no') &&
+          text != '/' &&
+          !text.startsWith('INV/')) {
+        return text;
+      }
     }
     for (final key in const [
       'invoice_number',

@@ -114,7 +114,7 @@ class ChequeNotificationService {
           count == 1
               ? '1 cheque cleared today — tap to view'
               : '$count cheques cleared today — tap to view',
-          style: const TextStyle(color: Colors.white, fontSize: 13),
+          style: const TextStyle(color: Colors.white, fontSize: 15),
         ),
         leading: const Icon(
           Icons.account_balance_outlined,

@@ -7,6 +7,7 @@ import '../../models/stock_item_model.dart';
 import '../../viewModels/stock_viewmodel.dart';
 import 'invoice_list_widgets.dart';
 import '../widgets/app_responsive.dart';
+import '../widgets/compact_field_rows.dart';
 import '../widgets/system_safe.dart';
 import 'live_refresh_mixin.dart';
 import 'stock_detail_page.dart';
@@ -86,15 +87,26 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
             style: TextStyle(
               color: stockText,
               fontWeight: FontWeight.w500,
-              fontSize: 15,
+              fontSize: 17,
             ),
           ),
           backgroundColor: stockBg,
           elevation: 0,
           actions: [
-            IconButton(
-              onPressed: () => _viewModel.fetchStockList(context, forceRefresh: true),
-              icon: const Icon(Icons.refresh, color: stockText),
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: _StockNewButton(
+                onPressed: () async {
+                  final created = await openStockDetail(
+                    context,
+                    const StockItemModel(),
+                    isNew: true,
+                  );
+                  if (created != null && context.mounted) {
+                    _viewModel.prependLocalItem(created);
+                  }
+                },
+              ),
             ),
           ],
         ),
@@ -110,7 +122,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
                   child: TextField(
                     controller: _searchController,
                     onChanged: _onSearchChanged,
-                    style: const TextStyle(color: stockText, fontSize: 14),
+                    style: const TextStyle(color: stockText, fontSize: 16),
                     decoration: InputDecoration(
                       hintText: 'Search medicine (first letters)…',
                       hintStyle: TextStyle(
@@ -154,7 +166,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
                           : model.statusText,
                       style: TextStyle(
                         color: stockTextMuted,
-                        fontSize: 11,
+                        fontSize: 13,
                       ),
                     ),
                   ),
@@ -181,7 +193,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
               model.statusText.isEmpty ? 'Loading stock…' : model.statusText,
               style: TextStyle(
                 color: stockTextMuted,
-                fontSize: 13,
+                fontSize: 15,
               ),
             ),
           ],
@@ -209,7 +221,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: stockTextMuted,
-                  fontSize: 13,
+                  fontSize: 15,
                 ),
               ),
             ],
@@ -295,7 +307,7 @@ class _StockListPageState extends State<StockListPage> with LiveRefreshMixin {
   }
 }
 
-/// Compact single-line row: Name · Company · Potency · Packing · Group · Mrp.
+/// Compact row: Name · Company · Potency · Packing · Group · Mrp.
 class StockListCard extends StatelessWidget {
   const StockListCard({super.key, required this.item, this.onTap});
 
@@ -304,7 +316,34 @@ class StockListCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final r = AppResponsive.of(context);
+    final fields = <Widget>[
+      _LineCell(
+        label: 'Name',
+        value: item.medicineLabel,
+        emphasize: true,
+      ),
+      _LineCell(
+        label: 'Company',
+        value: item.company ?? '—',
+      ),
+      _LineCell(
+        label: 'Potency',
+        value: item.potency ?? '—',
+      ),
+      _LineCell(
+        label: 'Packing',
+        value: item.packing ?? '—',
+      ),
+      _LineCell(
+        label: 'Group',
+        value: item.group ?? '—',
+      ),
+      _LineCell(
+        label: 'Mrp',
+        value: StockItemModel.money(item.mrp),
+      ),
+    ];
+
     final card = Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
@@ -312,65 +351,15 @@ class StockListCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: stockCardBorder),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 3,
-            child: _LineCell(
-              label: 'Name',
-              value: item.medicineLabel,
-              emphasize: true,
-            ),
-          ),
-          if (r.showListTertiary)
-            Expanded(
-              flex: 2,
-              child: _LineCell(
-                label: 'Company',
-                value: item.company ?? '—',
+      child: CompactFieldRows(
+        fields: fields,
+        trailing: onTap == null
+            ? null
+            : Icon(
+                Icons.chevron_right,
+                color: stockTextMuted,
+                size: 20,
               ),
-            ),
-          if (r.showListSecondary)
-            Expanded(
-              flex: 2,
-              child: _LineCell(
-                label: 'Potency',
-                value: item.potency ?? '—',
-              ),
-            ),
-          if (r.showListSecondary)
-            Expanded(
-              flex: 2,
-              child: _LineCell(
-                label: 'Packing',
-                value: item.packing ?? '—',
-              ),
-            ),
-          if (r.showListTertiary)
-            Expanded(
-              flex: 2,
-              child: _LineCell(
-                label: 'Group',
-                value: item.group ?? '—',
-              ),
-            ),
-          Expanded(
-            flex: 2,
-            child: _LineCell(
-              label: 'Mrp',
-              value: StockItemModel.money(item.mrp),
-              alignEnd: true,
-            ),
-          ),
-          if (onTap != null) ...[
-            const SizedBox(width: 4),
-            Icon(
-              Icons.chevron_right,
-              color: stockTextMuted,
-              size: 20,
-            ),
-          ],
-        ],
       ),
     );
 
@@ -389,30 +378,25 @@ class _LineCell extends StatelessWidget {
     required this.label,
     required this.value,
     this.emphasize = false,
-    this.alignEnd = false,
   });
 
   final String label;
   final String value;
   final bool emphasize;
-  final bool alignEnd;
 
   @override
   Widget build(BuildContext context) {
-    final align = alignEnd ? TextAlign.right : TextAlign.left;
     return Column(
-      crossAxisAlignment:
-          alignEnd ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          textAlign: align,
           style: TextStyle(
             color: stockTextMuted,
-            fontSize: 9,
+            fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -421,14 +405,56 @@ class _LineCell extends StatelessWidget {
           value,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          textAlign: align,
           style: TextStyle(
             color: stockText,
             fontWeight: emphasize ? FontWeight.w700 : FontWeight.w600,
-            fontSize: emphasize ? 12 : 11,
+            fontSize: emphasize ? 14 : 13,
           ),
         ),
       ],
+    );
+  }
+}
+
+class _StockNewButton extends StatelessWidget {
+  const _StockNewButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  static const _gradient = LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [
+      Color(0xFFE07A2F),
+      Color(0xFFE8A04A),
+      Color(0xFFC43B2E),
+    ],
+    stops: [0.0, 0.45, 1.0],
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(10),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            gradient: _gradient,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Text(
+            'New',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 15,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

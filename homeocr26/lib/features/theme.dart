@@ -26,6 +26,10 @@ const Color sectionText = appInk;
 const Color sectionTextMuted = Color(0xFF7A7168);
 const Color sectionFooter = appOrangeSoft;
 const Color sectionCardBorder = Color(0x40E07A2F);
+const Color cashYouGot = Color(0xFF2E7D32);
+const Color cashYouGave = Color(0xFFC62828);
+const Color cashYouGotSoft = Color(0xFFE8F5E9);
+const Color cashYouGaveSoft = Color(0xFFFFEBEE);
 
 BoxDecoration sectionCardDecoration({double radius = 12}) {
   return BoxDecoration(
@@ -69,7 +73,7 @@ ThemeData stockTheme() {
       titleTextStyle: TextStyle(
         color: stockText,
         fontWeight: FontWeight.w600,
-        fontSize: 15,
+        fontSize: 17,
       ),
     ),
     progressIndicatorTheme: const ProgressIndicatorThemeData(

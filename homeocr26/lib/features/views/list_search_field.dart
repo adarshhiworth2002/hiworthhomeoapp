@@ -20,7 +20,7 @@ class ListSearchField extends StatelessWidget {
     return TextField(
       controller: controller,
       onChanged: onChanged,
-      style: const TextStyle(color: sectionText, fontSize: 14),
+      style: const TextStyle(color: sectionText, fontSize: 16),
       cursorColor: sectionAccent,
       decoration: InputDecoration(
         hintText: hintText,

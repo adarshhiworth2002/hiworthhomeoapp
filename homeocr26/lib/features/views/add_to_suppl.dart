@@ -123,7 +123,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
           style: TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
         backgroundColor: sectionBg,
@@ -210,7 +210,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
           ? const Center(
               child: Text(
                 "Camera permission required",
-                style: TextStyle(color: Colors.white, fontSize: 16),
+                style: TextStyle(color: sectionText, fontSize: 18),
               ),
             )
           : SafeArea(
@@ -304,8 +304,8 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
           const Text(
             'Successfully Scanned',
             style: TextStyle(
-              color: Colors.white,
-              fontSize: 16,
+              color: sectionText,
+              fontSize: 18,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -379,7 +379,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
             child: Text(
               model.qrFetchError,
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white, fontSize: 16),
+              style: TextStyle(color: sectionText, fontSize: 18),
             ),
           ),
         ),
@@ -394,10 +394,10 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
           // blur for glass effect
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15), // semi-transparent
+              color: sectionCard,
               borderRadius: BorderRadius.circular(30),
               border: Border.all(
-                color: Colors.white.withValues(alpha: 0.2),
+                color: sectionCardBorder,
                 width: 1.5,
               ),
               boxShadow: [
@@ -412,9 +412,13 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
             child: SingleChildScrollView(
               child: Column(
                 children: [
-                  Text(
+                  const Text(
                     "Medicines",
-                    style: TextStyle(color: Colors.white, fontSize: 15),
+                    style: TextStyle(
+                      color: sectionText,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   SizedBox(height: 12),
                   ListView.builder(
@@ -465,8 +469,8 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
               const Text(
                 'Invoice Number',
                 style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
+                  color: sectionTextMuted,
+                  fontSize: 14,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -513,7 +517,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                   title,
                   style: const TextStyle(
                     color: sectionTextMuted,
-                    fontSize: 13,
+                    fontSize: 15,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -524,13 +528,13 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
             padding: const EdgeInsets.only(left: 8.0),
             child: Row(
               children: [
-                Text(
+                const Text(
                   "Quantity: ",
-                  style: const TextStyle(fontSize: 12, color: Colors.white60),
+                  style: TextStyle(fontSize: 14, color: sectionTextMuted),
                 ),
                 Text(
                   quantity,
-                  style: const TextStyle(fontSize: 12, color: Colors.white60),
+                  style: const TextStyle(fontSize: 14, color: sectionText),
                 ),
               ],
             ),
@@ -539,13 +543,13 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
             padding: const EdgeInsets.only(left: 8.0),
             child: Row(
               children: [
-                Text(
+                const Text(
                   "Mrp: ",
-                  style: const TextStyle(fontSize: 12, color: Colors.white60),
+                  style: TextStyle(fontSize: 14, color: sectionTextMuted),
                 ),
                 Text(
                   mrp,
-                  style: const TextStyle(fontSize: 12, color: Colors.white60),
+                  style: const TextStyle(fontSize: 14, color: sectionText),
                 ),
               ],
             ),
@@ -554,13 +558,13 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
             padding: const EdgeInsets.only(left: 8.0),
             child: Row(
               children: [
-                Text(
+                const Text(
                   "Rate: ",
-                  style: const TextStyle(fontSize: 12, color: Colors.white60),
+                  style: TextStyle(fontSize: 14, color: sectionTextMuted),
                 ),
                 Text(
                   rate,
-                  style: const TextStyle(fontSize: 12, color: Colors.white60),
+                  style: const TextStyle(fontSize: 14, color: sectionText),
                 ),
               ],
             ),
@@ -594,7 +598,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
               title,
               style: const TextStyle(
                 color: sectionTextMuted,
-                fontSize: 13,
+                fontSize: 15,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -603,15 +607,15 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
             child: TextField(
               keyboardType: keyboardType,
               controller: controller,
-              style: const TextStyle(fontSize: 14, color: sectionTextMuted),
+              style: const TextStyle(fontSize: 16, color: sectionText),
               decoration: const InputDecoration(
                 isDense: true,
                 border: UnderlineInputBorder(),
                 enabledBorder: UnderlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white30),
+                  borderSide: BorderSide(color: sectionCardBorder),
                 ),
                 focusedBorder: UnderlineInputBorder(
-                  borderSide: BorderSide(color: const Color(0xFFE07A2F)),
+                  borderSide: BorderSide(color: Color(0xFFE07A2F)),
                 ),
               ),
             ),
@@ -643,7 +647,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                             height: 20,
                             width: 20,
                             child: CircularProgressIndicator(
-                              color: Colors.white,
+                              color: Color(0xFFE07A2F),
                               strokeWidth: 3,
                             ),
                           ),
@@ -695,7 +699,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                             label: const Text(
                               "Add",
                               style: TextStyle(
-                                color: sectionText,
+                                color: Colors.white,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -727,7 +731,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                       label: const Text(
                         "Clear",
                         style: TextStyle(
-                          color: sectionText,
+                          color: Colors.white,
                           fontWeight: FontWeight.bold,
                         ),
                       ),

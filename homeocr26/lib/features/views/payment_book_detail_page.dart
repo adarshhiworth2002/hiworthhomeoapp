@@ -1,17 +1,68 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../models/invoice_summary_model.dart';
 import '../../models/payment_book_model.dart';
+import '../../viewModels/login_viewmodel.dart';
+import '../services/payment_book_service.dart';
 import '../theme.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
-import 'invoice_list_widgets.dart';
+import 'live_refresh_mixin.dart';
 
 /// Detail for a Payment Book row (website "Open: Invoices" fields).
-class PaymentBookDetailPage extends StatelessWidget {
+class PaymentBookDetailPage extends StatefulWidget {
   const PaymentBookDetailPage({super.key, required this.invoice});
 
   final InvoiceSummaryModel invoice;
+
+  @override
+  State<PaymentBookDetailPage> createState() => _PaymentBookDetailPageState();
+}
+
+class _PaymentBookDetailPageState extends State<PaymentBookDetailPage>
+    with LiveRefreshMixin {
+  late InvoiceSummaryModel _invoice;
+
+  @override
+  void initState() {
+    super.initState();
+    _invoice = widget.invoice;
+    startLiveRefresh(() => _reload(silent: true));
+  }
+
+  @override
+  void dispose() {
+    stopLiveRefresh();
+    super.dispose();
+  }
+
+  String? _apiDate(String? raw) {
+    final parsed = DateTime.tryParse((raw ?? '').trim());
+    if (parsed == null) return null;
+    final y = parsed.year.toString().padLeft(4, '0');
+    final m = parsed.month.toString().padLeft(2, '0');
+    final d = parsed.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  Future<void> _reload({bool silent = false}) async {
+    final login = Provider.of<LoginViewmodel>(context, listen: false);
+    final sessionId = login.sessionId;
+    if (sessionId == null || sessionId.isEmpty) return;
+    final date = _apiDate(_invoice.invoiceDate);
+    final book = await PaymentBookService.fetch(
+      sessionId: sessionId,
+      dateFrom: date,
+      dateTo: date,
+      forceRefresh: true,
+    );
+    final next = InvoiceSummaryModel.matchInList(book.invoices, _invoice);
+    if (!mounted || next == null) return;
+    setState(() => _invoice = next);
+  }
+
+  InvoiceSummaryModel get invoice => _invoice;
 
   String get _paymentBookRef {
     final id = invoice.id;
@@ -60,22 +111,19 @@ class PaymentBookDetailPage extends StatelessWidget {
           style: TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
-        actions: [
-          IconButton(
-            tooltip: 'Close',
-            onPressed: () => Navigator.of(context).pop(),
-            icon: const Icon(Icons.close, color: sectionText),
-          ),
-        ],
       ),
       body: ResponsiveBody(
         child: Column(
         children: [
           Expanded(
-            child: ListView(
+            child: RefreshIndicator(
+              color: const Color(0xFFE07A2F),
+              onRefresh: () => _reload(),
+              child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: SystemSafe.listPadding(context, top: 8),
               children: [
                 Container(
@@ -84,24 +132,14 @@ class PaymentBookDetailPage extends StatelessWidget {
                   decoration: sectionCardDecoration(radius: 14),
                   child: Column(
                     children: [
-                      _LinkField(label: 'Payment Book', value: _paymentBookRef),
-                      _LinkField(
+                      _PlainField(label: 'Payment Book', value: _paymentBookRef),
+                      _PlainField(
                         label: 'Invoice',
                         value: _invoiceLinkLabel,
-                        onTap: () => openInvoiceDetail(
-                          context,
-                          invoice,
-                          title: 'Customer Invoice',
-                        ),
                       ),
-                      _LinkField(
+                      _PlainField(
                         label: 'Invoice Number',
                         value: invoice.displayNumber,
-                        onTap: () => openInvoiceDetail(
-                          context,
-                          invoice,
-                          title: 'Customer Invoice',
-                        ),
                       ),
                       _PlainField(
                         label: 'Name',
@@ -136,38 +174,6 @@ class PaymentBookDetailPage extends StatelessWidget {
                 ),
               ],
             ),
-          ),
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.fromLTRB(
-              16,
-              12,
-              16,
-              SystemSafe.actionBarBottomPadding(context),
-            ),
-            decoration: BoxDecoration(
-              color: sectionFooter,
-              border: Border(
-                top: BorderSide(color: sectionCardBorder),
-              ),
-            ),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: sectionAccent,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 22,
-                    vertical: 12,
-                  ),
-                ),
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text(
-                  'Close',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
             ),
           ),
         ],
@@ -204,7 +210,7 @@ class _PlainField extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -214,59 +220,8 @@ class _PlainField extends StatelessWidget {
               value,
               style: const TextStyle(
                 color: sectionText,
-                fontSize: 13,
+                fontSize: 15,
                 fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _LinkField extends StatelessWidget {
-  const _LinkField({
-    required this.label,
-    required this.value,
-    this.onTap,
-  });
-
-  final String label;
-  final String value;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 120,
-            child: Text(
-              label,
-              style: TextStyle(
-                color: sectionTextMuted,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Expanded(
-            child: InkWell(
-              onTap: onTap,
-              child: Text(
-                value,
-                style: TextStyle(
-                  color: onTap == null ? sectionAccent : const Color(0xFFCE93D8),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  decoration:
-                      onTap == null ? null : TextDecoration.underline,
-                  decorationColor: const Color(0xFFCE93D8),
-                ),
               ),
             ),
           ),
@@ -294,7 +249,7 @@ class _CheckboxField extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),
             ),

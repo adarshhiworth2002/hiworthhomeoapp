@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:homeocr26/features/services/auth_session_store.dart';
 import 'package:homeocr26/features/services/cheque_notification_service.dart';
 import 'package:homeocr26/features/theme.dart';
 import 'package:homeocr26/features/views/splash_screen.dart';
@@ -11,18 +12,23 @@ import 'package:provider/provider.dart';
 Future<void> main() async {
   await SystemSafe.configure();
   await ChequeNotificationService.init();
-  runApp(const MyApp());
+  final savedAuth = await AuthSessionStore.load();
+  runApp(MyApp(savedAuth: savedAuth));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  const MyApp({super.key, this.savedAuth});
+
+  final SavedAuth? savedAuth;
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => SupplierMedViewModel()),
-        ChangeNotifierProvider(create: (_) => LoginViewmodel()),
+        ChangeNotifierProvider(
+          create: (_) => LoginViewmodel(saved: savedAuth),
+        ),
         ChangeNotifierProvider(create: (_) => CustomerMedViewmodel()),
       ],
       child: MaterialApp(
@@ -46,7 +52,7 @@ class MyApp extends StatelessWidget {
             titleTextStyle: TextStyle(
               color: appInk,
               fontWeight: FontWeight.w600,
-              fontSize: 15,
+              fontSize: 17,
             ),
           ),
           progressIndicatorTheme: const ProgressIndicatorThemeData(

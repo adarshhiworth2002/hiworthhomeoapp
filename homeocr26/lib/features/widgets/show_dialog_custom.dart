@@ -44,16 +44,16 @@ class StatusDialog {
             Text(
               title,
               style: const TextStyle(
-                fontSize: 18,
+                fontSize: 20,
                 fontWeight: FontWeight.bold,
-                color: Colors.white60,
+                color: sectionText,
               ),
             ),
             const SizedBox(height: 10),
             Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 14, color: Colors.white70),
+              style: const TextStyle(fontSize: 16, color: sectionTextMuted),
             ),
             const SizedBox(height: 20),
             ElevatedButton(

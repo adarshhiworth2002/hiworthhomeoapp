@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../services/invoice_helper.dart';
 import '../services/invoice_suggestion.dart';
+import '../theme.dart';
 import '../widgets/show_dialog_custom.dart';
 
 typedef InvoicePrefixSearch = Future<List<String>> Function(String prefix);
@@ -204,18 +205,18 @@ class _InvoicePrefixFieldState extends State<InvoicePrefixField> {
                 focusNode: _focusNode,
                 keyboardType: TextInputType.number,
                 style: const TextStyle(
-                  fontSize: 15,
-                  color: Colors.white,
+                  fontSize: 17,
+                  color: sectionText,
                   fontWeight: FontWeight.w500,
                 ),
                 decoration: InputDecoration(
                   isDense: true,
                   hintText: widget.hintText,
-                  hintStyle: const TextStyle(color: Colors.white38),
+                  hintStyle: const TextStyle(color: sectionTextMuted),
                   border: const UnderlineInputBorder(),
                   enabledBorder: UnderlineInputBorder(
                     borderSide: BorderSide(
-                      color: Colors.white.withValues(alpha: 0.35),
+                      color: sectionCardBorder,
                     ),
                   ),
                   focusedBorder: const UnderlineInputBorder(
@@ -234,8 +235,8 @@ class _InvoicePrefixFieldState extends State<InvoicePrefixField> {
               child: Text(
                 '/$yearSuffix',
                 style: const TextStyle(
-                  fontSize: 15,
-                  color: Colors.white70,
+                  fontSize: 17,
+                  color: sectionTextMuted,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -248,7 +249,7 @@ class _InvoicePrefixFieldState extends State<InvoicePrefixField> {
             child: Text(
               'Bill status: ${_matchedSuggestion!.statusLabel}',
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: FontWeight.w600,
                 color: _statusColor(_matchedSuggestion!),
               ),
@@ -327,7 +328,7 @@ class _SuggestionsPanel extends StatelessWidget {
                     : 'No draft invoices found',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.7),
-                  fontSize: 13,
+                  fontSize: 15,
                 ),
               ),
             )
@@ -368,7 +369,7 @@ class _SuggestionsPanel extends StatelessWidget {
                               '${suggestion.prefix}/$yearSuffix',
                               style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 14,
+                                fontSize: 16,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
@@ -379,7 +380,7 @@ class _SuggestionsPanel extends StatelessWidget {
                               suggestion.statusLabel,
                               style: TextStyle(
                                 color: statusColor,
-                                fontSize: 12,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),

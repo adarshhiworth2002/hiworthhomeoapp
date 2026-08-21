@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../../models/invoice_summary_model.dart';
 import '../../models/qr_model.dart';
+import '../services/calendar_date.dart';
 import '../services/invoice_calc_helper.dart';
 import '../services/invoice_detail_service.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'add_to_customer.dart';
 import 'customer_new_invoice_page.dart';
+import 'live_refresh_mixin.dart';
 import '../theme.dart';
 
 /// View-only customer invoice detail matching the Cash/Credit Tax Invoice screen.
@@ -36,7 +38,8 @@ class CustomerInvoiceDetailPage extends StatefulWidget {
       _CustomerInvoiceDetailPageState();
 }
 
-class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
+class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
+    with LiveRefreshMixin {
   late InvoiceSummaryModel _invoice;
   bool _loadingLines = false;
   /// Optimistic lines shown until the server reload catches up.
@@ -51,6 +54,13 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
     _invoice = widget.invoice;
     _loadingLines = true;
     _loadDetail();
+    startLiveRefresh(() => _loadDetail());
+  }
+
+  @override
+  void dispose() {
+    stopLiveRefresh();
+    super.dispose();
   }
 
   Future<void> _loadDetail() async {
@@ -228,6 +238,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
     final result = await AddToCustomerPage.showPopup(
       context,
       lockedInvoiceNumber: number == 'Unknown' ? null : number,
+      lockedInvoiceId: _invoice.id,
     );
     if (result != null && mounted) {
       _applyScannedLine(result.data, result.qty, result.invoiceId);
@@ -236,14 +247,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
   }
 
   Future<void> _openEdit() async {
-    final key = _invoice.sectionKey;
-    if (key != 'draft' && key != 'open') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Only Draft or Open bills can be edited')),
-      );
-      return;
-    }
-    // Ensure lines are loaded before editing.
+    // Draft, Open, and Paid bills are editable (website + backend allow paid).
     if (_loadingLines) {
       await _loadDetail();
     }
@@ -279,8 +283,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
   Widget build(BuildContext context) {
     final status = _invoice.displayStatus;
     final canScan = widget.allowScan && _invoice.sectionKey != 'paid';
-    final canEdit = !widget.supplierLayout &&
-        (_invoice.sectionKey == 'draft' || _invoice.sectionKey == 'open');
+    final canEdit = !widget.supplierLayout;
     final totals = _visibleTotals();
     final showSupplierQty = widget.supplierLayout;
 
@@ -293,7 +296,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
           style: const TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
         backgroundColor: sectionBg,
@@ -309,7 +312,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
             IconButton(
               tooltip: 'Scan QR into this bill',
               onPressed: _openScanner,
-              icon: const Icon(Icons.qr_code_scanner, color: sectionText),
+              icon: const Icon(Icons.qr_code_scanner, color: sectionAccent),
             ),
         ],
       ),
@@ -346,7 +349,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
               style: const TextStyle(
                 color: Color(0xFFE53935),
                 fontWeight: FontWeight.w800,
-                fontSize: 15,
+                fontSize: 17,
                 letterSpacing: 0.3,
               ),
             ),
@@ -358,15 +361,15 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
                 child: Text(
                   _invoice.displayNumber,
                   style: const TextStyle(
-                    color: Color(0xFFFFCDD2),
+                    color: Color(0xFFE53935),
                     fontWeight: FontWeight.w700,
-                    fontSize: 16,
+                    fontSize: 18,
                   ),
                 ),
               ),
               Text(
                 _formatDate(_invoice.invoiceDate),
-                style: const TextStyle(color: sectionTextMuted, fontSize: 13),
+                style: const TextStyle(color: sectionTextMuted, fontSize: 15),
               ),
             ],
           ),
@@ -413,7 +416,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
                         padding: EdgeInsets.symmetric(vertical: 8),
                         child: Text(
                           'No line items loaded for this bill.',
-                          style: TextStyle(color: sectionTextMuted, fontSize: 12),
+                          style: TextStyle(color: sectionTextMuted, fontSize: 14),
                         ),
                       )
                     : Column(
@@ -469,7 +472,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage> {
             textAlign: TextAlign.center,
             style: TextStyle(
               color: sectionTextMuted,
-              fontSize: 11,
+              fontSize: 13,
             ),
           ),
         ],
@@ -511,7 +514,7 @@ class _StatusChip extends StatelessWidget {
             style: const TextStyle(
               color: Colors.black,
               fontWeight: FontWeight.w700,
-              fontSize: 12,
+              fontSize: 14,
             ),
           ),
         ],
@@ -545,7 +548,7 @@ class _SectionCard extends StatelessWidget {
               style: const TextStyle(
                 color: sectionText,
                 fontWeight: FontWeight.w700,
-                fontSize: 13,
+                fontSize: 15,
               ),
             ),
             const SizedBox(height: 10),
@@ -576,14 +579,14 @@ class _ReadField extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
               ),
             ),
           ),
           Expanded(
             child: Text(
               (value == null || value!.trim().isEmpty) ? '—' : value!,
-              style: const TextStyle(color: sectionText, fontSize: 12),
+              style: const TextStyle(color: sectionText, fontSize: 14),
             ),
           ),
         ],
@@ -610,7 +613,7 @@ class _MoneyRow extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
               ),
             ),
           ),
@@ -618,7 +621,7 @@ class _MoneyRow extends StatelessWidget {
             InvoiceSummaryModel.formatMoney(value),
             style: TextStyle(
               color: sectionText,
-              fontSize: emphasize ? 15 : 12,
+              fontSize: emphasize ? 17 : 14,
               fontWeight: emphasize ? FontWeight.w800 : FontWeight.w500,
             ),
           ),
@@ -656,7 +659,7 @@ class _LineTile extends StatelessWidget {
             style: const TextStyle(
               color: sectionText,
               fontWeight: FontWeight.w700,
-              fontSize: 13,
+              fontSize: 15,
             ),
           ),
           const SizedBox(height: 8),
@@ -749,7 +752,7 @@ class _Field extends StatelessWidget {
       text: TextSpan(
         style: TextStyle(
           color: sectionTextMuted,
-          fontSize: 10,
+          fontSize: 12,
         ),
         children: [
           TextSpan(text: '$label: '),
@@ -758,7 +761,7 @@ class _Field extends StatelessWidget {
             style: TextStyle(
               color: sectionText,
               fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
-              fontSize: emphasize ? 12 : 11,
+              fontSize: emphasize ? 14 : 13,
             ),
           ),
         ],
@@ -768,9 +771,11 @@ class _Field extends StatelessWidget {
 }
 
 String _formatDate(String? value) {
-  if (value == null || value.trim().isEmpty) return '—';
-  final parsed = DateTime.tryParse(value.trim());
-  if (parsed == null) return value.trim();
+  final parsed = CalendarDate.parse(value);
+  if (parsed == null) {
+    final t = (value ?? '').trim();
+    return t.isEmpty ? '—' : t;
+  }
   final month = parsed.month.toString().padLeft(2, '0');
   final day = parsed.day.toString().padLeft(2, '0');
   return '$month/$day/${parsed.year}';

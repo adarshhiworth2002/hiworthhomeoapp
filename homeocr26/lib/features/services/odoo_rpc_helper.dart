@@ -5,7 +5,10 @@ import 'package:http/http.dart' as http;
 
 import '../../models/cheque_clearance_model.dart';
 import '../../models/invoice_summary_model.dart';
+import '../../models/stock_item_model.dart';
 import 'appConfig.dart';
+import 'invoice_calc_helper.dart';
+import 'invoice_helper.dart';
 import 'session_helper.dart';
 
 class InvoiceDraftResult {
@@ -16,6 +19,29 @@ class InvoiceDraftResult {
 
   final int invoiceId;
   final String invoiceNumber;
+}
+
+/// Result of rewriting tax on invoice lines after a tax-slab error.
+class InvoiceLineTaxFixResult {
+  const InvoiceLineTaxFixResult({
+    this.fixed = false,
+    this.stockEntryIds = const [],
+  });
+
+  final bool fixed;
+  final List<int> stockEntryIds;
+}
+
+class OdooWebAuth {
+  const OdooWebAuth({
+    required this.sessionId,
+    this.name,
+    this.uid,
+  });
+
+  final String sessionId;
+  final String? name;
+  final int? uid;
 }
 
 class _PartnerPaymentLineRef {
@@ -104,12 +130,12 @@ class OdooRpcHelper {
         await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
       }
       try {
-        final sid = await _webSessionIdOnce(
+        final auth = await webAuthenticate(
           db: db,
           login: login,
           password: password,
         );
-        if (sid != null && sid.isNotEmpty) return sid;
+        if (auth != null && auth.sessionId.isNotEmpty) return auth.sessionId;
       } catch (e) {
         lastError = e;
         if (kDebugMode) {
@@ -123,7 +149,8 @@ class OdooRpcHelper {
     return null;
   }
 
-  static Future<String?> _webSessionIdOnce({
+  /// Same authenticate call the website uses (`/web/session/authenticate`).
+  static Future<OdooWebAuth?> webAuthenticate({
     required String db,
     required String login,
     required String password,
@@ -132,9 +159,11 @@ class OdooRpcHelper {
     final response = await http
         .post(
           uri,
-          headers: {'Content-Type': 'application/json'},
+          headers: SessionHelper.jsonHeaders(),
           body: jsonEncode({
             'jsonrpc': '2.0',
+            'method': 'call',
+            'id': 1,
             'params': {
               'db': db,
               'login': login,
@@ -145,25 +174,40 @@ class OdooRpcHelper {
         .timeout(const Duration(seconds: 30));
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      return null;
+      throw Exception('Authenticate HTTP ${response.statusCode}');
     }
 
     final decoded = jsonDecode(response.body);
-    if (decoded is! Map || decoded['error'] != null) return null;
+    if (decoded is! Map) return null;
+    if (decoded['error'] != null) {
+      final err = decoded['error'];
+      final msg = err is Map
+          ? (err['data'] is Map
+              ? (err['data']['message'] ?? err['message'])
+              : err['message'])
+          : err;
+      throw Exception(msg ?? 'Authentication error');
+    }
     final result = decoded['result'];
     if (result is! Map || result['uid'] == null || result['uid'] == false) {
       return null;
     }
 
+    String? sid;
     final setCookie = response.headers['set-cookie'];
     if (setCookie != null) {
       final m = RegExp(r'session_id=([^;]+)').firstMatch(setCookie);
-      if (m != null && m.group(1)!.isNotEmpty) return m.group(1);
+      if (m != null && m.group(1)!.isNotEmpty) sid = m.group(1);
     }
+    sid ??= result['session_id']?.toString();
+    if (sid == null || sid.isEmpty) return null;
 
-    final sid = result['session_id']?.toString();
-    if (sid != null && sid.isNotEmpty) return sid;
-    return null;
+    final uidRaw = result['uid'];
+    final uid = uidRaw is int ? uidRaw : int.tryParse('$uidRaw');
+    final name = result['name']?.toString() ??
+        result['username']?.toString() ??
+        login;
+    return OdooWebAuth(sessionId: sid, name: name, uid: uid);
   }
 
   static Future<dynamic> callKw({
@@ -215,7 +259,12 @@ class OdooRpcHelper {
               ? (err['data']['message'] ?? err['message'])
               : err['message'])
           : err;
-      throw Exception(msg?.toString() ?? 'Odoo error');
+      final text = msg?.toString() ?? 'Odoo error';
+      if (text.toLowerCase().contains('session expired')) {
+        invalidateWebSession();
+        throw Exception('Session expired');
+      }
+      throw Exception(text);
     }
     return decoded['result'];
   }
@@ -249,30 +298,48 @@ class OdooRpcHelper {
       if (id == null) return null;
 
       // Clear Odoo default partner (Administrator) so website/app show blank.
+      // Force local calendar invoice date (avoids UTC server "yesterday").
       try {
+        final available = await _modelFields(sessionId, 'account.move');
+        final clearVals = <String, dynamic>{'partner_id': false};
+        final todayIso = _ymd(DateTime.now());
+        if (available.contains('invoice_date')) {
+          clearVals['invoice_date'] = todayIso;
+        }
+        if (available.contains('date')) clearVals['date'] = todayIso;
         await callKw(
           sessionId: sessionId,
           model: 'account.move',
           method: 'write',
           args: [
             [id],
-            {'partner_id': false},
+            clearVals,
           ],
         );
       } catch (_) {}
 
+      final available = await _modelFields(sessionId, 'account.move');
+      const wanted = [
+        'name',
+        'display_name',
+        'payment_reference',
+        'ref',
+        'invoice_number',
+        'invoice_no',
+        'pharmacy_invoice_number',
+        'bill_number',
+        'bill_no',
+      ];
+      final readFields = available.isEmpty
+          ? const ['name', 'display_name']
+          : wanted.where(available.contains).toList(growable: false);
       final rows = await callKw(
         sessionId: sessionId,
         model: 'account.move',
         method: 'read',
         args: [
           [id],
-          [
-            'name',
-            'display_name',
-            'payment_reference',
-            'ref',
-          ],
+          readFields,
         ],
       );
       String? number;
@@ -281,6 +348,10 @@ class OdooRpcHelper {
           Map<String, dynamic>.from(rows.first as Map),
         );
         number = _pharmacyInvoiceNumber(row);
+      }
+      if (number != null &&
+          (number == '/' || number.toLowerCase().startsWith('draft-'))) {
+        number = null;
       }
       number ??= 'DRAFT-$id';
       return InvoiceDraftResult(invoiceId: id, invoiceNumber: number);
@@ -297,6 +368,207 @@ class OdooRpcHelper {
     final draft = await createEmptyCustomerInvoiceDraft(sessionId);
     if (draft == null) return null;
     return draft.invoiceNumber;
+  }
+
+  /// Next customer bill number from the backend sequence / latest invoice.
+  /// Follows whatever format the website currently uses (`R0043`, `0502/2026-27`).
+  static Future<String?> peekNextCustomerInvoiceNumber(String sessionId) async {
+    try {
+      final available = await _modelFields(sessionId, 'account.move');
+      const wanted = [
+        'id',
+        'name',
+        'display_name',
+        'invoice_number',
+        'invoice_no',
+        'pharmacy_invoice_number',
+        'bill_number',
+        'bill_no',
+        'journal_id',
+        'sequence_prefix',
+        'sequence_number',
+      ];
+      final fields = available.isEmpty
+          ? const ['id', 'name', 'display_name']
+          : wanted.where(available.contains).toList(growable: false);
+
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'account.move',
+        method: 'search_read',
+        args: [
+          [
+            ['move_type', '=', 'out_invoice'],
+          ],
+        ],
+        kwargs: {
+          'fields': fields,
+          'limit': 20,
+          'order': 'id desc',
+        },
+      );
+      if (rows is! List) return null;
+
+      int? journalId;
+      String? lastNumber;
+      String? sequencePrefix;
+      int? sequenceNumber;
+      for (final raw in rows) {
+        if (raw is! Map) continue;
+        final map = _normalizeOdooMap(Map<String, dynamic>.from(raw));
+        journalId ??= _m2oId(map['journal_id']);
+        final number = _pharmacyInvoiceNumber(map);
+        if (number == null || InvoiceHelper.isPlaceholderNumber(number)) {
+          continue;
+        }
+        lastNumber = number;
+        journalId = _m2oId(map['journal_id']) ?? journalId;
+        sequencePrefix = map['sequence_prefix']?.toString();
+        final seqRaw = map['sequence_number'];
+        sequenceNumber = seqRaw is int
+            ? seqRaw
+            : int.tryParse('$seqRaw');
+        break;
+      }
+
+      final fromCustomSeq = await _nextFromPharmacyJournalSequence(
+        sessionId,
+        journalId,
+      );
+      if (fromCustomSeq != null && fromCustomSeq.isNotEmpty) {
+        if (kDebugMode) {
+          debugPrint('peekNextCustomerInvoiceNumber seq=$fromCustomSeq');
+        }
+        return fromCustomSeq;
+      }
+
+      if (lastNumber != null &&
+          sequencePrefix != null &&
+          sequencePrefix.isNotEmpty &&
+          !sequencePrefix.contains('%') &&
+          !sequencePrefix.startsWith('INV/') &&
+          lastNumber.startsWith(sequencePrefix) &&
+          sequenceNumber != null &&
+          sequenceNumber > 0) {
+        final trailing = RegExp(r'(\d+)$').firstMatch(lastNumber);
+        final pad = trailing?.group(1)?.length ?? 0;
+        if (pad > 0) {
+          final fromMoveSeq =
+              '$sequencePrefix${(sequenceNumber + 1).toString().padLeft(pad, '0')}';
+          if (kDebugMode) {
+            debugPrint(
+              'peekNextCustomerInvoiceNumber moveSeq=$fromMoveSeq '
+              'last=$lastNumber',
+            );
+          }
+          return fromMoveSeq;
+        }
+      }
+
+      if (lastNumber == null) return null;
+      final next = InvoiceHelper.nextAfter(lastNumber);
+      if (kDebugMode) {
+        debugPrint('peekNextCustomerInvoiceNumber last=$lastNumber next=$next');
+      }
+      return next;
+    } catch (e) {
+      if (kDebugMode) debugPrint('peekNextCustomerInvoiceNumber: $e');
+      return null;
+    }
+  }
+
+  /// Custom pharmacy sequence on the sales journal (not Odoo INV/ sequence).
+  static Future<String?> _nextFromPharmacyJournalSequence(
+    String sessionId,
+    int? journalId,
+  ) async {
+    if (journalId == null || journalId <= 0) return null;
+    try {
+      final meta = await _fieldsMeta(sessionId, 'account.journal');
+      final seqFields = <String>[];
+      for (final entry in meta.entries) {
+        final key = entry.key;
+        final info = entry.value;
+        final type = info['type']?.toString();
+        final relation = info['relation']?.toString();
+        if (type != 'many2one' || relation != 'ir.sequence') continue;
+        final lower = key.toLowerCase();
+        if (lower == 'sequence_id' ||
+            lower.contains('refund') ||
+            lower.contains('payment') ||
+            lower.contains('secure')) {
+          continue;
+        }
+        seqFields.add(key);
+      }
+      if (seqFields.isEmpty) return null;
+
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'account.journal',
+        method: 'read',
+        args: [
+          [journalId],
+          seqFields,
+        ],
+      );
+      if (rows is! List || rows.isEmpty || rows.first is! Map) return null;
+      final journal = _normalizeOdooMap(
+        Map<String, dynamic>.from(rows.first as Map),
+      );
+
+      for (final field in seqFields) {
+        final seqId = _m2oId(journal[field]);
+        if (seqId == null || seqId <= 0) continue;
+        final formatted = await _formatSequenceNext(sessionId, seqId);
+        if (formatted != null &&
+            formatted.isNotEmpty &&
+            !formatted.startsWith('INV/')) {
+          return formatted;
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('_nextFromPharmacyJournalSequence: $e');
+    }
+    return null;
+  }
+
+  static Future<String?> _formatSequenceNext(
+    String sessionId,
+    int sequenceId,
+  ) async {
+    try {
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'ir.sequence',
+        method: 'read',
+        args: [
+          [sequenceId],
+          [
+            'prefix',
+            'suffix',
+            'padding',
+            'number_next_actual',
+            'number_next',
+          ],
+        ],
+      );
+      if (rows is! List || rows.isEmpty || rows.first is! Map) return null;
+      final row = _normalizeOdooMap(Map<String, dynamic>.from(rows.first as Map));
+      final prefix = (row['prefix'] ?? '').toString();
+      final suffix = (row['suffix'] ?? '').toString();
+      if (prefix.contains('%') || suffix.contains('%')) return null;
+      final padRaw = row['padding'];
+      final padding = padRaw is int ? padRaw : int.tryParse('$padRaw') ?? 0;
+      final nextRaw = row['number_next_actual'] ?? row['number_next'];
+      final next = nextRaw is int ? nextRaw : int.tryParse('$nextRaw');
+      if (next == null || next <= 0) return null;
+      final body = padding > 0 ? next.toString().padLeft(padding, '0') : '$next';
+      return '$prefix$body$suffix';
+    } catch (e) {
+      if (kDebugMode) debugPrint('_formatSequenceNext: $e');
+      return null;
+    }
   }
 
   /// Draft pharmacy bills often have `name='/'` and are missing from the
@@ -323,6 +595,11 @@ class OdooRpcHelper {
         'partner_id',
         'pharmacy_customer_id',
         'create_uid',
+        'invoice_number',
+        'invoice_no',
+        'pharmacy_invoice_number',
+        'bill_number',
+        'bill_no',
       ];
       // Unknown fields make Odoo search_read fail entirely.
       final fields = available.isEmpty
@@ -671,6 +948,79 @@ class OdooRpcHelper {
     return null;
   }
 
+  /// Reverse lookup for add_to_invoice / get_qr_details enrichment.
+  static Future<Map<String, dynamic>?> findEntryStockRowByQrToken(
+    String sessionId,
+    String token,
+  ) async {
+    final trimmed = token.trim();
+    if (trimmed.isEmpty) return null;
+    try {
+      final available = await _modelFields(sessionId, 'entry.stock');
+      if (available.isEmpty) return null;
+
+      final fields = <String>['id'];
+      for (final f in const [
+        'uid',
+        'barcode',
+        'product_barcode',
+        'qr_data',
+        'qr_code',
+        'default_code',
+        'stock_display_id',
+        'display_id',
+        'medicine_id',
+        'batch',
+        'batch_no',
+        'potency_id',
+        'packing_id',
+        'pharmacy_company_id',
+        'pharmacy_group_id',
+        'rack_id',
+        'item_qty',
+        'stock',
+        'mrp',
+        'gst',
+        'hsn',
+        'exp_date',
+        'exp',
+        'mfd_date',
+        'mfd',
+      ]) {
+        if (available.contains(f)) fields.add(f);
+      }
+
+      for (final field in const [
+        'uid',
+        'barcode',
+        'product_barcode',
+        'qr_data',
+        'qr_code',
+        'default_code',
+      ]) {
+        if (!available.contains(field)) continue;
+        final rows = await callKw(
+          sessionId: sessionId,
+          model: 'entry.stock',
+          method: 'search_read',
+          args: [
+            [
+              [field, '=', trimmed],
+            ],
+          ],
+          kwargs: {'fields': fields, 'limit': 1, 'order': 'id desc'},
+        );
+        if (rows is! List || rows.isEmpty) continue;
+        final raw = rows.first;
+        if (raw is! Map) continue;
+        return _normalizeOdooMap(Map<String, dynamic>.from(raw));
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('findEntryStockRowByQrToken failed: $e');
+    }
+    return null;
+  }
+
   static int? _m2oId(dynamic value) {
     if (value == null || value == false) return null;
     if (value is int) return value;
@@ -691,6 +1041,7 @@ class OdooRpcHelper {
     required double quantity,
     double? priceUnit,
     double? discount,
+    double? taxPercent,
   }) async {
     if (invoiceId <= 0 || quantity <= 0) return false;
     final stockId = _m2oId(stockRow['id']);
@@ -750,6 +1101,25 @@ class OdooRpcHelper {
       }
       if (discount != null && discount > 0 && available.contains('discount')) {
         vals['discount'] = discount;
+      }
+
+      // Customer lines: server requires 5 / 12 / 18 only.
+      final taxRaw = taxPercent ??
+          (stockRow['gst'] is num
+              ? (stockRow['gst'] as num).toDouble()
+              : (stockRow['tax_percent'] is num
+                  ? (stockRow['tax_percent'] as num).toDouble()
+                  : (stockRow['gst_percent'] is num
+                      ? (stockRow['gst_percent'] as num).toDouble()
+                      : null)));
+      final tax = InvoiceCalcHelper.normalizeCustomerTaxPercent(taxRaw);
+      for (final key in const [
+        'tax_percent',
+        'gst',
+        'gst_percent',
+        'tax',
+      ]) {
+        if (available.contains(key)) vals[key] = tax;
       }
 
       if (!vals.containsKey('stock_entry_id') &&
@@ -812,6 +1182,7 @@ class OdooRpcHelper {
     String? batch,
     String? hsn,
     String? rack,
+    double? taxPercent,
   }) async {
     if (lineId <= 0) return false;
     try {
@@ -854,6 +1225,17 @@ class OdooRpcHelper {
       if (rack != null && rack.trim().isNotEmpty) {
         if (available.contains('rack')) vals['rack'] = rack.trim();
       }
+      if (taxPercent != null) {
+        final tax = InvoiceCalcHelper.normalizeCustomerTaxPercent(taxPercent);
+        for (final key in const [
+          'tax_percent',
+          'gst',
+          'gst_percent',
+          'tax',
+        ]) {
+          put(key, tax);
+        }
+      }
 
       if (vals.isEmpty) return true;
 
@@ -872,6 +1254,91 @@ class OdooRpcHelper {
       return true;
     } catch (e) {
       if (kDebugMode) debugPrint('updateCustomerInvoiceLine failed: $e');
+      return false;
+    }
+  }
+
+  /// After add_to_invoice returns a tax error but still created the line,
+  /// rewrite product-line tax to an allowed slab (5/12/18).
+  static Future<InvoiceLineTaxFixResult> fixCustomerInvoiceLineTaxes(
+    String sessionId, {
+    required int invoiceId,
+    double? taxPercent,
+  }) async {
+    if (invoiceId <= 0) return const InvoiceLineTaxFixResult();
+    try {
+      final available = await _modelFields(sessionId, 'account.move.line');
+      final fields = <String>['id'];
+      for (final f in const [
+        'display_type',
+        'tax_percent',
+        'gst',
+        'gst_percent',
+        'tax',
+        'stock_entry_id',
+      ]) {
+        if (available.contains(f)) fields.add(f);
+      }
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'account.move.line',
+        method: 'search_read',
+        args: [
+          [
+            ['move_id', '=', invoiceId],
+            ['display_type', '=', 'product'],
+          ],
+        ],
+        kwargs: {
+          'fields': fields,
+          'limit': 80,
+        },
+      );
+      if (rows is! List || rows.isEmpty) {
+        return const InvoiceLineTaxFixResult();
+      }
+      final tax = InvoiceCalcHelper.normalizeCustomerTaxPercent(taxPercent);
+      var any = false;
+      final entryIds = <int>{};
+      for (final raw in rows) {
+        if (raw is! Map) continue;
+        final id = _asInt(raw['id']);
+        if (id == null || id <= 0) continue;
+        final entryId = _m2oId(raw['stock_entry_id']);
+        if (entryId != null && entryId > 0) entryIds.add(entryId);
+        final ok = await updateCustomerInvoiceLine(
+          sessionId,
+          lineId: id,
+          taxPercent: tax,
+        );
+        if (ok) any = true;
+      }
+      return InvoiceLineTaxFixResult(
+        fixed: any,
+        stockEntryIds: entryIds.toList(growable: false),
+      );
+    } catch (e) {
+      if (kDebugMode) debugPrint('fixCustomerInvoiceLineTaxes failed: $e');
+      return const InvoiceLineTaxFixResult();
+    }
+  }
+
+  /// Deduct sellable `stock` (and related qty fields) on `entry.stock`.
+  static Future<bool> deductEntrySellableStock({
+    required String sessionId,
+    required int entryId,
+    required double qty,
+  }) async {
+    if (entryId <= 0 || qty <= 0) return false;
+    try {
+      return await _adjustEntryStockFields(
+        sessionId: sessionId,
+        entryId: entryId,
+        delta: -qty,
+        includeStockField: true,
+      );
+    } catch (e) {
+      if (kDebugMode) debugPrint('deductEntrySellableStock failed: $e');
       return false;
     }
   }
@@ -975,7 +1442,7 @@ class OdooRpcHelper {
     }
   }
 
-  /// Update draft/open customer invoice header fields (website form).
+  /// Update customer invoice header fields (draft, open, and paid).
   /// Clears default Administrator partner when [clearCustomer] is true.
   ///
   /// Website Customer field is `pharmacy_customer_id` (many2one). Writing only
@@ -2340,6 +2807,7 @@ class OdooRpcHelper {
         'pharmacy.company',
         'pharmacy.medicine.company',
       ],
+      limit: 5000,
     );
   }
 
@@ -2351,6 +2819,7 @@ class OdooRpcHelper {
         'pharmacy.pack',
         'product.packing',
       ],
+      limit: 5000,
     );
   }
 
@@ -2390,6 +2859,95 @@ class OdooRpcHelper {
 
   static final Map<String, Set<String>> _fieldsCache = {};
   static final Set<String> _missingModels = {};
+
+  /// Delete a session-created draft move so Close does not leave a draft bill.
+  static Future<bool> deleteCustomerInvoiceDraft(
+    String sessionId,
+    int invoiceId,
+  ) async {
+    if (invoiceId <= 0) return false;
+    try {
+      // Remove product lines first — empty drafts unlink more reliably.
+      try {
+        final lines = await callKw(
+          sessionId: sessionId,
+          model: 'account.move.line',
+          method: 'search',
+          args: [
+            [
+              ['move_id', '=', invoiceId],
+              ['display_type', '=', 'product'],
+            ],
+          ],
+        );
+        final ids = <int>[];
+        if (lines is List) {
+          for (final raw in lines) {
+            final id = raw is int
+                ? raw
+                : (raw is num ? raw.toInt() : int.tryParse('$raw'));
+            if (id != null && id > 0) ids.add(id);
+          }
+        }
+        if (ids.isNotEmpty) {
+          await callKw(
+            sessionId: sessionId,
+            model: 'account.move.line',
+            method: 'unlink',
+            args: [ids],
+          );
+          if (kDebugMode) {
+            debugPrint(
+              'deleteCustomerInvoiceDraft: unlinked ${ids.length} lines on #$invoiceId',
+            );
+          }
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('deleteCustomerInvoiceDraft lines: $e');
+        }
+      }
+
+      for (final method in const [
+        'button_cancel',
+        'action_cancel',
+        'button_draft',
+      ]) {
+        try {
+          await callKw(
+            sessionId: sessionId,
+            model: 'account.move',
+            method: method,
+            args: [
+              [invoiceId],
+            ],
+          );
+          if (kDebugMode) {
+            debugPrint(
+              'deleteCustomerInvoiceDraft: $method ok on #$invoiceId',
+            );
+          }
+          break;
+        } catch (_) {}
+      }
+
+      await callKw(
+        sessionId: sessionId,
+        model: 'account.move',
+        method: 'unlink',
+        args: [
+          [invoiceId],
+        ],
+      );
+      if (kDebugMode) {
+        debugPrint('deleteCustomerInvoiceDraft: unlinked move #$invoiceId');
+      }
+      return true;
+    } catch (e) {
+      if (kDebugMode) debugPrint('deleteCustomerInvoiceDraft: $e');
+      return false;
+    }
+  }
 
   /// Load pharmacy customer invoice header + product lines from Odoo.
   /// Website bills are `account.move`.
@@ -2659,6 +3217,13 @@ class OdooRpcHelper {
     final fromDisplay =
         RegExp(r'(\d{3,5}/\d{4}-\d{2})').firstMatch(display);
     if (fromDisplay != null) return fromDisplay.group(1);
+    final displayBill = display.split(' - ').first.trim();
+    if (displayBill.isNotEmpty &&
+        displayBill != '/' &&
+        displayBill != 'false' &&
+        !displayBill.startsWith('INV/')) {
+      return displayBill;
+    }
 
     final name = header['name']?.toString().trim();
     if (name != null &&
@@ -3146,6 +3711,10 @@ class OdooRpcHelper {
             'invoice_line_ids',
             'line_ids',
             'create_uid',
+            'customer_advance_amount',
+            'customer_old_balance',
+            'advance_amount',
+            'old_balance',
           }
         : model == 'account.move.line'
             ? {
@@ -3496,6 +4065,154 @@ class OdooRpcHelper {
     return null;
   }
 
+  /// Customer Invoice form fields (`customer_advance_amount` /
+  /// `customer_old_balance`) — list API often omits or zeros these.
+  ///
+  /// [sessionId] must be an Odoo **web** session (`/web/session/authenticate`),
+  /// not the Flutter `/api/flutter/login` cookie.
+  ///
+  /// Fast path: one `read` / `search_read` with known field names (no
+  /// `fields_get` round-trip).
+  static Future<({double? advance, double? oldBalance})?>
+      readCustomerFormBalances(
+    String sessionId, {
+    List<int> moveIds = const [],
+    String? customerName,
+  }) async {
+    try {
+      const fields = <String>[
+        'id',
+        'customer_advance_amount',
+        'customer_old_balance',
+        'partner_id',
+      ];
+
+      final ids = moveIds.where((id) => id > 0).toSet().take(8).toList();
+      if (ids.isNotEmpty) {
+        final rows = await callKw(
+          sessionId: sessionId,
+          model: 'account.move',
+          method: 'read',
+          args: [ids, fields],
+        );
+        final hit = _balancesFromMoveRows(rows);
+        if (hit != null && _balanceHitUseful(hit)) return hit;
+      }
+
+      final name = (customerName ?? '').trim();
+      if (name.isEmpty) return null;
+
+      // Single domain — enough for Cash Book and avoids serial search_reads.
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'account.move',
+        method: 'search_read',
+        args: [
+          [
+            ['partner_id', 'ilike', name],
+            ['move_type', '=', 'out_invoice'],
+          ],
+        ],
+        kwargs: {
+          'fields': fields,
+          'limit': 3,
+          'order': 'id desc',
+        },
+      );
+      final hit = _balancesFromMoveRows(rows);
+      if (hit != null && _balanceHitUseful(hit)) return hit;
+    } catch (e) {
+      if (kDebugMode) debugPrint('readCustomerFormBalances: $e');
+    }
+    return null;
+  }
+
+  /// One round-trip for many invoice ids (Cash Book list prefetch).
+  static Future<Map<int, ({double? advance, double? oldBalance})>>
+      readMoveBalancesBatch(
+    String sessionId,
+    List<int> moveIds,
+  ) async {
+    final out = <int, ({double? advance, double? oldBalance})>{};
+    final ids = moveIds.where((id) => id > 0).toSet().toList(growable: false);
+    if (ids.isEmpty) return out;
+    try {
+      const fields = <String>[
+        'id',
+        'customer_advance_amount',
+        'customer_old_balance',
+      ];
+      // Odoo read stays fast in chunks of ~40.
+      for (var i = 0; i < ids.length; i += 40) {
+        final chunk = ids.sublist(i, i + 40 > ids.length ? ids.length : i + 40);
+        final rows = await callKw(
+          sessionId: sessionId,
+          model: 'account.move',
+          method: 'read',
+          args: [chunk, fields],
+        );
+        if (rows is! List) continue;
+        for (final raw in rows) {
+          if (raw is! Map) continue;
+          final map = _normalizeOdooMap(Map<String, dynamic>.from(raw));
+          final idRaw = map['id'];
+          final id = idRaw is int
+              ? idRaw
+              : int.tryParse(idRaw?.toString() ?? '');
+          if (id == null) continue;
+          final adv = _asDouble(map['customer_advance_amount']);
+          final old = _asDouble(map['customer_old_balance']);
+          if (adv == null && old == null) continue;
+          out[id] = (advance: adv, oldBalance: old);
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('readMoveBalancesBatch: $e');
+    }
+    return out;
+  }
+
+  static bool _balanceHitUseful(({double? advance, double? oldBalance}) hit) {
+    return (hit.advance != null && hit.advance != 0) ||
+        (hit.oldBalance != null && hit.oldBalance != 0);
+  }
+
+  static ({double? advance, double? oldBalance})? _balancesFromMoveRows(
+    dynamic rows,
+  ) {
+    if (rows is! List || rows.isEmpty) return null;
+    double? advance;
+    double? oldBalance;
+    for (final raw in rows) {
+      if (raw is! Map) continue;
+      final map = _normalizeOdooMap(Map<String, dynamic>.from(raw));
+      final adv = _asDouble(
+        map['customer_advance_amount'] ?? map['advance_amount'],
+      );
+      final old = _asDouble(
+        map['customer_old_balance'] ?? map['old_balance'],
+      );
+      if (adv != null && (advance == null || (advance == 0 && adv != 0))) {
+        advance = adv;
+      }
+      if (old != null && (oldBalance == null || (oldBalance == 0 && old != 0))) {
+        oldBalance = old;
+      }
+      if ((advance != null && advance != 0) ||
+          (oldBalance != null && oldBalance != 0)) {
+        if (kDebugMode) {
+          debugPrint(
+            'odoo customer form balances id=${map['id']} '
+            'advance=$advance old=$oldBalance',
+          );
+        }
+        return (advance: advance, oldBalance: oldBalance);
+      }
+    }
+    if (advance == null && oldBalance == null) return null;
+    return (advance: advance, oldBalance: oldBalance);
+  }
+
   /// Remove a QR-added product line from a draft customer invoice and restore
   /// pharmacy `entry.stock` qty (unlink alone does not always put stock back).
   ///
@@ -3509,6 +4226,13 @@ class OdooRpcHelper {
     double quantity = 0,
     int? invoiceId,
     int? stockEntryId,
+    /// When true, bump `item_qty` before unlink (RPC add deducted it).
+    /// Flutter `add_to_invoice` only touches sellable `stock`, which Odoo
+    /// puts back on unlink — leave this false to avoid stock climbing.
+    bool restoreItemQty = false,
+    /// False when add never deducted sellable `stock` but unlink still
+    /// restores it — clamp (re-deduct) after unlink so stock does not climb.
+    bool sellableStockDeducted = true,
   }) async {
     final moveId = invoiceId ??
         await findCustomerInvoiceId(sessionId, invoiceNumber);
@@ -3701,18 +4425,20 @@ class OdooRpcHelper {
       return false;
     }
 
-    // Restore pharmacy stock first. RPC add deducts item_qty + stock; Odoo
-    // usually puts `stock` back when the invoice line is unlinked, so only
-    // restore `item_qty` here to avoid double-counting `stock`.
+    // Flutter `add_to_invoice` deducts sellable `stock` only; Odoo restores it
+    // when the line is unlinked. RPC add also deducts `item_qty`, so we only
+    // put that field back when [restoreItemQty] is true.
     var stockRestored = false;
-    for (final entry in restoreByEntry.entries) {
-      final ok = await _increaseEntryStock(
-        sessionId: sessionId,
-        entryId: entry.key,
-        qty: entry.value,
-        includeStockField: false,
-      );
-      if (ok) stockRestored = true;
+    if (restoreItemQty) {
+      for (final entry in restoreByEntry.entries) {
+        final ok = await _increaseEntryStock(
+          sessionId: sessionId,
+          entryId: entry.key,
+          qty: entry.value,
+          includeStockField: false,
+        );
+        if (ok) stockRestored = true;
+      }
     }
 
     var lineChanged = false;
@@ -3773,6 +4499,19 @@ class OdooRpcHelper {
         if (kDebugMode) {
           debugPrint('removeCustomerInvoiceProduct reduce failed: $e');
         }
+      }
+    }
+
+    // Tax-error / skipped-deduct path: Odoo still restores sellable stock on
+    // unlink even though add never decremented it — clamp back down.
+    if (!sellableStockDeducted && restoreByEntry.isNotEmpty) {
+      for (final entry in restoreByEntry.entries) {
+        final ok = await deductEntrySellableStock(
+          sessionId: sessionId,
+          entryId: entry.key,
+          qty: entry.value,
+        );
+        if (ok) stockRestored = true;
       }
     }
 
@@ -3891,7 +4630,11 @@ class OdooRpcHelper {
         if (!available.contains(field) || value == null) return;
         final trimmed = value.trim();
         if (trimmed.isEmpty) return;
-        final id = await _findRecordIdInModels(sessionId, models, trimmed);
+        final id = await findOrCreateNamedRecord(
+          sessionId,
+          models: models,
+          name: trimmed,
+        );
         if (id != null) writeVals[field] = id;
       }
 
@@ -3939,6 +4682,9 @@ class OdooRpcHelper {
       putNum('item_qty', itemQty);
       putNum('stock', stock);
       putNum('gst', gst);
+      putNum('tax_percent', gst);
+      putNum('gst_percent', gst);
+      putNum('tax', gst);
       putNum('hold_qty', holdQty);
       putStr(const ['batch_no', 'batch'], batch);
       putStr(const ['mfd_date', 'mfd', 'manufacture_date', 'manufacturer'], mfd);
@@ -3966,6 +4712,230 @@ class OdooRpcHelper {
     } catch (e) {
       if (kDebugMode) debugPrint('updateEntryStock failed: $e');
       return false;
+    }
+  }
+
+  static Future<int?> findOrCreateNamedRecord(
+    String sessionId, {
+    required List<String> models,
+    required String name,
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return null;
+    final existing = await _findRecordIdInModels(sessionId, models, trimmed);
+    if (existing != null) return existing;
+    for (final model in models) {
+      if (_missingModels.contains(model)) continue;
+      try {
+        final created = await callKw(
+          sessionId: sessionId,
+          model: model,
+          method: 'create',
+          args: [
+            {'name': trimmed},
+          ],
+        );
+        if (created is int) return created;
+        final parsed = int.tryParse('$created');
+        if (parsed != null) return parsed;
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('findOrCreateNamedRecord $model "$trimmed": $e');
+        }
+      }
+    }
+    return null;
+  }
+
+  static Future<int> nextStockDisplayId(String sessionId) async {
+    try {
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'entry.stock',
+        method: 'search_read',
+        args: const [[]],
+        kwargs: {
+          'fields': ['id'],
+          'limit': 1,
+          'order': 'id desc',
+        },
+      );
+      if (rows is List && rows.isNotEmpty && rows.first is Map) {
+        final raw = Map<String, dynamic>.from(rows.first as Map)['id'];
+        final current = raw is int ? raw : int.tryParse('$raw') ?? 0;
+        if (current > 0) return current + 1;
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('nextStockDisplayId: $e');
+    }
+    return 1;
+  }
+
+  /// Website Stock ID is the Odoo `entry.stock` row id.
+  static int? displayIdFromEntryStockRow(Map<String, dynamic> row) {
+    return _m2oId(row['id']);
+  }
+
+  static Future<List<String>> searchMedicineNames(String sessionId) {
+    return searchPharmacyMasterNames(
+      sessionId,
+      models: const [
+        'pharmacy.medicine',
+        'product.product',
+        'product.template',
+      ],
+    );
+  }
+
+  static Future<List<String>> searchRackNames(String sessionId) {
+    return searchPharmacyMasterNames(
+      sessionId,
+      models: const [
+        'pharmacy.rack',
+        'stock.rack',
+      ],
+    );
+  }
+
+  /// Create a pharmacy `entry.stock` row (website Stock). Returns the new id.
+  static Future<StockItemModel?> createEntryStock(
+    String sessionId, {
+    String? medicine,
+    String? potency,
+    String? packing,
+    String? company,
+    String? group,
+    double? mrp,
+    double? itemQty,
+    double? stock,
+    String? batch,
+    String? mfd,
+    String? exp,
+    String? rack,
+    String? hsn,
+    double? gst,
+    double? holdQty,
+  }) async {
+    try {
+      final available = await _modelFields(sessionId, 'entry.stock');
+      if (available.isEmpty) return null;
+
+      final writeVals = <String, dynamic>{};
+      // Let Odoo assign `stock_display_id` from its sequence (website number).
+      // Writing max(id)+1 here was showing the database row, not the website ID.
+
+      final today = DateTime.now();
+      final todayIso =
+          '${today.year.toString().padLeft(4, '0')}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+      if (available.contains('stock_date')) writeVals['stock_date'] = todayIso;
+      if (available.contains('date') && !writeVals.containsKey('date')) {
+        writeVals['date'] = todayIso;
+      }
+
+      Future<void> putM2oCreate(
+        String field,
+        List<String> models,
+        String? value,
+      ) async {
+        if (!available.contains(field) || value == null) return;
+        final trimmed = value.trim();
+        if (trimmed.isEmpty) return;
+        final id = await findOrCreateNamedRecord(
+          sessionId,
+          models: models,
+          name: trimmed,
+        );
+        if (id != null) writeVals[field] = id;
+      }
+
+      await putM2oCreate('medicine_id', const [
+        'pharmacy.medicine',
+        'product.product',
+        'product.template',
+      ], medicine);
+      await putM2oCreate('potency_id', const ['pharmacy.potency'], potency);
+      await putM2oCreate('packing_id', const [
+        'pharmacy.packing',
+        'pharmacy.pack',
+        'product.packing',
+      ], packing);
+      await putM2oCreate('pharmacy_company_id', const [
+        'pharmacy.company',
+        'pharmacy.medicine.company',
+      ], company);
+      await putM2oCreate('pharmacy_group_id', const [
+        'pharmacy.group',
+        'pharmacy.medicine.group',
+      ], group);
+      await putM2oCreate('rack_id', const [
+        'pharmacy.rack',
+        'stock.rack',
+      ], rack);
+
+      void putNum(String field, double? value) {
+        if (!available.contains(field) || value == null) return;
+        writeVals[field] =
+            value == value.roundToDouble() ? value.toInt() : value;
+      }
+
+      void putStr(Iterable<String> fields, String? value) {
+        if (value == null) return;
+        final trimmed = value.trim();
+        for (final field in fields) {
+          if (!available.contains(field)) continue;
+          writeVals[field] = trimmed.isEmpty ? false : trimmed;
+          return;
+        }
+      }
+
+      putNum('mrp', mrp);
+      putNum('item_qty', itemQty);
+      putNum('stock', stock);
+      putNum('gst', gst);
+      putNum('hold_qty', holdQty);
+      putStr(const ['batch_no', 'batch'], batch);
+      putStr(const ['mfd_date', 'mfd', 'manufacture_date', 'manufacturer'], mfd);
+      putStr(const ['exp_date', 'exp', 'expiry_date', 'expiry'], exp);
+      putStr(const ['rack', 'rack_name'], rack);
+      putStr(const ['hsn', 'hsn_code'], hsn);
+
+      final created = await callKw(
+        sessionId: sessionId,
+        model: 'entry.stock',
+        method: 'create',
+        args: [writeVals],
+      );
+      final entryId = created is int ? created : int.tryParse('$created');
+      if (entryId == null) return null;
+
+      if (kDebugMode) {
+        debugPrint('createEntryStock #$entryId → $writeVals');
+      }
+
+      return StockItemModel(
+        stockDisplayId: entryId,
+        entryStockId: entryId,
+        stockDate: todayIso,
+        medicine: (medicine ?? '').trim().isEmpty ? null : medicine!.trim(),
+        potency: (potency ?? '').trim().isEmpty ? null : potency!.trim(),
+        packing: (packing ?? '').trim().isEmpty ? null : packing!.trim(),
+        company: (company ?? '').trim().isEmpty ? null : company!.trim(),
+        group: (group ?? '').trim().isEmpty ? null : group!.trim(),
+        itemQty: itemQty,
+        stock: stock,
+        mrp: mrp,
+        batch: (batch ?? '').trim().isEmpty ? null : batch!.trim(),
+        mfd: (mfd ?? '').trim().isEmpty ? null : mfd!.trim(),
+        exp: (exp ?? '').trim().isEmpty ? null : exp!.trim(),
+        rack: (rack ?? '').trim().isEmpty ? null : rack!.trim(),
+        hsn: (hsn ?? '').trim().isEmpty ? null : hsn!.trim(),
+        gst: gst,
+        holdQty: holdQty,
+        availableStock: stock,
+      );
+    } catch (e) {
+      if (kDebugMode) debugPrint('createEntryStock failed: $e');
+      return null;
     }
   }
 

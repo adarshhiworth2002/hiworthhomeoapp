@@ -95,6 +95,35 @@ class InvoiceCalcHelper {
     return double.tryParse(t) ?? 0;
   }
 
+  /// Customer / packing / quotation lines only allow GST 5%, 12%, or 18%.
+  /// Stock/QR can return invalid rates (e.g. 100 from supplier); snap to nearest.
+  static const List<double> customerTaxPercents = [5, 12, 18];
+
+  static bool isAllowedCustomerTax(double? tax) {
+    if (tax == null) return false;
+    for (final allowed in customerTaxPercents) {
+      if ((tax - allowed).abs() < 0.01) return true;
+    }
+    return false;
+  }
+
+  /// Returns 5, 12, or 18. Defaults to 12 when [raw] is null/invalid.
+  static double normalizeCustomerTaxPercent(double? raw) {
+    if (isAllowedCustomerTax(raw)) return raw!;
+    // Supplier / bad master data often stores 100 — not a real GST slab.
+    if (raw == null || raw <= 0 || raw > 18) return 12;
+    var best = customerTaxPercents.first;
+    var bestDist = (raw - best).abs();
+    for (final allowed in customerTaxPercents.skip(1)) {
+      final d = (raw - allowed).abs();
+      if (d < bestDist) {
+        best = allowed;
+        bestDist = d;
+      }
+    }
+    return best;
+  }
+
   static double _r2(double v) => (v * 100).roundToDouble() / 100.0;
 }
 

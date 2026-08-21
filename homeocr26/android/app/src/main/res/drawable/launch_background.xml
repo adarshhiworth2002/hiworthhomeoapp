@@ -1,12 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Modify this file to customize your launch splash screen -->
+<!-- Matches Dart splash: gradient + medical badge + title grouped in the center. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@android:color/white" />
+    <item android:drawable="@drawable/splash_gradient" />
 
-    <!-- You can insert your own image assets here -->
-    <!-- <item>
-        <bitmap
-            android:gravity="center"
-            android:src="@mipmap/launch_image" />
-    </item> -->
+    <item
+        android:width="132dp"
+        android:height="132dp"
+        android:bottom="40dp"
+        android:drawable="@drawable/splash_icon_badge"
+        android:gravity="center" />
+
+    <item
+        android:width="300dp"
+        android:height="72dp"
+        android:drawable="@drawable/splash_wordmark"
+        android:gravity="center"
+        android:top="88dp" />
 </layer-list>

@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../models/invoice_summary_model.dart';
+import '../../models/payment_book_model.dart';
 import '../theme.dart';
-import '../widgets/app_responsive.dart';
+import '../widgets/compact_field_rows.dart';
+import '../widgets/payment_book_style.dart';
 import 'customer_invoice_detail_page.dart';
 
-/// Compact single-line list row: Number · [Status] · Balance · Subtotal · Total.
-/// Tap opens the full invoice detail screen.
+/// Compact list row with status badge top-right.
+/// Row colour matches Payment Book (walk-in/cash red, credit, draft, cancel).
 class InvoiceListCard extends StatelessWidget {
   const InvoiceListCard({
     super.key,
@@ -17,65 +19,61 @@ class InvoiceListCard extends StatelessWidget {
 
   final InvoiceSummaryModel invoice;
   final VoidCallback? onTap;
-  /// When set, shows a Status column (Payment History uses website status).
+  /// When set, overrides [InvoiceSummaryModel.displayStatus] on the badge.
   final String? statusValue;
 
   @override
   Widget build(BuildContext context) {
-    final r = AppResponsive.of(context);
+    final style = invoice.paymentBookRowStyle;
+    final color = PaymentBookStyleColors.of(style);
+    final weight = PaymentBookStyleColors.weightOf(style);
+    final status = (statusValue ?? invoice.displayStatus).trim();
+
+    final fields = <Widget>[
+      _LineCell(
+        label: 'Number',
+        value: invoice.displayNumber,
+        color: color,
+        weight: FontWeight.w800,
+      ),
+      _LineCell(
+        label: 'Balance',
+        value: InvoiceSummaryModel.formatMoney(invoice.balance),
+        color: color,
+        weight: weight,
+      ),
+      _LineCell(
+        label: 'Subtotal',
+        value: InvoiceSummaryModel.formatMoney(invoice.subtotal),
+        color: color,
+        weight: weight,
+      ),
+      _LineCell(
+        label: 'Total',
+        value: InvoiceSummaryModel.formatMoney(invoice.total),
+        color: color,
+        weight: FontWeight.w800,
+      ),
+    ];
+
     final card = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
       decoration: sectionCardDecoration(),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            flex: statusValue != null ? 2 : 3,
-            child: _LineCell(
-              label: 'Number',
-              value: invoice.displayNumber,
-              emphasize: true,
-            ),
+          Expanded(child: CompactFieldRows(fields: fields)),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              InvoiceBillStatusBadge(status: status),
+              if (onTap != null) ...[
+                const SizedBox(height: 8),
+                Icon(Icons.chevron_right, color: color, size: 20),
+              ],
+            ],
           ),
-          if (statusValue != null && r.showListSecondary)
-            Expanded(
-              flex: 2,
-              child: _LineCell(
-                label: 'Status',
-                value: statusValue!,
-              ),
-            ),
-          if (r.showListSecondary)
-            Expanded(
-              flex: 2,
-              child: _LineCell(
-                label: 'Balance',
-                value: InvoiceSummaryModel.formatMoney(invoice.balance),
-              ),
-            ),
-          if (r.showListTertiary)
-            Expanded(
-              flex: 2,
-              child: _LineCell(
-                label: 'Subtotal',
-                value: InvoiceSummaryModel.formatMoney(invoice.subtotal),
-              ),
-            ),
-          Expanded(
-            flex: 2,
-            child: _LineCell(
-              label: 'Total',
-              value: InvoiceSummaryModel.formatMoney(invoice.total),
-              alignEnd: onTap == null,
-            ),
-          ),
-          if (onTap != null) ...[
-            const SizedBox(width: 4),
-            Icon(
-              Icons.chevron_right,
-              color: sectionAccent,
-              size: 20,
-            ),
-          ],
         ],
       ),
     );
@@ -94,31 +92,28 @@ class _LineCell extends StatelessWidget {
   const _LineCell({
     required this.label,
     required this.value,
-    this.emphasize = false,
-    this.alignEnd = false,
+    required this.color,
+    required this.weight,
   });
 
   final String label;
   final String value;
-  final bool emphasize;
-  final bool alignEnd;
+  final Color color;
+  final FontWeight weight;
 
   @override
   Widget build(BuildContext context) {
-    final align = alignEnd ? TextAlign.right : TextAlign.left;
     return Column(
-      crossAxisAlignment:
-          alignEnd ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          textAlign: align,
-          style: const TextStyle(
-            color: sectionTextMuted,
-            fontSize: 9,
+          style: TextStyle(
+            color: color.withValues(alpha: 0.65),
+            fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -127,11 +122,10 @@ class _LineCell extends StatelessWidget {
           value,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          textAlign: align,
           style: TextStyle(
-            color: sectionText,
-            fontWeight: emphasize ? FontWeight.w700 : FontWeight.w600,
-            fontSize: emphasize ? 12 : 11,
+            color: color,
+            fontWeight: weight,
+            fontSize: 13,
           ),
         ),
       ],
@@ -179,7 +173,7 @@ class InvoiceListError extends StatelessWidget {
                 color: Theme.of(context).colorScheme.onSurface.withValues(
                       alpha: 0.7,
                     ),
-                fontSize: 14,
+                fontSize: 16,
               ),
             ),
             const SizedBox(height: 16),

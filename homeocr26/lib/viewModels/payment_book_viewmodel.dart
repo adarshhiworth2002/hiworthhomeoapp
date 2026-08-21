@@ -1,9 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../features/services/calendar_date.dart';
 import '../features/services/payment_book_service.dart';
-import '../features/services/prefix_search.dart';
 import '../models/invoice_summary_model.dart';
 import '../models/payment_book_model.dart';
 import 'login_viewmodel.dart';
@@ -18,47 +20,9 @@ class PaymentBookViewModel extends ChangeNotifier {
 
   /// Extra client-side pass for search typing (prefix).
   List<InvoiceSummaryModel> get visibleInvoices {
-    var list = List<InvoiceSummaryModel>.from(book.invoices);
-
-    if (filter.hasCustomer) {
-      final q = filter.customerQuery.trim();
-      list = list
-          .where(
-            (item) => PrefixSearch.matchesAny(
-              [
-                item.displayCustomer,
-                item.customer,
-                item.displayNumber,
-                item.invoiceNumber,
-              ],
-              q,
-            ),
-          )
-          .toList(growable: false);
-    }
-
-    if (filter.hasCustomerType) {
-      list = list.where((item) {
-        switch (filter.customerType) {
-          case PaymentBookCustomerType.all:
-            return true;
-          case PaymentBookCustomerType.credit:
-            return item.isCreditCustomer;
-          case PaymentBookCustomerType.normal:
-            return !item.isCreditCustomer;
-        }
-      }).toList(growable: false);
-    }
-
-    if (filter.hasPaymentMode) {
-      final mode = filter.paymentModeApiValue!;
-      list = list.where((item) {
-        final raw = (item.paymentMode ?? '').toLowerCase().trim();
-        return raw == mode || raw.contains(mode);
-      }).toList(growable: false);
-    }
-
-    return list;
+    return book.invoices
+        .where(filter.matches)
+        .toList(growable: false);
   }
 
   static Future<PaymentBookModel> prefetch(
@@ -77,6 +41,20 @@ class PaymentBookViewModel extends ChangeNotifier {
     return PaymentBookService.cachedBook ?? const PaymentBookModel();
   }
 
+  void applyFilter(PaymentBookFilter newFilter) {
+    filter = newFilter;
+    notifyListeners();
+  }
+
+  /// Clears all filters (including today’s date) and refreshes in the background.
+  void clearFilter(BuildContext context) {
+    filter = const PaymentBookFilter();
+    notifyListeners();
+    unawaited(
+      fetch(context, forceRefresh: true, silent: true),
+    );
+  }
+
   Future<void> fetch(
     BuildContext context, {
     bool forceRefresh = false,
@@ -85,15 +63,14 @@ class PaymentBookViewModel extends ChangeNotifier {
   }) async {
     if (applyFilter != null) {
       filter = applyFilter;
+      notifyListeners();
     }
 
     try {
       if (!silent) {
         loading = true;
         error = '';
-        if (book.isEmpty) {
-          notifyListeners();
-        }
+        notifyListeners();
       }
 
       final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
@@ -129,14 +106,6 @@ class PaymentBookViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> resetToToday(BuildContext context) async {
-    await fetch(
-      context,
-      forceRefresh: true,
-      applyFilter: PaymentBookFilter.today(),
-    );
-  }
-
   static String _formatApiDate(DateTime date) {
     final y = date.year.toString().padLeft(4, '0');
     final m = date.month.toString().padLeft(2, '0');
@@ -145,19 +114,7 @@ class PaymentBookViewModel extends ChangeNotifier {
   }
 
   static DateTime? _parseApiDate(String? raw) {
-    if (raw == null || raw.trim().isEmpty) return null;
-    final iso = DateTime.tryParse(raw.trim());
-    if (iso != null) return DateTime(iso.year, iso.month, iso.day);
-    final parts = raw.trim().split(RegExp(r'[/-]'));
-    if (parts.length == 3) {
-      final d = int.tryParse(parts[0]);
-      final m = int.tryParse(parts[1]);
-      final y = int.tryParse(parts[2]);
-      if (d != null && m != null && y != null) {
-        return DateTime(y, m, d);
-      }
-    }
-    return null;
+    return CalendarDate.parse(raw);
   }
 
   static String formatAmount(double? value) {

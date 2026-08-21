@@ -29,6 +29,9 @@ class NetAmountViewModel extends ChangeNotifier {
   List<NetAmountRow> youGaveBills = [];
   String? reportDate;
 
+  /// Shared All / Draft / Open / Paid chip on Net Amount screens.
+  String statusFilter = 'all';
+
   DateTime? _loadedAt;
 
   bool get _hasCachedData =>
@@ -93,6 +96,10 @@ class NetAmountViewModel extends ChangeNotifier {
       if (got != null) {
         youGotAmount ??= got.youGot;
         youGaveAmount ??= got.youGave;
+      }
+
+      if (youGotInvoices.isNotEmpty) {
+        youGotAmount = sumPaidInvoices(youGotInvoices);
       }
 
       if (youGotAmount == null && youGaveAmount == null) {
@@ -168,7 +175,6 @@ class NetAmountViewModel extends ChangeNotifier {
       reportDate = got?.date ?? gave?.date;
 
       if (got != null) {
-        youGotAmount ??= got.youGot;
         youGaveAmount ??= got.youGave;
         if (youGaveBills.isEmpty && got.youGaveBills.isNotEmpty) {
           youGaveBills = NetAmountRow.enrichRows(
@@ -176,6 +182,13 @@ class NetAmountViewModel extends ChangeNotifier {
             supplierListMaps,
           );
         }
+      }
+
+      // Home + main page show fully paid collections only (not open + paid).
+      if (youGotInvoices.isNotEmpty) {
+        youGotAmount = sumPaidInvoices(youGotInvoices);
+      } else {
+        youGotAmount = got?.youGot ?? got?.amount ?? youGotAmount;
       }
 
       if (youGotAmount == null && youGaveAmount == null) {
@@ -211,18 +224,61 @@ class NetAmountViewModel extends ChangeNotifier {
   List<NetAmountRow> rowsFor(NetAmountSection section) {
     switch (section) {
       case NetAmountSection.youGot:
-        return youGotInvoices;
+        return _filterByStatus(youGotInvoices);
       case NetAmountSection.youGave:
-        return youGaveBills;
+        return _filterByStatus(youGaveBills);
     }
+  }
+
+  List<NetAmountRow> _filterByStatus(List<NetAmountRow> rows) {
+    if (statusFilter == 'all') return List<NetAmountRow>.from(rows);
+    return rows.where((row) => row.sectionKey == statusFilter).toList();
+  }
+
+  void setStatusFilter(String key) {
+    if (statusFilter == key) return;
+    statusFilter = key;
+    notifyListeners();
+  }
+
+  static double sumPaidInvoices(List<NetAmountRow> rows) {
+    return rows
+        .where((row) => row.sectionKey == 'paid')
+        .fold<double>(0, (sum, row) => sum + (row.total ?? row.paidAmount));
+  }
+
+  int get youGotPaidCount =>
+      youGotInvoices.where((row) => row.sectionKey == 'paid').length;
+
+  /// Paid collections only — used on home and the Net Amount main tile.
+  double get displayYouGotPaid {
+    if (youGotInvoices.isNotEmpty) return sumPaidInvoices(youGotInvoices);
+    return youGotAmount ?? 0;
+  }
+
+  /// Outstanding supplier payables (balance still to pay) — not paid totals.
+  double get displayYouGaveUnpaid {
+    if (youGaveBills.isEmpty) return youGaveAmount ?? 0;
+    return sumUnpaidBalances(youGaveBills);
+  }
+
+  static double sumUnpaidBalances(List<NetAmountRow> rows) {
+    return rows.fold<double>(0, (sum, row) {
+      if (row.sectionKey == 'paid' || row.sectionKey == 'cancel') {
+        return sum;
+      }
+      final bal = row.balance;
+      if (bal != null) return sum + bal;
+      return sum + (row.total ?? 0);
+    });
   }
 
   double? amountFor(NetAmountSection section) {
     switch (section) {
       case NetAmountSection.youGot:
-        return youGotAmount;
+        return displayYouGotPaid;
       case NetAmountSection.youGave:
-        return youGaveAmount;
+        return displayYouGaveUnpaid;
     }
   }
 
@@ -299,9 +355,9 @@ class NetAmountViewModel extends ChangeNotifier {
   static String sectionTitle(NetAmountSection section) {
     switch (section) {
       case NetAmountSection.youGot:
-        return 'You Got (Paid)';
+        return 'You Got (Customer)';
       case NetAmountSection.youGave:
-        return 'You Gave (Paid)';
+        return 'You Gave (Supplier)';
     }
   }
 }

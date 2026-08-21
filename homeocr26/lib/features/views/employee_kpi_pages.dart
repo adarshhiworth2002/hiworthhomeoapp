@@ -9,6 +9,7 @@ import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'employee_performance_page.dart';
 import '../theme.dart';
+import 'live_refresh_mixin.dart';
 
 /// Website "Completed Today" — paid bills in date range.
 class CompletedTodayPage extends StatefulWidget {
@@ -28,7 +29,8 @@ class CompletedTodayPage extends StatefulWidget {
   State<CompletedTodayPage> createState() => _CompletedTodayPageState();
 }
 
-class _CompletedTodayPageState extends State<CompletedTodayPage> {
+class _CompletedTodayPageState extends State<CompletedTodayPage>
+    with LiveRefreshMixin {
   late DateTime _fromDate;
   late DateTime _toDate;
   late List<InvoiceSummaryModel> _source;
@@ -42,6 +44,13 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
     _toDate = report;
     _source = widget.invoices;
     _results = _filter();
+    startLiveRefresh(_onRefresh);
+  }
+
+  @override
+  void dispose() {
+    stopLiveRefresh();
+    super.dispose();
   }
 
   bool _isPaid(InvoiceSummaryModel inv) {
@@ -146,7 +155,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
           style: TextStyle(
             color: Color(0xFFE53935),
             fontWeight: FontWeight.w800,
-            fontSize: 18,
+            fontSize: 20,
           ),
         ),
       ),
@@ -204,7 +213,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
                       '${widget.expectedCount != null ? ' · KPI: ${widget.expectedCount}' : ''}',
                       style: TextStyle(
                         color: sectionTextMuted,
-                        fontSize: 11,
+                        fontSize: 13,
                       ),
                     ),
                   ),
@@ -274,7 +283,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage> {
                                                     ? const Color(0xFFE53935)
                                                     : const Color(0xFF42A5F5),
                                                 fontWeight: FontWeight.w800,
-                                                fontSize: 14,
+                                                fontSize: 16,
                                               ),
                                             ),
                                           ),
@@ -344,7 +353,7 @@ class ActiveSessionsTimerLogsPage extends StatefulWidget {
 }
 
 class _ActiveSessionsTimerLogsPageState
-    extends State<ActiveSessionsTimerLogsPage> {
+    extends State<ActiveSessionsTimerLogsPage> with LiveRefreshMixin {
   bool _loading = true;
   bool _refreshing = false;
   List<EmployeeTimerLog> _logs = const [];
@@ -353,6 +362,13 @@ class _ActiveSessionsTimerLogsPageState
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    startLiveRefresh(() => _load(forceRefresh: true));
+  }
+
+  @override
+  void dispose() {
+    stopLiveRefresh();
+    super.dispose();
   }
 
   Future<void> _load({bool forceRefresh = false}) async {
@@ -401,31 +417,9 @@ class _ActiveSessionsTimerLogsPageState
           style: TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
-        actions: [
-          if (_refreshing)
-            const Padding(
-              padding: EdgeInsets.only(right: 8),
-              child: Center(
-                child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Color(0xFFE07A2F),
-                  ),
-                ),
-              ),
-            ),
-          IconButton(
-            onPressed: _refreshing
-                ? null
-                : () => _load(forceRefresh: true),
-            icon: const Icon(Icons.refresh, color: sectionText),
-          ),
-        ],
       ),
       body: _loading
           ? const Center(
@@ -453,7 +447,7 @@ class _ActiveSessionsTimerLogsPageState
                   '${kpiCount > 0 ? ' · KPI: $kpiCount' : ''}',
                   style: TextStyle(
                     color: sectionTextMuted,
-                    fontSize: 12,
+                    fontSize: 14,
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -503,7 +497,7 @@ class _ActiveSessionsTimerLogsPageState
                                         style: const TextStyle(
                                           color: sectionText,
                                           fontWeight: FontWeight.w800,
-                                          fontSize: 15,
+                                          fontSize: 17,
                                         ),
                                       ),
                                     ),
@@ -525,7 +519,7 @@ class _ActiveSessionsTimerLogsPageState
                                         style: const TextStyle(
                                           color: Colors.white,
                                           fontWeight: FontWeight.w700,
-                                          fontSize: 11,
+                                          fontSize: 13,
                                         ),
                                       ),
                                     ),
@@ -622,7 +616,7 @@ class _ActiveSessionBillDetailPageState
           style: const TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
       ),
@@ -768,7 +762,7 @@ class _DetailField extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
               ),
             ),
           ),
@@ -777,7 +771,7 @@ class _DetailField extends StatelessWidget {
               value,
               style: TextStyle(
                 color: emphasize ? const Color(0xFFE53935) : sectionText,
-                fontSize: 13,
+                fontSize: 15,
                 fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
@@ -827,7 +821,7 @@ class _UserTimingsTab extends StatelessWidget {
                 style: const TextStyle(
                   color: sectionText,
                   fontWeight: FontWeight.w800,
-                  fontSize: 14,
+                  fontSize: 16,
                 ),
               ),
               const SizedBox(height: 8),
@@ -894,7 +888,7 @@ class _AllBillSessionsTab extends StatelessWidget {
                       style: const TextStyle(
                         color: sectionText,
                         fontWeight: FontWeight.w800,
-                        fontSize: 14,
+                        fontSize: 16,
                       ),
                     ),
                   ),
@@ -912,7 +906,7 @@ class _AllBillSessionsTab extends StatelessWidget {
                       style: const TextStyle(
                         color: sectionText,
                         fontWeight: FontWeight.w700,
-                        fontSize: 11,
+                        fontSize: 13,
                       ),
                     ),
                   ),
@@ -943,7 +937,7 @@ class _BreaksTab extends StatelessWidget {
     return const Center(
       child: Text(
         'No breaks',
-        style: TextStyle(color: sectionTextMuted, fontSize: 13),
+        style: TextStyle(color: sectionTextMuted, fontSize: 15),
       ),
     );
   }
@@ -966,7 +960,7 @@ class EmployeePerformanceGraphPage extends StatefulWidget {
 }
 
 class _EmployeePerformanceGraphPageState
-    extends State<EmployeePerformanceGraphPage> {
+    extends State<EmployeePerformanceGraphPage> with LiveRefreshMixin {
   EmployeeGraphMeasure _measure = EmployeeGraphMeasure.workMinutes;
   late List<EmployeeBillsGroup> _employees;
 
@@ -974,6 +968,13 @@ class _EmployeePerformanceGraphPageState
   void initState() {
     super.initState();
     _employees = widget.employees;
+    startLiveRefresh(_onRefresh);
+  }
+
+  @override
+  void dispose() {
+    stopLiveRefresh();
+    super.dispose();
   }
 
   Future<void> _onRefresh() async {
@@ -1079,7 +1080,7 @@ class _EmployeePerformanceGraphPageState
           style: TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
       ),
@@ -1098,7 +1099,7 @@ class _EmployeePerformanceGraphPageState
                 'Report date: ${_fmtRawDate(widget.reportDate)}',
                 style: TextStyle(
                   color: sectionTextMuted,
-                  fontSize: 12,
+                  fontSize: 14,
                 ),
               ),
             ),
@@ -1115,7 +1116,7 @@ class _EmployeePerformanceGraphPageState
                 isExpanded: true,
                 dropdownColor: Colors.white,
                 iconEnabledColor: Colors.black,
-                style: const TextStyle(color: Colors.black, fontSize: 14),
+                style: const TextStyle(color: Colors.black, fontSize: 16),
                 items: [
                   for (final m in EmployeeGraphMeasure.values)
                     DropdownMenuItem(
@@ -1156,7 +1157,7 @@ class _EmployeePerformanceGraphPageState
                       _measure.label,
                       style: const TextStyle(
                         color: sectionText,
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -1188,7 +1189,7 @@ class _EmployeePerformanceGraphPageState
                     'Employee · tap a bar to open',
                     style: TextStyle(
                       color: sectionTextMuted,
-                      fontSize: 11,
+                      fontSize: 13,
                     ),
                   ),
                 ),
@@ -1272,7 +1273,7 @@ class _BarColumn extends StatelessWidget {
         children: [
           Text(
             _fmtNum(value),
-            style: const TextStyle(color: sectionTextMuted, fontSize: 10),
+            style: const TextStyle(color: sectionTextMuted, fontSize: 12),
           ),
           const SizedBox(height: 4),
           Container(
@@ -1288,7 +1289,7 @@ class _BarColumn extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: sectionTextMuted, fontSize: 10),
+            style: const TextStyle(color: sectionTextMuted, fontSize: 12),
           ),
         ],
       ),
@@ -1353,7 +1354,7 @@ class _FilterChipLabel extends StatelessWidget {
         text,
         style: TextStyle(
           color: active ? const Color(0xFF7B5EA7) : sectionText,
-          fontSize: 12,
+          fontSize: 14,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -1380,7 +1381,7 @@ class _StatusPill extends StatelessWidget {
         style: const TextStyle(
           color: Colors.white,
           fontWeight: FontWeight.w700,
-          fontSize: 11,
+          fontSize: 13,
         ),
       ),
     );
@@ -1407,7 +1408,7 @@ class _Line extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
               ),
             ),
           ),
@@ -1417,7 +1418,7 @@ class _Line extends StatelessWidget {
               style: TextStyle(
                 color: color ??
                     (emphasize ? const Color(0xFFE53935) : sectionText),
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: emphasize ? FontWeight.w700 : FontWeight.w600,
               ),
             ),

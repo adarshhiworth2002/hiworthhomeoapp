@@ -125,7 +125,7 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
         elevation: 0,
         title: const Text(
           'Photograph label',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
         ),
       ),
       body: Column(
@@ -151,7 +151,7 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
           child: Text(
             _error!,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: sectionTextMuted, fontSize: 15),
+            style: const TextStyle(color: Colors.white70, fontSize: 17),
           ),
         ),
       );
@@ -205,7 +205,7 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.85),
-              fontSize: 13,
+              fontSize: 15,
               fontWeight: FontWeight.w500,
             ),
           ),
@@ -236,7 +236,14 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
         children: [
           TextButton(
             onPressed: _capturing ? null : () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
+            style: TextButton.styleFrom(
+              foregroundColor: sectionText,
+              disabledForegroundColor: sectionTextMuted,
+            ),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+            ),
           ),
           GestureDetector(
             onTap: _capturing || _error != null ? null : _capture,
@@ -245,19 +252,26 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
               height: 72,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 4),
+                border: Border.all(color: sectionAccent, width: 4),
               ),
               alignment: Alignment.center,
-              child: Container(
-                width: 58,
-                height: 58,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _capturing
-                      ? Colors.white38
-                      : const Color(0xFFE07A2F),
-                ),
-              ),
+              child: _capturing
+                  ? const SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(
+                        color: sectionAccent,
+                        strokeWidth: 3,
+                      ),
+                    )
+                  : Container(
+                      width: 58,
+                      height: 58,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color(0xFFE07A2F),
+                      ),
+                    ),
             ),
           ),
           const SizedBox(width: 64),

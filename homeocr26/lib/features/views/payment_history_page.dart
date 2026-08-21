@@ -4,13 +4,16 @@ import 'package:provider/provider.dart';
 import '../services/prefix_search.dart';
 import '../services/settled_payment_store.dart';
 import '../../models/invoice_summary_model.dart';
+import '../../models/payment_book_model.dart';
 import '../../viewModels/payment_history_viewmodel.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'invoice_list_widgets.dart';
+import 'invoice_search_filter_sheet.dart';
 import 'list_search_field.dart';
 import 'live_refresh_mixin.dart';
 import '../theme.dart';
+import '../widgets/payment_book_style.dart';
 
 class PaymentHistoryPage extends StatefulWidget {
   const PaymentHistoryPage({super.key});
@@ -27,6 +30,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
   late final TextEditingController _searchController;
   late final TabController _tabController;
   String _searchQuery = '';
+  String _statusFilter = 'all';
   Set<String> _settledKeys = {};
   List<InvoiceSummaryModel> _settledItems = const [];
   bool _settledReady = false;
@@ -46,16 +50,16 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
       await _viewModel.fetch(context);
       if (!mounted) return;
       await _reloadSettled(live: _viewModel.items);
-      if (!mounted) return;
-      await _viewModel.fetch(context, forceRefresh: true, silent: true);
-      if (!mounted) return;
-      await _reloadSettled(live: _viewModel.items);
     });
-    startLiveRefresh(() async {
-      await _viewModel.fetch(context, forceRefresh: true, silent: true);
-      if (!mounted) return;
-      await _reloadSettled(live: _viewModel.items);
-    });
+    startLiveRefresh(
+      () async {
+        await _viewModel.fetch(context, forceRefresh: true, silent: true);
+        if (!mounted) return;
+        await _reloadSettled(live: _viewModel.items);
+      },
+      interval: const Duration(seconds: 30),
+      immediate: false,
+    );
   }
 
   @override
@@ -65,6 +69,28 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
     _tabController.dispose();
     _viewModel.dispose();
     super.dispose();
+  }
+
+  Future<void> _openFilter() async {
+    final result = await showModalBottomSheet<InvoiceSearchFilterResult>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: sectionBg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) => InvoiceSearchFilterSheet(
+        initialFilter: _viewModel.filter,
+        parentContext: context,
+      ),
+    );
+    if (!mounted || result == null) return;
+    if (result.clear) {
+      _viewModel.clearFilter();
+      return;
+    }
+    _viewModel.applyFilter(result.filter);
   }
 
   Future<void> _reloadSettled({List<InvoiceSummaryModel>? live}) async {
@@ -88,25 +114,41 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
   }
 
   List<InvoiceSummaryModel> _filter(List<InvoiceSummaryModel> items) {
-    return items
+    return _viewModel.visibleOf(items)
         .where(
-          (item) => PrefixSearch.matchesAny(
-            [item.displayCustomer, item.displayNumber, item.invoiceNumber],
-            _searchQuery,
+          (item) => PrefixSearch.matchesCustomerOrInvoice(
+            query: _searchQuery,
+            customer: item.customer,
+            displayCustomer: item.displayCustomer,
+            displayNumber: item.displayNumber,
+            invoiceNumber: item.invoiceNumber,
           ),
         )
         .toList(growable: false);
   }
 
   List<InvoiceSummaryModel> _currentTabItems(PaymentHistoryViewModel model) {
-    if (_tabController.index == 0) {
-      return _filter(_activeItems(model.items));
-    }
-    return _filter(_settledItems);
+    final base = _tabController.index == 0
+        ? _filter(_activeItems(model.items))
+        : _filter(_settledItems);
+    if (_statusFilter == 'all') return base;
+    return base
+        .where((inv) => inv.sectionKey == _statusFilter)
+        .toList(growable: false);
   }
 
   double _sumTotals(List<InvoiceSummaryModel> items) {
-    return items.fold<double>(0, (sum, item) => sum + (item.total ?? 0));
+    if (_statusFilter == 'all') {
+      return InvoiceSummaryModel.sumTotals(items, includeCancel: false);
+    }
+    return InvoiceSummaryModel.sumTotals(items, includeCancel: true);
+  }
+
+  int _countBills(List<InvoiceSummaryModel> items) {
+    if (_statusFilter == 'all') {
+      return InvoiceSummaryModel.countBills(items, includeCancel: false);
+    }
+    return items.length;
   }
 
   void _briefSnack(String message, {VoidCallback? onUndo}) {
@@ -159,42 +201,18 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
             style: TextStyle(
               color: sectionText,
               fontWeight: FontWeight.w500,
-              fontSize: 15,
+              fontSize: 17,
             ),
           ),
           backgroundColor: sectionBg,
           elevation: 0,
           actions: [
             IconButton(
-              onPressed: () async {
-                await _viewModel.fetch(context, forceRefresh: true);
-                if (!mounted) return;
-                await _reloadSettled(live: _viewModel.items);
-              },
-              icon: const Icon(Icons.refresh, color: sectionText),
+              tooltip: 'Filter',
+              onPressed: _openFilter,
+              icon: const Icon(Icons.filter_list, color: sectionText),
             ),
           ],
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(48),
-            child: TabBar(
-              controller: _tabController,
-              indicatorColor: const Color(0xFFE07A2F),
-              labelColor: sectionAccent,
-              unselectedLabelColor: sectionTextMuted,
-              tabs: [
-                const Tab(
-                  icon: Icon(Icons.history, size: 18),
-                  text: 'History',
-                ),
-                Tab(
-                  icon: const Icon(Icons.verified_outlined, size: 18),
-                  text: _settledReady && _settledItems.isNotEmpty
-                      ? 'Settled (${_settledItems.length})'
-                      : 'Settled',
-                ),
-              ],
-            ),
-          ),
         ),
         body: ResponsiveBody(
           child: Consumer<PaymentHistoryViewModel>(
@@ -215,16 +233,54 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
 
             final tabItems = _currentTabItems(model);
             final tabTotal = _sumTotals(tabItems);
+            final tabCount = _countBills(tabItems);
 
             return Column(
               children: [
+                TabBar(
+                  controller: _tabController,
+                  indicatorColor: const Color(0xFFE07A2F),
+                  labelColor: sectionAccent,
+                  unselectedLabelColor: sectionTextMuted,
+                  tabs: [
+                    const Tab(
+                      icon: Icon(Icons.history, size: 18),
+                      text: 'History',
+                    ),
+                    Tab(
+                      icon: const Icon(Icons.verified_outlined, size: 18),
+                      text: _settledReady && _settledItems.isNotEmpty
+                          ? 'Settled (${_settledItems.length})'
+                          : 'Settled',
+                    ),
+                  ],
+                ),
                 Padding(
-                  padding: SystemSafe.horizontalPadding(context, bottom: 8),
+                  padding: SystemSafe.horizontalPadding(context, top: 8, bottom: 8),
                   child: ListSearchField(
                     controller: _searchController,
                     hintText: 'Search customer or invoice no…',
                     onChanged: (value) => setState(() => _searchQuery = value),
                   ),
+                ),
+                if (model.filter.isActive)
+                  Padding(
+                    padding: SystemSafe.horizontalPadding(context, bottom: 8),
+                    child: _HistoryFilterChips(
+                      filter: model.filter,
+                      onClear: model.clearFilter,
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: InvoiceStatusFilterChips(
+                    selected: _statusFilter,
+                    onSelected: (v) => setState(() => _statusFilter = v),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: PaymentBookColorLegend(),
                 ),
                 Expanded(
                   child: TabBarView(
@@ -235,7 +291,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                     ],
                   ),
                 ),
-                _buildTotalFooter(tabTotal, tabItems.length),
+                _buildTotalFooter(tabTotal, tabCount),
               ],
             );
           },
@@ -246,12 +302,19 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
   }
 
   Widget _buildHistoryList(PaymentHistoryViewModel model) {
-    final active = _filter(_activeItems(model.items));
+    var active = _filter(_activeItems(model.items));
+    if (_statusFilter != 'all') {
+      active = active
+          .where((inv) => inv.sectionKey == _statusFilter)
+          .toList(growable: false);
+    }
 
     return RefreshIndicator(
       color: const Color(0xFFE07A2F),
+      displacement: 28,
       onRefresh: () async {
-        await model.fetch(context, forceRefresh: true);
+        await model.fetch(context, forceRefresh: true, silent: true);
+        if (!mounted) return;
         await _reloadSettled(live: model.items);
       },
       child: active.isEmpty
@@ -296,7 +359,6 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                   ),
                   child: InvoiceListCard(
                     invoice: item,
-                    statusValue: item.displayPaymentHistoryStatus,
                     onTap: () => openInvoiceDetail(context, item),
                   ),
                 );
@@ -306,12 +368,19 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
   }
 
   Widget _buildSettledList(PaymentHistoryViewModel model) {
-    final settled = _filter(_settledItems);
+    var settled = _filter(_settledItems);
+    if (_statusFilter != 'all') {
+      settled = settled
+          .where((inv) => inv.sectionKey == _statusFilter)
+          .toList(growable: false);
+    }
 
     return RefreshIndicator(
       color: const Color(0xFFE07A2F),
+      displacement: 28,
       onRefresh: () async {
-        await model.fetch(context, forceRefresh: true);
+        await model.fetch(context, forceRefresh: true, silent: true);
+        if (!mounted) return;
         await _reloadSettled(live: model.items);
       },
       child: settled.isEmpty
@@ -356,7 +425,6 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                     children: [
                       InvoiceListCard(
                         invoice: item,
-                        statusValue: item.displayPaymentHistoryStatus,
                         onTap: () => openInvoiceDetail(context, item),
                       ),
                       Positioned(
@@ -398,7 +466,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
               count == 1 ? 'Total (1 bill)' : 'Total ($count bills)',
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 13,
+                fontSize: 15,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -407,7 +475,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
             InvoiceSummaryModel.formatMoney(total),
             style: const TextStyle(
               color: Color(0xFFE07A2F),
-              fontSize: 16,
+              fontSize: 18,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -436,7 +504,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                 Text(
                   label,
                   style: const TextStyle(
-                    color: sectionText,
+                    color: Colors.white,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -449,11 +517,64 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                 Text(
                   label,
                   style: const TextStyle(
-                    color: sectionText,
+                    color: Colors.white,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
               ],
+      ),
+    );
+  }
+}
+
+class _HistoryFilterChips extends StatelessWidget {
+  const _HistoryFilterChips({
+    required this.filter,
+    required this.onClear,
+  });
+
+  final PaymentBookFilter filter;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = filter.chipParts;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+      decoration: BoxDecoration(
+        color: sectionCard,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: sectionCardBorder),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.filter_alt_outlined,
+            size: 14,
+            color: Color(0xFFE07A2F),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              parts.isEmpty ? 'Filtered' : parts.join(' · '),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: sectionText,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Clear filters',
+            onPressed: onClear,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+            icon: const Icon(Icons.close, size: 18, color: sectionText),
+          ),
+        ],
       ),
     );
   }

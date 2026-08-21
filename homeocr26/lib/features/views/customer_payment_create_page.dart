@@ -397,7 +397,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                               style: const TextStyle(
                                 color: sectionText,
                                 fontWeight: FontWeight.w700,
-                                fontSize: 15,
+                                fontSize: 17,
                               ),
                             ),
                           ),
@@ -412,7 +412,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: TextField(
                         controller: q,
-                        style: const TextStyle(color: Colors.white),
+                        style: const TextStyle(color: sectionText),
                         decoration: InputDecoration(
                           hintText: 'Search…',
                           hintStyle: TextStyle(
@@ -423,7 +423,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                             color: sectionTextMuted,
                           ),
                           filled: true,
-                          fillColor: Colors.white.withValues(alpha: 0.08),
+                          fillColor: sectionCard,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
                             borderSide: BorderSide.none,
@@ -449,7 +449,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                           '${filtered.length} of ${options.length}',
                           style: TextStyle(
                             color: sectionTextMuted,
-                            fontSize: 11,
+                            fontSize: 13,
                           ),
                         ),
                       ),
@@ -470,7 +470,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                               style: TextStyle(
                                 color: isSelected
                                     ? const Color(0xFFE07A2F)
-                                    : Colors.white,
+                                    : sectionText,
                                 fontWeight: isSelected
                                     ? FontWeight.w700
                                     : FontWeight.w500,
@@ -521,8 +521,8 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        title: const Text('Cancel payment?', style: TextStyle(color: Colors.white)),
+        backgroundColor: sectionCard,
+        title: const Text('Cancel payment?', style: TextStyle(color: sectionText)),
         content: const Text(
           'This will cancel/delete the draft on the website.',
           style: TextStyle(color: sectionTextMuted),
@@ -612,7 +612,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
           style: TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
         backgroundColor: sectionBg,
@@ -759,14 +759,14 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                           style: TextStyle(
                             color: sectionTextMuted,
                             fontWeight: FontWeight.w700,
-                            fontSize: 13,
+                            fontSize: 15,
                             letterSpacing: 0.5,
                           ),
                         ),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _invoiceSearchCtrl,
-                          style: const TextStyle(color: Colors.white),
+                          style: const TextStyle(color: sectionText),
                           decoration: InputDecoration(
                             hintText: 'Scan or Type Invoice',
                             hintStyle: TextStyle(
@@ -777,7 +777,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                               color: sectionTextMuted,
                             ),
                             filled: true,
-                            fillColor: Colors.white.withValues(alpha: 0.08),
+                            fillColor: sectionCard,
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(10),
                               borderSide: BorderSide.none,
@@ -917,9 +917,9 @@ class _HeaderBanner extends StatelessWidget {
                 Text(
                   title,
                   style: const TextStyle(
-                    color: sectionText,
+                    color: Colors.white,
                     fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                    fontSize: 15,
                     letterSpacing: 0.3,
                   ),
                 ),
@@ -928,7 +928,7 @@ class _HeaderBanner extends StatelessWidget {
                   subtitle,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.9),
-                    fontSize: 12,
+                    fontSize: 14,
                   ),
                 ),
               ],
@@ -940,8 +940,8 @@ class _HeaderBanner extends StatelessWidget {
               Text(
                 'OUTSTANDING BALANCE',
                 style: TextStyle(
-                  color: sectionTextMuted,
-                  fontSize: 9,
+                  color: Colors.white.withValues(alpha: 0.75),
+                  fontSize: 11,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -949,9 +949,9 @@ class _HeaderBanner extends StatelessWidget {
               Text(
                 '₹ ${ChequeClearanceModel.formatMoney(outstanding)}',
                 style: const TextStyle(
-                  color: sectionText,
+                  color: Colors.white,
                   fontWeight: FontWeight.w800,
-                  fontSize: 15,
+                  fontSize: 17,
                 ),
               ),
             ],
@@ -997,7 +997,7 @@ class _SectionCard extends StatelessWidget {
                 style: const TextStyle(
                   color: sectionText,
                   fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                  fontSize: 15,
                 ),
               ),
             ],
@@ -1033,14 +1033,14 @@ class _DropdownField extends StatelessWidget {
             labelText: label,
             labelStyle: TextStyle(color: sectionTextMuted),
             filled: true,
-            fillColor: Colors.white.withValues(alpha: 0.06),
+            fillColor: sectionCard,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
+              borderSide: BorderSide(color: sectionCardBorder),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
+              borderSide: BorderSide(color: sectionCardBorder),
             ),
             suffixIcon: const Icon(Icons.arrow_drop_down, color: sectionTextMuted),
           ),
@@ -1048,9 +1048,9 @@ class _DropdownField extends StatelessWidget {
             (value == null || value!.trim().isEmpty) ? 'Select…' : value!,
             style: TextStyle(
               color: (value == null || value!.trim().isEmpty)
-                  ? Colors.white54
-                  : Colors.white,
-              fontSize: 13,
+                  ? sectionTextMuted
+                  : sectionText,
+              fontSize: 15,
             ),
           ),
         ),
@@ -1082,21 +1082,21 @@ class _DateField extends StatelessWidget {
             labelText: label,
             labelStyle: TextStyle(color: sectionTextMuted),
             filled: true,
-            fillColor: Colors.white.withValues(alpha: 0.06),
+            fillColor: sectionCard,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
+              borderSide: BorderSide(color: sectionCardBorder),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
+              borderSide: BorderSide(color: sectionCardBorder),
             ),
             suffixIcon:
                 const Icon(Icons.calendar_today, color: sectionTextMuted, size: 18),
           ),
           child: Text(
             value,
-            style: const TextStyle(color: sectionText, fontSize: 13),
+            style: const TextStyle(color: sectionText, fontSize: 15),
           ),
         ),
       ),
@@ -1125,12 +1125,12 @@ class _AmountField extends StatelessWidget {
         inputFormatters: [
           FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
         ],
-        style: const TextStyle(color: Colors.white),
+        style: const TextStyle(color: sectionText),
         onChanged: onChanged,
         decoration: InputDecoration(
           labelText: label,
           prefixText: '₹ ',
-          prefixStyle: const TextStyle(color: Colors.white),
+          prefixStyle: const TextStyle(color: sectionText),
           labelStyle: TextStyle(color: sectionTextMuted),
           filled: true,
           fillColor: const Color(0xFF1B5E20).withValues(alpha: 0.25),
@@ -1169,14 +1169,14 @@ class _ReadRow extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 11,
+                fontSize: 13,
               ),
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(color: sectionText, fontSize: 12),
+              style: const TextStyle(color: sectionText, fontSize: 14),
             ),
           ),
         ],
@@ -1223,7 +1223,7 @@ class _CheckRow extends StatelessWidget {
               Expanded(
                 child: Text(
                   label,
-                  style: const TextStyle(color: sectionText, fontSize: 12),
+                  style: const TextStyle(color: sectionText, fontSize: 14),
                 ),
               ),
             ],
@@ -1245,7 +1245,7 @@ class _InvoiceMiniCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: sectionCard,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+        border: Border.all(color: sectionCardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1255,7 +1255,7 @@ class _InvoiceMiniCard extends StatelessWidget {
             style: const TextStyle(
               color: sectionText,
               fontWeight: FontWeight.w700,
-              fontSize: 13,
+              fontSize: 15,
             ),
           ),
           const SizedBox(height: 6),
@@ -1265,7 +1265,7 @@ class _InvoiceMiniCard extends StatelessWidget {
             '  ·  ${invoice.status ?? '—'}',
             style: TextStyle(
               color: sectionTextMuted,
-              fontSize: 11,
+              fontSize: 13,
             ),
           ),
         ],
@@ -1299,7 +1299,7 @@ class _ActionButton extends StatelessWidget {
         ),
         child: Text(
           label,
-          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
         ),
       ),
     );

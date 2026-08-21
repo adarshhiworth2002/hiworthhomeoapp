@@ -11,9 +11,8 @@ import '../../viewModels/net_amount_viewmodel.dart';
 import '../../viewModels/payment_book_viewmodel.dart';
 import '../../viewModels/payment_history_viewmodel.dart';
 import '../../viewModels/stock_viewmodel.dart';
-import 'cheque_clearance_service.dart';
+import 'invoice_b2b_index.dart';
 import 'odoo_rpc_helper.dart';
-import 'payment_book_service.dart';
 import 'payment_history_service.dart';
 
 /// Prefetches data for all home tiles after login / live sync.
@@ -58,12 +57,6 @@ class HomePrefetchService {
     if (sessionId == null || sessionId.isEmpty) return;
 
     if (forceRefresh) {
-      PaymentHistoryService.clearCache();
-      PaymentBookService.clearCache();
-      ChequeClearanceService.clearCache();
-      CustomerInvoiceViewModel.clearGlobalCache();
-      EmployeePerformanceViewModel.clearGlobalCache();
-      StockViewModel.clearGlobalCache();
       if (includeNetAmount) {
         netAmountViewModel?.clearInstanceCache();
       }
@@ -75,11 +68,14 @@ class HomePrefetchService {
         login.loginEmail!.isNotEmpty &&
         login.loginPassword != null &&
         login.loginPassword!.isNotEmpty) {
-      await OdooRpcHelper.cachedWebSessionId(
+      final webSid = await OdooRpcHelper.cachedWebSessionId(
         db: LoginViewmodel.dbName,
         login: login.loginEmail!,
         password: login.loginPassword!,
       );
+      if (webSid != null && webSid.isNotEmpty) {
+        unawaited(InvoiceB2bIndex.load(webSid));
+      }
     }
 
     if (!context.mounted) return;
@@ -93,11 +89,11 @@ class HomePrefetchService {
         ),
       CustomerInvoiceViewModel.prefetchCatalog(
         context,
-        forceRefresh: forceRefresh,
+        forceRefresh: false,
       ),
       PaymentHistoryViewModel.prefetch(
         context,
-        forceRefresh: forceRefresh,
+        forceRefresh: forceRefresh && !PaymentHistoryService.hasAnyCache,
       ),
       PaymentBookViewModel.prefetch(
         context,

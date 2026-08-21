@@ -8,17 +8,23 @@ import 'package:provider/provider.dart';
 
 import '../../models/invoice_summary_model.dart';
 import '../../models/stock_item_model.dart';
+import '../../viewModels/customer_invoice_viewmodel.dart';
 import '../../viewModels/login_viewmodel.dart';
 import '../services/WebApi/web_api_impl.dart';
 import '../services/api_request_helper.dart';
 import '../services/api_response_helper.dart';
 import '../services/bill_name_store.dart';
+import '../services/calendar_date.dart';
 import '../services/endPoints.dart';
 import '../services/invoice_calc_helper.dart';
 import '../services/invoice_draft_helper.dart';
 import '../services/invoice_helper.dart';
 import '../services/invoice_stock_restore_helper.dart';
+import '../services/live_data_sync.dart';
 import '../services/odoo_rpc_helper.dart';
+import '../services/payment_book_service.dart';
+import '../services/payment_history_service.dart';
+import '../services/stock_date_parser.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import '../../models/qr_model.dart';
@@ -126,10 +132,21 @@ class _BillLine {
   String qty = '';
   String mrp = '';
   String discount = '';
+  /// Tax-inclusive trade price (MRP − line discount).
+  String unitTp = '';
+  /// Tax-exclusive unit price.
   String unitP = '';
   String tax = '';
   String hsn = '';
   String rack = '';
+
+  double get taxAmtValue {
+    final tp = InvoiceCalcHelper.parseNum(unitTp);
+    final up = InvoiceCalcHelper.parseNum(unitP);
+    if (tp <= 0) return 0;
+    final diff = tp - up;
+    return diff < 0 ? 0 : diff;
+  }
 
   /// Set when this line was added via QR / add_to_invoice (stock already deducted).
   bool serverCommitted = false;
@@ -137,6 +154,10 @@ class _BillLine {
   double serverCommittedQty = 0;
   /// True when QR-added during this page session (restore on Close without Save).
   bool addedThisSession = false;
+  /// True only when [OdooRpcHelper.addStockLineToCustomerInvoice] deducted
+  /// `item_qty`. Flutter `add_to_invoice` leaves `item_qty` alone and Odoo
+  /// restores sellable `stock` on unlink — bumping `item_qty` then double-counts.
+  bool rpcAdjustedItemQty = false;
   /// `qr_data` token used by add_to_invoice (barcode preferred).
   String? addQrData;
   /// Alternate token (UID) for restore retries.
@@ -195,16 +216,20 @@ class _BillLine {
     _LineTemplate t, {
     bool preservePotency = false,
     bool preserveProduct = false,
+    bool preserveCompany = false,
+    bool preservePack = false,
   }) {
     final keptPotency = potency;
     final keptProduct = product;
+    final keptCompany = company;
+    final keptPack = pack;
     if (!preserveProduct && t.product != null) product = t.product;
     if (!preservePotency && t.potency != null) potency = t.potency;
-    if (t.company != null) company = t.company;
+    if (!preserveCompany && t.company != null) company = t.company;
     if (t.batch != null) batch = t.batch;
     if (t.manuf != null) manuf = t.manuf;
     if (t.expiry != null) expiry = t.expiry;
-    if (t.pack != null) pack = t.pack;
+    if (!preservePack && t.pack != null) pack = t.pack;
     if (t.group != null) group = t.group;
     if (t.mrp != null) mrp = t.mrp!;
     if (t.tax != null) tax = t.tax!;
@@ -212,6 +237,8 @@ class _BillLine {
     if (t.rack != null) rack = t.rack!;
     if (preserveProduct) product = keptProduct;
     if (preservePotency) potency = keptPotency;
+    if (preserveCompany) company = keptCompany;
+    if (preservePack) pack = keptPack;
     revision++;
   }
 
@@ -227,6 +254,8 @@ class _BillLine {
     tax = '';
     hsn = '';
     rack = '';
+    unitTp = '';
+    unitP = '';
     revision++;
   }
 }
@@ -360,6 +389,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   bool _billKept = false;
   /// True once add_to_invoice has committed products to [_invoiceNumber].
   bool _invoiceCommittedOnServer = false;
+  /// Empty Odoo draft was created this session (delete on discard, not keep as draft).
+  bool _draftCreatedThisSession = false;
   /// Odoo move id for this bill (from add_to_invoice).
   int? _serverInvoiceId;
   InvoiceCalcResult _totals = InvoiceCalcResult.zero;
@@ -367,6 +398,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   int? _editingLineIndex;
   /// Required field labels to highlight in red on the expanded line.
   Set<String> _lineRequiredErrors = {};
+  double? _customerAdvance;
+  double? _customerOldBalance;
 
   List<_NamedOption> _customers = [];
   List<_NamedOption> _doctors = [];
@@ -399,21 +432,44 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   /// Matches website selection; Amount is shown as Rupees.
   static const _discountTypes = ['Percentage', 'Rupees'];
 
+  static String _normalizePaymentMode(String? raw) {
+    final pay = (raw ?? '').trim();
+    if (pay.isEmpty) return 'Cash';
+    final lower = pay.toLowerCase();
+    return _paymentModes.firstWhere(
+      (m) => m.toLowerCase() == lower || lower.contains(m.toLowerCase()),
+      orElse: () => 'Cash',
+    );
+  }
+
+  static String _normalizeGstType(String? raw) {
+    final g = (raw ?? '').trim().toLowerCase();
+    if (g.isEmpty) return 'GST MINUS';
+    if (g.contains('plus')) return 'GST PLUS';
+    if (g.contains('igst')) return 'IGST';
+    if (g.contains('no')) return 'No GST';
+    return 'GST MINUS';
+  }
+
   @override
   void initState() {
     super.initState();
     final now = DateTime.now();
-    _invoiceDateDisplay =
-        '${now.month.toString().padLeft(2, '0')}/${now.day.toString().padLeft(2, '0')}/${now.year}';
+    _invoiceDateDisplay = CalendarDate.dmy(now);
     final edit = widget.editInvoice;
     if (edit != null) {
       _applyEditInvoice(edit);
     } else {
-      final numbers = <String>[
-        ...widget.existingNumbers,
-        ...widget.existingInvoices.map((e) => e.displayNumber),
-      ];
-      _invoiceNumber = InvoiceHelper.nextInvoiceNumber(numbers);
+      _invoiceNumber = InvoiceHelper.nextFromLatest(
+        ids: widget.existingInvoices.map((e) => e.id),
+        numbers: widget.existingInvoices.map((e) => e.displayNumber),
+      );
+      if (_invoiceNumber.isEmpty) {
+        _invoiceNumber = InvoiceHelper.nextInvoiceNumber([
+          ...widget.existingNumbers,
+          ...widget.existingInvoices.map((e) => e.displayNumber),
+        ]);
+      }
     }
     _seedFromExistingInvoices();
     _discountRateCtrl.addListener(_recalculate);
@@ -427,6 +483,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       _loadMasterDropdowns();
       _loadDiscountCategories();
       _loadStockSuggestionPools();
+      _loadNextInvoiceNumber();
       _recalculate();
     });
   }
@@ -456,19 +513,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     }
     final pay = (inv.paymentMode ?? '').trim();
     if (pay.isNotEmpty) {
-      final lower = pay.toLowerCase();
-      _paymentMode = _paymentModes.firstWhere(
-        (m) => m.toLowerCase() == lower || lower.contains(m.toLowerCase()),
-        orElse: () => 'Cash',
-      );
+      _paymentMode = _normalizePaymentMode(pay);
     }
     if (inv.gstType != null && inv.gstType!.trim().isNotEmpty) {
-      final g = inv.gstType!.trim().toLowerCase();
-      _gstType = g.contains('plus')
-          ? 'GST PLUS'
-          : (g.contains('igst')
-              ? 'IGST'
-              : (g.contains('no') ? 'No GST' : 'GST MINUS'));
+      _gstType = _normalizeGstType(inv.gstType);
     }
     _expiryMedicineBill = inv.expiryMedicineBill;
     final discCat = (inv.discountCategory ?? '').trim();
@@ -493,7 +541,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     _remarksCtrl.text = (inv.remarks ?? '').trim();
     _verifiedByCtrl.text = (inv.verifiedBy ?? '').trim();
     if (inv.invoiceDate != null && inv.invoiceDate!.trim().isNotEmpty) {
-      _invoiceDateDisplay = inv.invoiceDate!.trim();
+      final parsed = CalendarDate.parse(inv.invoiceDate);
+      _invoiceDateDisplay =
+          parsed != null ? CalendarDate.dmy(parsed) : inv.invoiceDate!.trim();
     }
 
     _lines = inv.lines.map((l) {
@@ -527,6 +577,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     _recalcAllLinePrices();
     // Existing draft lines open collapsed (tap Edit for full form).
     _editingLineIndex = null;
+    if (_customer != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_loadCustomerBalances(_customer!));
+      });
+    }
   }
 
   @override
@@ -572,14 +627,26 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   static String _formatLineNum(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
 
-  /// Website: Unit TP / Unit P = MRP minus line discount (%); not tax-inclusive.
+  /// Website: Unit TP = MRP − Dis%; Unit P = exclusive of line tax.
+  /// Example: Unit TP 100 @ 5% → Unit P 95.24, Tax Amt 4.76.
   void _recalcLinePrices(_BillLine line) {
     final mrp = InvoiceCalcHelper.parseNum(line.mrp);
-    if (mrp <= 0) return;
+    if (mrp <= 0) {
+      line.unitTp = '';
+      line.unitP = '';
+      line.revision++;
+      return;
+    }
     final disc = InvoiceCalcHelper.parseNum(line.discount);
-    final unitTp =
-        disc > 0 ? mrp * (1 - disc / 100.0) : mrp;
-    line.unitP = _formatLineNum(unitTp);
+    final unitTp = disc > 0 ? mrp * (1 - disc / 100.0) : mrp;
+    line.unitTp = _formatLineNum(unitTp);
+    final taxPct = InvoiceCalcHelper.parseNum(line.tax);
+    if (taxPct > 0) {
+      final exclusive = unitTp * 100.0 / (100.0 + taxPct);
+      line.unitP = _formatLineNum(exclusive);
+    } else {
+      line.unitP = line.unitTp;
+    }
     line.revision++;
   }
 
@@ -707,6 +774,21 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       });
     } catch (e) {
       if (kDebugMode) debugPrint('partner names load: $e');
+    }
+  }
+
+  Future<void> _loadNextInvoiceNumber() async {
+    if (widget.editInvoice != null) return;
+    try {
+      final sid = await _odooSessionId();
+      if (sid.isEmpty || !mounted) return;
+      final next = await OdooRpcHelper.peekNextCustomerInvoiceNumber(sid);
+      if (!mounted) return;
+      if (next == null || next.isEmpty) return;
+      if (next == _invoiceNumber) return;
+      setState(() => _invoiceNumber = next);
+    } catch (e) {
+      if (kDebugMode) debugPrint('load next invoice number: $e');
     }
   }
 
@@ -911,6 +993,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       _addressCtrl.text = selected.address ?? '';
       _phoneCtrl.text = selected.phone ?? '';
       _paymentMode = payment;
+      _customerAdvance = null;
+      _customerOldBalance = null;
       if (selected.name.isNotEmpty &&
           !_customers.any(
             (c) => c.name.toLowerCase() == selected.name.toLowerCase(),
@@ -932,6 +1016,31 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     });
     // Filling address must not steal the caret onto that field.
     _dismissKeyboardAfterFrame();
+    unawaited(_loadCustomerBalances(selected));
+  }
+
+  Future<void> _loadCustomerBalances(_NamedOption customer) async {
+    final name = customer.name.trim();
+    if (name.isEmpty) return;
+    try {
+      final sid = await _odooSessionId();
+      if (sid.isEmpty) return;
+      final hit = await OdooRpcHelper.readCustomerFormBalances(
+        sid,
+        customerName: name,
+        moveIds: [
+          if (_serverInvoiceId != null) _serverInvoiceId!,
+          if (widget.editInvoice?.id != null) widget.editInvoice!.id!,
+        ],
+      );
+      if (!mounted || hit == null) return;
+      setState(() {
+        _customerAdvance = hit.advance;
+        _customerOldBalance = hit.oldBalance;
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('load customer balances: $e');
+    }
   }
 
   void _mergeTemplateIntoPools(_LineTemplate t) {
@@ -965,6 +1074,29 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     }
     _mergeTemplateIntoPools(t);
     _templates.add(t);
+  }
+
+  Future<void> _applyWebsiteStockId(_BillLine line) async {
+    final sid = await _odooSessionId();
+    if (sid.isEmpty) return;
+    final row = await OdooRpcHelper.findEntryStockRow(
+      sid,
+      stockDisplayId: line.stockDisplayId,
+      entryStockId: line.entryStockId,
+      medicine: line.product,
+      batch: line.batch,
+      potency: line.potency,
+    );
+    if (row == null || !mounted) return;
+    final entryRaw = row['id'];
+    final entryId = entryRaw is int
+        ? entryRaw
+        : int.tryParse('$entryRaw');
+    if (entryId == null || entryId <= 0) return;
+    setState(() {
+      line.stockDisplayId = entryId;
+      line.entryStockId = entryId;
+    });
   }
 
   String _normField(String? value) =>
@@ -1041,6 +1173,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         return;
       }
       setState(() => _applyStockToLine(line, match, preservePotency: true));
+      await _applyWebsiteStockId(line);
       _recalculate();
       return;
     }
@@ -1451,8 +1584,39 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       _addOpt(_products, _productKeys, name);
     });
 
+    await _applyWebsiteStockId(line);
     await _enrichOptionsForProduct(line.product);
     if (!mounted) return;
+    _recalculate();
+  }
+
+  /// Full master list for Company / Pack (all API names + free-text create).
+  Future<void> _pickMasterNameForLine(
+    _BillLine line, {
+    required String title,
+    required String? Function() readValue,
+    required void Function(String? v) assign,
+    required List<String> pool,
+    required Set<String> poolKeys,
+  }) async {
+    if (pool.length < 30) {
+      await _loadMasterDropdowns();
+      if (!mounted) return;
+    }
+    final picked = await _pickLineValue(
+      title: title,
+      options: List<String>.from(pool),
+      selected: readValue(),
+      rememberInto: pool,
+      rememberKeys: poolKeys,
+      matchContains: true,
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      assign(picked.isEmpty ? null : picked);
+      line.revision++;
+    });
+    // Do not re-sync from stock — that overwrites a manually chosen Company/Pack.
     _recalculate();
   }
 
@@ -1531,11 +1695,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       line.revision++;
     });
 
-    // Website: potency → Group / Tax / HSN only; company/pack sync full stock row.
+    // Website: potency → Group / Tax / HSN only.
+    // Company / Pack stay as the user picked (stock sync would overwrite them).
     if (title == 'Potency') {
       await _syncLineFromStock(line, potencyOnly: true);
-    } else if (title == 'Company' || title == 'Pack') {
-      await _syncLineFromStock(line);
     } else {
       _recalculate();
     }
@@ -1591,10 +1754,12 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     QrData data,
     double qty, {
     int? invoiceId,
+    bool rpcAdjustedItemQty = false,
   }) {
     line.serverCommitted = true;
     line.serverCommittedQty += qty;
     line.addedThisSession = true;
+    if (rpcAdjustedItemQty) line.rpcAdjustedItemQty = true;
     if (invoiceId != null) {
       line.serverInvoiceId = invoiceId;
       _serverInvoiceId = invoiceId;
@@ -1603,11 +1768,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (primary != null && primary.isNotEmpty) {
       line.addQrData ??= primary;
     }
-    if (data.productId != null) {
-      line.stockDisplayId ??= data.productId;
-    }
     if (data.stockEntryId != null) {
+      line.stockDisplayId = data.stockDisplayId ?? data.stockEntryId;
       line.entryStockId ??= data.stockEntryId;
+    } else if (data.stockDisplayId != null) {
+      line.stockDisplayId ??= data.stockDisplayId;
+    } else if (data.productId != null) {
+      line.stockDisplayId ??= data.productId;
     }
     final alt = _alternateAddQrToken(data, line.addQrData);
     if (alt != null && alt.isNotEmpty) {
@@ -1619,6 +1786,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     QrData data,
     double qty, {
     int? invoiceId,
+    bool rpcAdjustedItemQty = false,
   }) {
     String? money(double? v) {
       if (v == null) return null;
@@ -1667,7 +1835,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         if (line.discount.trim().isEmpty && discount != null) {
           line.discount = discount;
         }
-        _markLineServerCommitted(line, data, qty, invoiceId: invoiceId);
+        _markLineServerCommitted(
+          line,
+          data,
+          qty,
+          invoiceId: invoiceId,
+          rpcAdjustedItemQty: rpcAdjustedItemQty,
+        );
         line.revision++;
       } else {
         final line = _BillLine();
@@ -1678,14 +1852,26 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
               ? null
               : data.company?.trim(),
           batch: batch?.isEmpty == true ? null : batch,
-          manuf: manuf == null || manuf.isEmpty ? null : manuf,
-          expiry: data.expiry?.trim().isEmpty == true ? null : data.expiry?.trim(),
+          manuf: () {
+            final raw = manuf == null || manuf.isEmpty ? null : manuf;
+            if (raw == null) return null;
+            return StockDateParser.tryParse(raw) ?? raw;
+          }(),
+          expiry: () {
+            final raw = data.expiry?.trim().isEmpty == true
+                ? null
+                : data.expiry?.trim();
+            if (raw == null) return null;
+            return StockDateParser.tryParse(raw) ?? raw;
+          }(),
           pack: data.packing?.trim().isEmpty == true
               ? null
               : data.packing?.trim(),
           group: data.group?.trim().isEmpty == true ? null : data.group?.trim(),
           mrp: money(data.mrp),
-          tax: money(data.tax),
+          tax: money(
+            InvoiceCalcHelper.normalizeCustomerTaxPercent(data.tax),
+          ),
           hsn: data.hsn?.trim().isEmpty == true ? null : data.hsn?.trim(),
           rack: data.rack?.trim().isEmpty == true ? null : data.rack?.trim(),
         );
@@ -1693,13 +1879,87 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         line.qty = qtyText;
         if (discount != null) line.discount = discount;
         _recalcLinePrices(line);
-        _markLineServerCommitted(line, data, qty, invoiceId: invoiceId);
+        _markLineServerCommitted(
+          line,
+          data,
+          qty,
+          invoiceId: invoiceId,
+          rpcAdjustedItemQty: rpcAdjustedItemQty,
+        );
         _mergeTemplateIntoPools(t);
         _templates.add(t);
         _lines = [..._lines, line];
-        _editingLineIndex = null;
+        _editingLineIndex = _lines.length - 1;
       }
     });
+    _recalculate();
+    final target = existingIndex >= 0
+        ? existingIndex
+        : _lines.length - 1;
+    if (target >= 0 && target < _lines.length) {
+      if (existingIndex >= 0) {
+        setState(() => _editingLineIndex = target);
+      }
+      unawaited(_applyWebsiteStockId(_lines[target]));
+      unawaited(_enrichQrLine(_lines[target]));
+      unawaited(_reloadInvoiceHeaderAfterQr(invoiceId ?? _serverInvoiceId));
+    }
+  }
+
+  /// After QR add, pull invoice header (customer/address/…) from Odoo if set.
+  Future<void> _reloadInvoiceHeaderAfterQr(int? invoiceId) async {
+    final id = invoiceId;
+    if (id == null || id <= 0) return;
+    try {
+      final sid = await _odooSessionId();
+      if (sid.isEmpty) return;
+      final inv = await OdooRpcHelper.readPharmacyInvoice(sid, id);
+      if (!mounted || inv == null) return;
+      setState(() {
+        final cust = (inv.displayCustomer ?? '').trim();
+        if (cust.isNotEmpty &&
+            !InvoiceSummaryModel.isPlaceholderCustomerName(cust)) {
+          _customer = _NamedOption(
+            name: cust,
+            id: inv.pharmacyCustomerId,
+            address: inv.address,
+            phone: inv.phone,
+          );
+          if ((inv.address ?? '').trim().isNotEmpty) {
+            _addressCtrl.text = inv.address!.trim();
+          }
+          if ((inv.phone ?? '').trim().isNotEmpty) {
+            _phoneCtrl.text = inv.phone!.trim();
+          }
+        }
+        final doctor = (inv.doctor ?? '').trim();
+        if (doctor.isNotEmpty) {
+          _doctor = _NamedOption(name: doctor);
+        }
+        final pay = (inv.paymentMode ?? '').trim();
+        if (pay.isNotEmpty) {
+          _paymentMode = _normalizePaymentMode(pay);
+        }
+        if ((inv.gstType ?? '').trim().isNotEmpty) {
+          _gstType = _normalizeGstType(inv.gstType);
+        }
+        if ((inv.invoiceDate ?? '').trim().isNotEmpty) {
+          final parsed = CalendarDate.parse(inv.invoiceDate);
+          _invoiceDateDisplay =
+              parsed != null ? CalendarDate.dmy(parsed) : inv.invoiceDate!.trim();
+        }
+      });
+      if (_customer != null) unawaited(_loadCustomerBalances(_customer!));
+    } catch (e) {
+      if (kDebugMode) debugPrint('reload invoice header after QR: $e');
+    }
+  }
+
+  Future<void> _enrichQrLine(_BillLine line) async {
+    if (line.hasRequiredLineFields) return;
+    await _syncLineFromStock(line);
+    if (!mounted) return;
+    setState(() {});
     _recalculate();
   }
 
@@ -1709,7 +1969,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final result = await showModalBottomSheet<StockItemModel>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xff2c505c),
+      backgroundColor: sectionBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -1753,6 +2013,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
             String subtitle(StockItemModel item) {
               final parts = <String>[
+                if (item.stockDisplayId != null) 'ID ${item.stockDisplayId}',
                 if ((item.potency ?? '').trim().isNotEmpty) item.potency!.trim(),
                 if ((item.company ?? '').trim().isNotEmpty) item.company!.trim(),
                 if ((item.batch ?? '').trim().isNotEmpty) 'Batch ${item.batch!.trim()}',
@@ -1779,7 +2040,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                 style: TextStyle(
                                   color: sectionText,
                                   fontWeight: FontWeight.w700,
-                                  fontSize: 16,
+                                  fontSize: 18,
                                 ),
                               ),
                             ),
@@ -1794,7 +2055,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: TextField(
                           autofocus: true,
-                          style: const TextStyle(color: Colors.white),
+                          style: const TextStyle(color: sectionText),
                           decoration: InputDecoration(
                             hintText: 'Search stock medicines…',
                             hintStyle: TextStyle(
@@ -1805,7 +2066,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                               color: sectionTextMuted,
                             ),
                             filled: true,
-                            fillColor: Colors.white.withValues(alpha: 0.08),
+                            fillColor: sectionCard,
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(10),
                             ),
@@ -1867,7 +2128,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                               return ListTile(
                                 title: Text(
                                   name,
-                                  style: const TextStyle(color: Colors.white),
+                                  style: const TextStyle(color: sectionText),
                                 ),
                                 subtitle: sub.isEmpty
                                     ? null
@@ -1875,7 +2136,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                         sub,
                                         style: const TextStyle(
                                           color: sectionTextMuted,
-                                          fontSize: 12,
+                                          fontSize: 14,
                                         ),
                                       ),
                                 trailing: isSelected
@@ -1915,7 +2176,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final result = await showModalBottomSheet<_NamedOption>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xff2c505c),
+      backgroundColor: sectionBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -1954,7 +2215,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                 style: const TextStyle(
                                   color: sectionText,
                                   fontWeight: FontWeight.w700,
-                                  fontSize: 16,
+                                  fontSize: 18,
                                 ),
                               ),
                             ),
@@ -1965,7 +2226,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                   '${filtered.length}/${options.length}',
                                   style: TextStyle(
                                     color: sectionTextMuted,
-                                    fontSize: 12,
+                                    fontSize: 14,
                                   ),
                                 ),
                               ),
@@ -1980,7 +2241,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: TextField(
                           autofocus: true,
-                          style: const TextStyle(color: Colors.white),
+                          style: const TextStyle(color: sectionText),
                           decoration: InputDecoration(
                             hintText: 'Search or type to create…',
                             hintStyle: TextStyle(
@@ -1991,7 +2252,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                               color: sectionTextMuted,
                             ),
                             filled: true,
-                            fillColor: Colors.white.withValues(alpha: 0.08),
+                            fillColor: sectionCard,
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(10),
                             ),
@@ -2021,13 +2282,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                         title: Text(
                           'Clear selection',
                           style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.8),
+                            color: sectionTextMuted,
                           ),
                         ),
                         onTap: () =>
                             Navigator.pop(ctx, const _NamedOption(name: '')),
                       ),
-                      const Divider(color: Colors.white24),
+                      const Divider(color: sectionCardBorder),
                       Expanded(
                         child: filtered.isEmpty
                             ? Center(
@@ -2051,7 +2312,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                     title: Text(
                                       item.name,
                                       style:
-                                          const TextStyle(color: Colors.white),
+                                          const TextStyle(color: sectionText),
                                     ),
                                     trailing: isSelected
                                         ? const Icon(
@@ -2122,6 +2383,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   }
 
   Future<void> _openScanner() async {
+    if (_isPaidEdit) {
+      _toast('This bill is paid. Scanning is not allowed.');
+      return;
+    }
     FocusScope.of(context).unfocus();
     SystemChannels.textInput.invokeMethod('TextInput.hide');
 
@@ -2135,20 +2400,31 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final result = await AddToCustomerPage.showPopup(
       context,
       lockedInvoiceNumber: _invoiceNumber,
+      lockedInvoiceId: _serverInvoiceId,
     );
     if (result != null && mounted) {
       _invoiceCommittedOnServer = true;
-      if (result.invoiceId != null) _serverInvoiceId = result.invoiceId;
+      setState(() {
+        if (result.invoiceId != null) _serverInvoiceId = result.invoiceId;
+        final resolvedName = (result.invoiceName ?? '').trim();
+        if (resolvedName.isNotEmpty) {
+          _invoiceNumber = resolvedName;
+        }
+      });
       _addOrUpdateLineFromQr(
         result.data,
         result.qty,
-        invoiceId: result.invoiceId,
+        invoiceId: result.invoiceId ?? _serverInvoiceId,
+        rpcAdjustedItemQty: result.rpcAdjustedItemQty,
       );
+      unawaited(LiveDataSync.syncNow());
     }
   }
 
   bool get _isCreditPayment =>
       (_paymentMode ?? '').trim().toLowerCase().contains('credit');
+
+  bool get _isPaidEdit => widget.editInvoice?.sectionKey == 'paid';
 
   /// True when this bill already exists as an Odoo `account.move`.
   bool get _hasServerInvoice =>
@@ -2201,11 +2477,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         _invoiceNumber = draft.invoiceNumber;
         _serverInvoiceId = draft.invoiceId;
         _invoiceCommittedOnServer = true;
+        _draftCreatedThisSession = true;
       });
     } else {
       _invoiceNumber = draft.invoiceNumber;
       _serverInvoiceId = draft.invoiceId;
       _invoiceCommittedOnServer = true;
+      _draftCreatedThisSession = true;
     }
 
     return true;
@@ -2255,6 +2533,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
               potency: line.potency,
             );
 
+      if (stockRow != null) {
+        final display = OdooRpcHelper.displayIdFromEntryStockRow(stockRow);
+        if (display != null) line.stockDisplayId = display;
+      }
+
       String? token = existingToken.isNotEmpty ? existingToken : null;
       if (token == null && stockRow != null) {
         for (final key in const [
@@ -2281,6 +2564,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           'qr_data': token,
           'quantity': qtyValue,
         };
+        final taxPct = InvoiceCalcHelper.normalizeCustomerTaxPercent(
+          InvoiceCalcHelper.parseNum(line.tax),
+        );
+        params['tax_percent'] = taxPct;
+        params['tax'] = taxPct;
+        params['gst'] = taxPct;
+        params['gst_percent'] = taxPct;
         if (kDebugMode) {
           debugPrint('save add_to_invoice line ${i + 1}: $params');
         }
@@ -2366,6 +2656,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       line.serverCommitted = true;
       line.serverCommittedQty = qty;
       line.addedThisSession = true;
+      line.rpcAdjustedItemQty = true;
       line.serverInvoiceId = moveId;
       _invoiceCommittedOnServer = true;
     }
@@ -2723,6 +3014,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       batch: line.batch,
       potency: line.potency,
       stockEntryId: line.entryStockId,
+      restoreItemQty: line.rpcAdjustedItemQty,
       login: login.loginEmail,
       password: login.loginPassword,
       db: LoginViewmodel.dbName,
@@ -2737,11 +3029,64 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
             l.serverCommittedQty > 0,
       );
 
-  /// Close without Save → restore stock for QR lines added this session.
+  bool get _shouldWarnBeforeLeave {
+    if (_billKept || widget.editInvoice != null) return false;
+    return _draftCreatedThisSession ||
+        _hasUnsavedServerLines ||
+        _lines.isNotEmpty ||
+        _customer != null ||
+        _addressCtrl.text.trim().isNotEmpty ||
+        _phoneCtrl.text.trim().isNotEmpty ||
+        _remarksCtrl.text.trim().isNotEmpty;
+  }
+
+  Future<bool> _confirmLeaveWithoutSave() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: sectionBg,
+        title: const Text(
+          'Leave without saving?',
+          style: TextStyle(color: sectionText, fontWeight: FontWeight.w700),
+        ),
+        content: const Text(
+          'This bill will not be saved as a draft. Unsaved lines and a new bill number will be discarded.',
+          style: TextStyle(color: sectionText),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Stay', style: TextStyle(color: sectionTextMuted)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Discard',
+              style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
+  /// Close without Save → restore stock; delete session draft (do not keep draft).
   Future<void> _discardAndClose() async {
     if (_removingLine || _saving) return;
 
-    if (!_hasUnsavedServerLines) {
+    if (_shouldWarnBeforeLeave) {
+      final ok = await _confirmLeaveWithoutSave();
+      if (!ok || !mounted) return;
+    }
+
+    final draftId = _serverInvoiceId;
+    final shouldDeleteDraft = widget.editInvoice == null &&
+        draftId != null &&
+        draftId > 0 &&
+        (_draftCreatedThisSession || _hasUnsavedServerLines);
+
+    if (!_hasUnsavedServerLines && !_draftCreatedThisSession) {
       if (mounted) Navigator.of(context).pop(false);
       return;
     }
@@ -2763,8 +3108,35 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       }
       if (!allOk) {
         _toast('Could not restore all stock. Check the bill and try again.');
-        return;
+        // Still attempt draft delete so the bill does not linger on the list.
       }
+
+      var deleted = false;
+      if (shouldDeleteDraft && draftId != null) {
+        final sid = await _odooSessionId();
+        if (sid.isNotEmpty) {
+          deleted = await OdooRpcHelper.deleteCustomerInvoiceDraft(
+            sid,
+            draftId,
+          );
+          if (kDebugMode) {
+            debugPrint(
+              'discard draft #$draftId deleted=$deleted',
+            );
+          }
+        }
+        // Evict from local caches even if unlink raced with live sync.
+        PaymentHistoryService.removeInvoice(draftId);
+        PaymentBookService.removeInvoice(draftId);
+        CustomerInvoiceViewModel.evictInvoice(draftId);
+        // Force next home fetch to hit the server (avoid stale draft ghost).
+        PaymentBookService.clearCache();
+        PaymentHistoryService.clearCache();
+        if (!deleted) {
+          _toast('Bill may still appear until the next refresh.');
+        }
+      }
+
       if (!mounted) return;
       setState(() {
         _lines = [
@@ -2774,8 +3146,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         if (_lines.every((l) => !l.serverCommitted)) {
           _invoiceCommittedOnServer = false;
         }
+        _draftCreatedThisSession = false;
       });
       Navigator.of(context).pop(false);
+      unawaited(LiveDataSync.syncNow());
     } catch (e) {
       if (kDebugMode) debugPrint('discard_and_close err: $e');
       _toast('Could not restore stock while closing. Try again.');
@@ -2787,12 +3161,15 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: !_hasUnsavedServerLines && !_removingLine && !_saving,
+      canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
-        if (didPop || _billKept) return;
-        if (_hasUnsavedServerLines) {
-          await _discardAndClose();
+        if (didPop) return;
+        if (_billKept) {
+          if (mounted) Navigator.of(context).pop(true);
+          return;
         }
+        if (_removingLine || _saving) return;
+        await _discardAndClose();
       },
       child: Scaffold(
       backgroundColor: sectionBg,
@@ -2805,28 +3182,38 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           style: const TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w600,
-            fontSize: 16,
+            fontSize: 18,
           ),
         ),
         actions: [
-          IconButton(
-            tooltip: 'Scan QR into this bill',
-            onPressed: _saving || _removingLine ? null : _openScanner,
-            icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
-          ),
+          if (!_isPaidEdit)
+            IconButton(
+              tooltip: 'Scan QR into this bill',
+              onPressed: _saving || _removingLine ? null : _openScanner,
+              icon: const Icon(Icons.qr_code_scanner, color: sectionAccent),
+            ),
         ],
       ),
       body: ResponsiveBody(
       child: ListView(
         padding: SystemSafe.listPadding(context, extraBottom: 110),
         children: [
-          const Row(
+          Row(
             children: [
-              _StatusChip(label: 'Draft', selected: true),
-              SizedBox(width: 8),
-              _StatusChip(label: 'Open', selected: false),
-              SizedBox(width: 8),
-              _StatusChip(label: 'Paid', selected: false),
+              _StatusChip(
+                label: 'Draft',
+                selected: (widget.editInvoice?.sectionKey ?? 'draft') == 'draft',
+              ),
+              const SizedBox(width: 8),
+              _StatusChip(
+                label: 'Open',
+                selected: widget.editInvoice?.sectionKey == 'open',
+              ),
+              const SizedBox(width: 8),
+              _StatusChip(
+                label: 'Paid',
+                selected: _isPaidEdit,
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -2836,7 +3223,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
               style: TextStyle(
                 color: Color(0xFFE53935),
                 fontWeight: FontWeight.w800,
-                fontSize: 15,
+                fontSize: 17,
                 letterSpacing: 0.3,
               ),
             ),
@@ -2850,13 +3237,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                   style: const TextStyle(
                     color: Color(0xFFE53935),
                     fontWeight: FontWeight.w800,
-                    fontSize: 16,
+                    fontSize: 18,
                   ),
                 ),
               ),
               Text(
                 _invoiceDateDisplay,
-                style: const TextStyle(color: sectionTextMuted, fontSize: 13),
+                style: const TextStyle(color: sectionTextMuted, fontSize: 15),
               ),
             ],
           ),
@@ -3037,7 +3424,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                 'Expiry Medicine Bill',
                                 style: TextStyle(
                                   color: sectionTextMuted,
-                                  fontSize: 13,
+                                  fontSize: 15,
                                 ),
                               ),
                             ),
@@ -3065,7 +3452,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                           child: Text(
                             'No lines yet. Add a line or scan a product.',
                             style:
-                                TextStyle(color: sectionTextMuted, fontSize: 12),
+                                TextStyle(color: sectionTextMuted, fontSize: 14),
                           ),
                         ),
                       ..._lines.asMap().entries.map((e) {
@@ -3097,23 +3484,21 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                           onPick: _pickLineValue,
                           onPickProduct: () => _pickProductForLine(line),
                           onPickPotency: () => _pickPotencyForLine(line),
-                          onPickCompany: () => _pickRelatedForLine(
+                          onPickCompany: () => _pickMasterNameForLine(
                             line,
                             title: 'Company',
-                            readField: (s) => s.company,
-                            assignField: (v) => line.company = v,
+                            readValue: () => line.company,
+                            assign: (v) => line.company = v,
                             pool: _companies,
                             poolKeys: _companyKeys,
-                            fallbackOptions: List<String>.from(_companies),
                           ),
-                          onPickPack: () => _pickRelatedForLine(
+                          onPickPack: () => _pickMasterNameForLine(
                             line,
                             title: 'Pack',
-                            readField: (s) => s.packing,
-                            assignField: (v) => line.pack = v,
+                            readValue: () => line.pack,
+                            assign: (v) => line.pack = v,
                             pool: _packs,
                             poolKeys: _packKeys,
-                            fallbackOptions: List<String>.from(_packs),
                           ),
                           onPickGroup: () => _pickRelatedForLine(
                             line,
@@ -3211,7 +3596,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                   }
                                   _DiscountCategoryOption? match;
                                   for (final c in _discountCategories) {
-                                    if (c.name.toLowerCase() == v.toLowerCase()) {
+                                    if (c.name.toLowerCase() ==
+                                        v.toLowerCase()) {
                                       match = c;
                                       break;
                                     }
@@ -3254,7 +3640,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                         ),
                       ),
                       const _ReadRow('Billed By', 'Administrator'),
-                      const _ReadRow('Status', 'Draft'),
+                      _ReadRow(
+                        'Status',
+                        widget.editInvoice?.displayStatus ?? 'Draft',
+                      ),
                       _TextField(
                         label: 'Verified By',
                         controller: _verifiedByCtrl,
@@ -3280,6 +3669,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                       _MoneyRow('Total', _totals.total, emphasize: true),
                       _MoneyRow('Tax Amount', _totals.taxAmount),
                       _MoneyRow('Balance', _totals.balance, emphasize: true),
+                      if (_customerOldBalance != null &&
+                          _customerOldBalance != 0)
+                        _MoneyRow('Old Balance', _customerOldBalance!),
+                      if (_customerAdvance != null && _customerAdvance != 0)
+                        _MoneyRow('Advance Amount', _customerAdvance!),
                     ],
                   ),
                 ),
@@ -3328,11 +3722,12 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
               Expanded(
                 child: OutlinedButton(
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
+                    foregroundColor: sectionText,
                     side: const BorderSide(color: sectionTextMuted),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
-                  onPressed: _saving || _removingLine ? null : _discardAndClose,
+                  onPressed:
+                      _saving || _removingLine ? null : _discardAndClose,
                   child: const Text('Close'),
                 ),
               ),
@@ -3442,6 +3837,8 @@ class _LineCardState extends State<_LineCard> {
   late final TextEditingController _disCtrl;
   late final TextEditingController _unitPCtrl;
   late final TextEditingController _taxCtrl;
+  String? _manufError;
+  String? _expiryError;
 
   @override
   void initState() {
@@ -3454,6 +3851,12 @@ class _LineCardState extends State<_LineCard> {
     _disFocus = FocusNode();
     _unitPFocus = FocusNode();
     _taxFocus = FocusNode();
+    _manufFocus.addListener(() {
+      if (!_manufFocus.hasFocus) _commitLineDate(widget.line, manuf: true);
+    });
+    _expiryFocus.addListener(() {
+      if (!_expiryFocus.hasFocus) _commitLineDate(widget.line, manuf: false);
+    });
     _manufCtrl = TextEditingController(text: line.manuf ?? '');
     _expiryCtrl = TextEditingController(text: line.expiry ?? '');
     _qtyCtrl = TextEditingController(text: line.qty);
@@ -3524,9 +3927,13 @@ class _LineCardState extends State<_LineCard> {
     final mrp = InvoiceCalcHelper.parseNum(line.mrp);
     final disc = InvoiceCalcHelper.parseNum(line.discount);
     final taxPct = InvoiceCalcHelper.parseNum(line.tax);
-    final unitTp = InvoiceCalcHelper.parseNum(line.unitP) > 0
-        ? InvoiceCalcHelper.parseNum(line.unitP)
+    final unitTp = InvoiceCalcHelper.parseNum(line.unitTp) > 0
+        ? InvoiceCalcHelper.parseNum(line.unitTp)
         : (disc > 0 ? mrp * (1 - disc / 100.0) : mrp);
+    final unitP = InvoiceCalcHelper.parseNum(line.unitP) > 0
+        ? InvoiceCalcHelper.parseNum(line.unitP)
+        : unitTp;
+    final taxAmt = line.taxAmtValue;
     // Column totals exclude tax (bill footer handles GST).
     final total = qty > 0 && unitTp > 0 ? qty * unitTp : 0.0;
 
@@ -3547,7 +3954,7 @@ class _LineCardState extends State<_LineCard> {
                 style: const TextStyle(
                   color: sectionText,
                   fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                  fontSize: 15,
                 ),
               ),
             ),
@@ -3570,11 +3977,11 @@ class _LineCardState extends State<_LineCard> {
         ),
         _CompactLineRow(
           left: _CompactField('BATCH', line.batch),
-          right: _CompactField('MFD', line.manuf),
+          right: _CompactField('Pack', line.pack),
         ),
         _CompactLineRow(
-          left: _CompactField('EXPIRY', line.expiry),
-          right: _CompactField('Pack', line.pack),
+          left: _CompactField('MFD', line.manuf),
+          right: _CompactField('EXPIRY', line.expiry),
         ),
         _CompactLineRow(
           left: _CompactField('Group', line.group),
@@ -3586,20 +3993,19 @@ class _LineCardState extends State<_LineCard> {
         ),
         _CompactLineRow(
           left: _CompactField('Unit TP', fmtMoney(unitTp > 0 ? unitTp : null)),
-          right: _CompactField('Unit P', fmtMoney(unitTp > 0 ? unitTp : null)),
+          right: _CompactField('Unit P', fmtMoney(unitP > 0 ? unitP : null)),
         ),
         _CompactLineRow(
           left: _CompactField('Tax', fmtNum(taxPct > 0 ? taxPct : null)),
-          right: _CompactField('Tax Amt', '—'),
+          right: _CompactField(
+            'Tax Amt',
+            taxAmt > 0 ? taxAmt.toStringAsFixed(2) : null,
+          ),
         ),
         _CompactLineRow(
           left: _CompactField('Total', fmtMoney(total > 0 ? total : null),
               emphasize: true),
           right: _CompactField('Hsn', line.hsn.isEmpty ? null : line.hsn),
-        ),
-        _CompactLineRow(
-          left: _CompactField('Rack', line.rack.isEmpty ? null : line.rack),
-          right: _CompactField('', null),
         ),
       ],
     );
@@ -3676,7 +4082,7 @@ class _LineCardState extends State<_LineCard> {
           },
         ),
         _LineTextRow(
-          label: 'MANUF (MM/YYYY)',
+          label: 'MANUF',
           controller: _manufCtrl,
           focusNode: _manufFocus,
           textInputAction: TextInputAction.next,
@@ -3684,10 +4090,14 @@ class _LineCardState extends State<_LineCard> {
             line.manuf = v;
             widget.onChanged();
           },
-          onNext: () => _moveTo(_expiryFocus),
+          onNext: () {
+            _commitLineDate(line, manuf: true);
+            _moveTo(_expiryFocus);
+          },
+          errorText: _manufError,
         ),
         _LineTextRow(
-          label: 'EXPIRY (MM/YYYY)',
+          label: 'EXPIRY',
           controller: _expiryCtrl,
           focusNode: _expiryFocus,
           textInputAction: TextInputAction.next,
@@ -3695,7 +4105,11 @@ class _LineCardState extends State<_LineCard> {
             line.expiry = v;
             widget.onChanged();
           },
-          onNext: () => _moveTo(_qtyFocus),
+          onNext: () {
+            _commitLineDate(line, manuf: false);
+            _moveTo(_qtyFocus);
+          },
+          errorText: _expiryError,
         ),
         _LineDropdownRow(
           label: 'Pack',
@@ -3754,11 +4168,17 @@ class _LineCardState extends State<_LineCard> {
         ),
         _LineReadOnlyRow(
           label: 'Unit TP',
-          value: line.unitP.trim().isEmpty ? null : line.unitP,
+          value: line.unitTp.trim().isEmpty ? null : line.unitTp,
         ),
         _LineReadOnlyRow(
           label: 'Unit P',
           value: line.unitP.trim().isEmpty ? null : line.unitP,
+        ),
+        _LineReadOnlyRow(
+          label: 'Tax Amt',
+          value: line.taxAmtValue > 0
+              ? line.taxAmtValue.toStringAsFixed(2)
+              : null,
         ),
         _LineTextRow(
           label: 'Tax',
@@ -3780,16 +4200,35 @@ class _LineCardState extends State<_LineCard> {
             await afterPick();
           },
         ),
-        _LineDropdownRow(
-          label: 'Rack',
-          value: line.rack.isEmpty ? null : line.rack,
-          onTap: () async {
-            await widget.onPickRack();
-            await afterPick();
-          },
-        ),
       ],
     );
+  }
+
+  void _commitLineDate(_BillLine line, {required bool manuf}) {
+    final ctrl = manuf ? _manufCtrl : _expiryCtrl;
+    final parsed = StockDateParser.tryParse(ctrl.text);
+    if (parsed == null) {
+      setState(() {
+        if (manuf) {
+          _manufError = 'Invalid date (e.g. 1222 → 01/12/22)';
+        } else {
+          _expiryError = 'Invalid date (e.g. 1222 → 01/12/22)';
+        }
+      });
+      return;
+    }
+    setState(() {
+      ctrl.text = parsed;
+      if (manuf) {
+        line.manuf = parsed.isEmpty ? null : parsed;
+        _manufError = null;
+      } else {
+        line.expiry = parsed.isEmpty ? null : parsed;
+        _expiryError = null;
+      }
+      line.revision++;
+    });
+    widget.onChanged();
   }
 }
 
@@ -3812,7 +4251,7 @@ class _CompactLineRow extends StatelessWidget {
 }
 
 class _CompactField extends StatelessWidget {
-  const _CompactField(this.label, this.value, {this.emphasize = false});
+  const _CompactField(this.label, this.value, {this.emphasize = true});
 
   final String label;
   final String? value;
@@ -3825,7 +4264,7 @@ class _CompactField extends StatelessWidget {
       text: TextSpan(
         style: TextStyle(
           color: sectionTextMuted,
-          fontSize: 10,
+          fontSize: 12,
         ),
         children: [
           TextSpan(text: '$label: '),
@@ -3833,8 +4272,8 @@ class _CompactField extends StatelessWidget {
             text: text,
             style: TextStyle(
               color: sectionText,
-              fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
-              fontSize: emphasize ? 12 : 11,
+              fontWeight: FontWeight.w700,
+              fontSize: emphasize ? 14 : 13,
             ),
           ),
         ],
@@ -3880,8 +4319,8 @@ class _LineDropdownRow extends StatelessWidget {
                   style: TextStyle(
                     color: highlightError
                         ? Colors.redAccent
-                        : Colors.white.withValues(alpha: 0.65),
-                    fontSize: 12,
+                        : sectionTextMuted,
+                    fontSize: 14,
                     fontWeight:
                         highlightError ? FontWeight.w700 : FontWeight.w400,
                   ),
@@ -3898,7 +4337,7 @@ class _LineDropdownRow extends StatelessWidget {
                   border: Border.all(
                     color: highlightError
                         ? Colors.redAccent
-                        : Colors.white.withValues(alpha: 0.2),
+                        : sectionCardBorder,
                   ),
                 ),
                 child: Row(
@@ -3908,9 +4347,12 @@ class _LineDropdownRow extends StatelessWidget {
                         (value == null || value!.isEmpty) ? 'Select' : value!,
                         style: TextStyle(
                           color: (value == null || value!.isEmpty)
-                              ? Colors.white54
-                              : Colors.white,
-                          fontSize: 13,
+                              ? sectionTextMuted
+                              : sectionText,
+                          fontSize: 15,
+                          fontWeight: (value == null || value!.isEmpty)
+                              ? FontWeight.w500
+                              : FontWeight.w700,
                         ),
                       ),
                     ),
@@ -3944,7 +4386,7 @@ class _LineReadOnlyRow extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
               ),
             ),
           ),
@@ -3953,13 +4395,21 @@ class _LineReadOnlyRow extends StatelessWidget {
               padding:
                   const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.05),
+                color: sectionCard,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: sectionCard),
+                border: Border.all(color: sectionCardBorder),
               ),
               child: Text(
                 (value == null || value!.trim().isEmpty) ? '—' : value!,
-                style: const TextStyle(color: sectionTextMuted, fontSize: 13),
+                style: TextStyle(
+                  color: (value == null || value!.trim().isEmpty)
+                      ? sectionTextMuted
+                      : sectionText,
+                  fontSize: 15,
+                  fontWeight: (value == null || value!.trim().isEmpty)
+                      ? FontWeight.w500
+                      : FontWeight.w700,
+                ),
               ),
             ),
           ),
@@ -3979,6 +4429,7 @@ class _LineTextRow extends StatelessWidget {
     this.keyboardType,
     this.textInputAction = TextInputAction.next,
     this.highlightError = false,
+    this.errorText,
   });
 
   final String label;
@@ -3989,74 +4440,91 @@ class _LineTextRow extends StatelessWidget {
   final TextInputType? keyboardType;
   final TextInputAction textInputAction;
   final bool highlightError;
+  final String? errorText;
 
   @override
   Widget build(BuildContext context) {
+    final showError = highlightError ||
+        (errorText != null && errorText!.isNotEmpty);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 110,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-              decoration: highlightError
-                  ? BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.22),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: Colors.redAccent),
-                    )
-                  : null,
+          Row(
+            children: [
+              SizedBox(
+                width: 110,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                  decoration: showError
+                      ? BoxDecoration(
+                          color: Colors.red.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.redAccent),
+                        )
+                      : null,
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      color: showError ? Colors.redAccent : sectionTextMuted,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  keyboardType: keyboardType,
+                  textInputAction: textInputAction,
+                  style: const TextStyle(
+                    color: sectionText,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  onChanged: onChanged,
+                  onSubmitted: (_) => onNext(),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    filled: true,
+                    fillColor: sectionCard,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                        color: showError ? Colors.redAccent : sectionCardBorder,
+                      ),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                        color: showError
+                            ? Colors.redAccent
+                            : const Color(0xFFE07A2F),
+                      ),
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (errorText != null && errorText!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 110, top: 4),
               child: Text(
-                label,
-                style: TextStyle(
-                  color: highlightError
-                      ? Colors.redAccent
-                      : Colors.white.withValues(alpha: 0.65),
-                  fontSize: 12,
-                  fontWeight:
-                      highlightError ? FontWeight.w700 : FontWeight.w400,
-                ),
+                errorText!,
+                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
               ),
             ),
-          ),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              keyboardType: keyboardType,
-              textInputAction: textInputAction,
-              style: const TextStyle(color: sectionText, fontSize: 13),
-              onChanged: onChanged,
-              onSubmitted: (_) => onNext(),
-              decoration: InputDecoration(
-                isDense: true,
-                filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.08),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: highlightError
-                        ? Colors.redAccent
-                        : Colors.white.withValues(alpha: 0.2),
-                  ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: highlightError
-                        ? Colors.redAccent
-                        : const Color(0xFFE07A2F),
-                  ),
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -4078,7 +4546,7 @@ class _StatusChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: selected
-              ? sectionBg
+              ? sectionAccent
               : Colors.black.withValues(alpha: 0.2),
         ),
       ),
@@ -4086,7 +4554,7 @@ class _StatusChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (selected) ...[
-            const Icon(Icons.check, size: 14, color: sectionBg),
+            const Icon(Icons.check, size: 14, color: sectionAccent),
             const SizedBox(width: 4),
           ],
           Text(
@@ -4094,7 +4562,7 @@ class _StatusChip extends StatelessWidget {
             style: const TextStyle(
               color: Colors.black,
               fontWeight: FontWeight.w700,
-              fontSize: 12,
+              fontSize: 14,
             ),
           ),
         ],
@@ -4128,7 +4596,7 @@ class _Card extends StatelessWidget {
               style: const TextStyle(
                 color: sectionText,
                 fontWeight: FontWeight.w700,
-                fontSize: 13,
+                fontSize: 15,
               ),
             ),
             const SizedBox(height: 10),
@@ -4170,7 +4638,7 @@ class _TextField extends StatelessWidget {
             label,
             style: TextStyle(
               color: sectionTextMuted,
-              fontSize: 12,
+              fontSize: 14,
             ),
           ),
           const SizedBox(height: 4),
@@ -4181,11 +4649,15 @@ class _TextField extends StatelessWidget {
             maxLines: maxLines,
             textInputAction: textInputAction,
             onSubmitted: onSubmitted,
-            style: const TextStyle(color: sectionText, fontSize: 14),
+            style: const TextStyle(
+              color: sectionText,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
             decoration: InputDecoration(
               isDense: true,
               filled: true,
-              fillColor: Colors.white.withValues(alpha: 0.08),
+              fillColor: sectionCard,
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               border: OutlineInputBorder(
@@ -4224,7 +4696,7 @@ class _PickerField extends StatelessWidget {
             label,
             style: TextStyle(
               color: sectionTextMuted,
-              fontSize: 12,
+              fontSize: 14,
             ),
           ),
           const SizedBox(height: 4),
@@ -4250,9 +4722,10 @@ class _PickerField extends StatelessWidget {
                         text.isEmpty ? (hint ?? 'Select') : text,
                         style: TextStyle(
                           color: text.isEmpty
-                              ? Colors.white.withValues(alpha: 0.45)
-                              : Colors.white,
-                          fontSize: 14,
+                              ? sectionTextMuted
+                              : sectionText,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
@@ -4283,6 +4756,8 @@ class _StaticDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final safeValue =
+        value != null && items.contains(value) ? value : null;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Column(
@@ -4292,7 +4767,7 @@ class _StaticDropdown extends StatelessWidget {
             label,
             style: TextStyle(
               color: sectionTextMuted,
-              fontSize: 12,
+              fontSize: 14,
             ),
           ),
           const SizedBox(height: 4),
@@ -4306,7 +4781,7 @@ class _StaticDropdown extends StatelessWidget {
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
-                value: value,
+                value: safeValue,
                 hint: Text(
                   'Optional',
                   style: TextStyle(
@@ -4314,9 +4789,13 @@ class _StaticDropdown extends StatelessWidget {
                   ),
                 ),
                 isExpanded: true,
-                dropdownColor: const Color(0xff2c505c),
-                iconEnabledColor: Colors.white70,
-                style: const TextStyle(color: sectionText, fontSize: 14),
+                dropdownColor: sectionCard,
+                iconEnabledColor: sectionTextMuted,
+                style: const TextStyle(
+                  color: sectionText,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
                 items: items
                     .map((e) => DropdownMenuItem(value: e, child: Text(e)))
                     .toList(),
@@ -4360,14 +4839,14 @@ class _ReadRow extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
               ),
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(color: sectionText, fontSize: 12),
+              style: const TextStyle(color: sectionText, fontSize: 14),
             ),
           ),
         ],
@@ -4394,15 +4873,15 @@ class _MoneyRow extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
               ),
             ),
           ),
           Text(
             InvoiceSummaryModel.formatMoney(value),
             style: TextStyle(
-              color: Colors.white,
-              fontSize: emphasize ? 15 : 12,
+              color: sectionText,
+              fontSize: emphasize ? 17 : 14,
               fontWeight: emphasize ? FontWeight.w800 : FontWeight.w500,
             ),
           ),

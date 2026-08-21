@@ -291,7 +291,7 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
         elevation: 0,
         title: const Text(
           'Select label text',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
         ),
         actions: [
           if (_selectedIds.isNotEmpty && !_ocrLoading)
@@ -379,7 +379,7 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
               'Reading label text…',
               style: TextStyle(
                 color: Colors.white,
-                fontSize: 14,
+                fontSize: 16,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -397,7 +397,7 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
         child: Text(
           _ocrError!,
           textAlign: TextAlign.center,
-          style: const TextStyle(color: sectionTextMuted, fontSize: 15),
+          style: const TextStyle(color: Colors.white, fontSize: 17),
         ),
       ),
     );
@@ -462,12 +462,12 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
+          const Text(
             'Selected text',
             style: TextStyle(
               color: sectionTextMuted,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 8),
@@ -475,12 +475,12 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
             constraints: const BoxConstraints(minHeight: 44, maxHeight: 88),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.06),
+              color: sectionCard,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: hasText
-                    ? const Color(0xFFE07A2F).withValues(alpha: 0.6)
-                    : Colors.white.withValues(alpha: 0.15),
+                    ? const Color(0xFFE07A2F).withValues(alpha: 0.7)
+                    : sectionCardBorder,
               ),
             ),
             child: TextField(
@@ -490,16 +490,16 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
               maxLines: 3,
               minLines: 1,
               style: const TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
+                color: sectionText,
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
                 height: 1.3,
               ),
               decoration: InputDecoration(
                 hintText: hint,
-                hintStyle: TextStyle(
+                hintStyle: const TextStyle(
                   color: sectionTextMuted,
-                  fontSize: 15,
+                  fontSize: 17,
                   fontWeight: FontWeight.w500,
                 ),
                 border: InputBorder.none,
@@ -516,11 +516,15 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
                 child: OutlinedButton(
                   onPressed: () => Navigator.of(context).pop(),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white70,
-                    side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+                    foregroundColor: sectionText,
+                    side: const BorderSide(color: sectionCardBorder),
+                    backgroundColor: sectionCard,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
-                  child: const Text('Cancel'),
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -532,13 +536,23 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
                     backgroundColor: const Color(0xFFE07A2F),
                     foregroundColor: Colors.white,
                     disabledBackgroundColor:
-                        const Color(0xFFE07A2F).withValues(alpha: 0.4),
+                        const Color(0xFFE07A2F).withValues(alpha: 0.45),
+                    disabledForegroundColor: Colors.white70,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
-                  child: Text(
-                    _ocrError != null ? 'Close' : 'Done',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
+                  child: _ocrLoading
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2.5,
+                          ),
+                        )
+                      : Text(
+                          _ocrError != null ? 'Close' : 'Done',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
                 ),
               ),
             ],

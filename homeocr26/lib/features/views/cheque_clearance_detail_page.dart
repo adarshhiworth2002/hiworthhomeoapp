@@ -1,11 +1,15 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../models/cheque_clearance_model.dart';
+import '../../viewModels/login_viewmodel.dart';
+import '../services/cheque_clearance_service.dart';
 import '../services/cheque_payment_enrichment.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'customer_payment_from_cheque_page.dart';
+import 'live_refresh_mixin.dart';
 import '../theme.dart';
 
 /// Cheque Details / PDC Entry — screenshot 2.
@@ -19,7 +23,8 @@ class ChequeClearanceDetailPage extends StatefulWidget {
       _ChequeClearanceDetailPageState();
 }
 
-class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
+class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage>
+    with LiveRefreshMixin {
   static const _states = ['Draft', 'Posted', 'Bounced', 'Paid', 'Cancelled'];
 
   late ChequeClearanceModel _cheque;
@@ -29,7 +34,48 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
   void initState() {
     super.initState();
     _cheque = widget.cheque;
+    startLiveRefresh(() => _reload(silent: true));
     WidgetsBinding.instance.addPostFrameCallback((_) => _enrich());
+  }
+
+  @override
+  void dispose() {
+    stopLiveRefresh();
+    super.dispose();
+  }
+
+  Future<void> _reload({bool silent = false}) async {
+    try {
+      final login = Provider.of<LoginViewmodel>(context, listen: false);
+      final sessionId = login.sessionId;
+      if (sessionId == null || sessionId.isEmpty) return;
+      final items = await ChequeClearanceService.fetch(
+        sessionId: sessionId,
+        forceRefresh: true,
+      );
+      ChequeClearanceModel? next;
+      for (final item in items) {
+        if (_cheque.id != null && item.id == _cheque.id) {
+          next = item;
+          break;
+        }
+        if ((item.displaySerial) == _cheque.displaySerial &&
+            item.displayChequeNo == _cheque.displayChequeNo) {
+          next = item;
+        }
+      }
+      if (!mounted) return;
+      if (next != null) {
+        setState(() {
+          _cheque = next!;
+          if (!silent) _loading = true;
+        });
+      }
+      await _enrich();
+    } catch (e, s) {
+      if (kDebugMode) debugPrint('cheque detail reload: $e\n$s');
+      if (mounted && !silent) setState(() => _loading = false);
+    }
   }
 
   Future<void> _enrich() async {
@@ -60,7 +106,7 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
           style: TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
         backgroundColor: sectionBg,
@@ -69,7 +115,11 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
       body: ResponsiveBody(
         child: Stack(
         children: [
-          ListView(
+          RefreshIndicator(
+            color: const Color(0xFFE07A2F),
+            onRefresh: () => _reload(),
+            child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
             padding: SystemSafe.listPadding(context),
             children: [
               _HeaderBanner(
@@ -149,7 +199,7 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
                     'Select Invoices',
                     style: TextStyle(
                       color: sectionTextMuted,
-                      fontSize: 11,
+                      fontSize: 13,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -182,15 +232,14 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
                                   color: sectionCard,
                                   borderRadius: BorderRadius.circular(20),
                                   border: Border.all(
-                                    color:
-                                        Colors.white.withValues(alpha: 0.2),
+                                    color: sectionCardBorder,
                                   ),
                                 ),
                                 child: Text(
                                   inv.displayLabel,
                                   style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
+                                    color: sectionText,
+                                    fontSize: 14,
                                   ),
                                 ),
                               ),
@@ -201,6 +250,7 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage> {
                 ],
               ),
             ],
+          ),
           ),
           if (_loading)
             const Positioned(
@@ -245,9 +295,9 @@ class _HeaderBanner extends StatelessWidget {
                 Text(
                   title,
                   style: const TextStyle(
-                    color: sectionText,
+                    color: Colors.white,
                     fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                    fontSize: 15,
                     letterSpacing: 0.3,
                   ),
                 ),
@@ -256,7 +306,7 @@ class _HeaderBanner extends StatelessWidget {
                   subtitle,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.9),
-                    fontSize: 12,
+                    fontSize: 14,
                   ),
                 ),
               ],
@@ -285,25 +335,28 @@ class _StatusStepper extends StatelessWidget {
               Icon(
                 Icons.chevron_right,
                 size: 16,
-                color: Colors.white.withValues(alpha: 0.35),
+                color: sectionTextMuted,
               ),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: states[i].toLowerCase() == active.toLowerCase()
                     ? const Color(0xFF6B5B95)
-                    : Colors.white.withValues(alpha: 0.08),
+                    : sectionCard,
                 borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: states[i].toLowerCase() == active.toLowerCase()
+                      ? const Color(0xFF6B5B95)
+                      : sectionCardBorder,
+                ),
               ),
               child: Text(
                 states[i],
                 style: TextStyle(
-                  color: Colors.white.withValues(
-                    alpha: states[i].toLowerCase() == active.toLowerCase()
-                        ? 1
-                        : 0.55,
-                  ),
-                  fontSize: 11,
+                  color: states[i].toLowerCase() == active.toLowerCase()
+                      ? Colors.white
+                      : sectionText,
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -348,7 +401,7 @@ class _InfoCard extends StatelessWidget {
                 style: const TextStyle(
                   color: sectionText,
                   fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                  fontSize: 15,
                 ),
               ),
             ],
@@ -379,8 +432,8 @@ class _Field extends StatelessWidget {
     final valueWidget = Text(
       value,
       style: TextStyle(
-        color: Colors.white,
-        fontSize: emphasize ? 15 : 13,
+        color: sectionText,
+        fontSize: emphasize ? 17 : 15,
         fontWeight: emphasize ? FontWeight.w800 : FontWeight.w500,
       ),
     );
@@ -394,7 +447,7 @@ class _Field extends StatelessWidget {
             label,
             style: TextStyle(
               color: sectionTextMuted,
-              fontSize: 10,
+              fontSize: 12,
               letterSpacing: 0.4,
               fontWeight: FontWeight.w600,
             ),
@@ -439,7 +492,7 @@ class _TappableField extends StatelessWidget {
             label,
             style: TextStyle(
               color: sectionTextMuted,
-              fontSize: 10,
+              fontSize: 12,
               letterSpacing: 0.4,
               fontWeight: FontWeight.w600,
             ),
@@ -457,9 +510,9 @@ class _TappableField extends StatelessWidget {
                       value,
                       style: TextStyle(
                         color: onTap != null
-                            ? const Color(0xFF64B5F6)
-                            : Colors.white,
-                        fontSize: 13,
+                            ? const Color(0xFF1565C0)
+                            : sectionText,
+                        fontSize: 15,
                         fontWeight: FontWeight.w600,
                         decoration:
                             onTap != null ? TextDecoration.underline : null,
@@ -471,7 +524,7 @@ class _TappableField extends StatelessWidget {
                     const Icon(
                       Icons.open_in_new,
                       size: 14,
-                      color: Color(0xFF64B5F6),
+                      color: Color(0xFF1565C0),
                     ),
                   ],
                 ],

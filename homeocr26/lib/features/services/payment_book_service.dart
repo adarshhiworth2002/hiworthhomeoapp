@@ -6,7 +6,9 @@ import '../../models/invoice_summary_model.dart';
 import '../../models/payment_book_model.dart';
 import '../services/WebApi/web_api_impl.dart';
 import 'api_request_helper.dart';
+import 'calendar_date.dart';
 import 'endPoints.dart';
+import 'invoice_series_classifier.dart';
 
 class PaymentBookService {
   const PaymentBookService._();
@@ -149,7 +151,7 @@ class PaymentBookService {
       params['customer'] = customer.trim();
       params['customer_name'] = customer.trim();
     }
-    if (customerType == 'credit') {
+    if (customerType != null && customerType.isNotEmpty) {
       params['customer_type'] = customerType;
     }
     if (paymentMode != null && paymentMode.isNotEmpty) {
@@ -224,22 +226,17 @@ class PaymentBookService {
     final invoices = InvoiceSummaryModel.parseList(map);
     // Keep only rows inside the requested date window (API may return extra).
     final ranged = invoices.where((inv) {
-      final raw = (inv.invoiceDate ?? '').trim();
-      if (raw.isEmpty) return true;
-      final d = DateTime.tryParse(raw);
-      if (d == null) return true;
-      final day = DateTime(d.year, d.month, d.day);
+      final day = CalendarDate.parse(inv.invoiceDate);
+      if (day == null) return true;
       if (dateFrom != null) {
-        final from = DateTime.tryParse(dateFrom);
-        if (from != null &&
-            day.isBefore(DateTime(from.year, from.month, from.day))) {
+        final from = CalendarDate.parse(dateFrom);
+        if (from != null && day.isBefore(from)) {
           return false;
         }
       }
       if (dateTo != null) {
-        final to = DateTime.tryParse(dateTo);
-        if (to != null &&
-            day.isAfter(DateTime(to.year, to.month, to.day))) {
+        final to = CalendarDate.parse(dateTo);
+        if (to != null && day.isAfter(to)) {
           return false;
         }
       }
@@ -290,6 +287,10 @@ class PaymentBookService {
             return item.isCreditCustomer;
           case 'normal':
             return !item.isCreditCustomer;
+          case 'b2b':
+            return InvoiceSeriesClassifier.isB2bInvoice(item);
+          case 'b2c':
+            return InvoiceSeriesClassifier.isB2cInvoice(item);
           default:
             return true;
         }
@@ -355,5 +356,31 @@ class PaymentBookService {
     _cachedAt = null;
     _cacheKey = null;
     _inFlight = null;
+  }
+
+  /// Optimistically drop a discarded draft from the home/payment-book cache.
+  static void removeInvoice(int invoiceId) {
+    if (invoiceId <= 0) return;
+    final book = _cache;
+    if (book == null) return;
+    final kept = book.invoices.where((i) => i.id != invoiceId).toList();
+    if (kept.length == book.invoices.length) return;
+    var balance = 0.0;
+    var amount = 0.0;
+    for (final inv in kept) {
+      balance += inv.balance ?? 0;
+      amount += inv.total ?? 0;
+    }
+    _cache = PaymentBookModel(
+      cardName: book.cardName,
+      dateFrom: book.dateFrom,
+      dateTo: book.dateTo,
+      homeCount: (book.homeCount - 1).clamp(0, 1 << 30).toInt(),
+      totalCount: kept.length,
+      totalBalance: balance,
+      totalAmount: amount,
+      invoices: kept,
+    );
+    _cachedAt = DateTime.now();
   }
 }

@@ -6,6 +6,64 @@ class InvoiceHelper {
     return '${now.year}-${nextYearShort.toString().padLeft(2, '0')}';
   }
 
+  static bool isPlaceholderNumber(String? raw) {
+    final t = (raw ?? '').trim();
+    if (t.isEmpty || t == '/' || t.toLowerCase() == 'false') return true;
+    final lower = t.toLowerCase();
+    return lower.startsWith('draft-') || lower.startsWith('inv/');
+  }
+
+  /// Next bill after [last], keeping the backend format.
+  /// `R0042` → `R0043`, `0501/2026-27` → `0502/2026-27`.
+  static String nextAfter(String last, [DateTime? date]) {
+    final t = last.trim();
+    if (isPlaceholderNumber(t)) {
+      return nextInvoiceNumber(const [], date);
+    }
+
+    final fiscal = RegExp(r'^(\d+)/(\d{4}-\d{2})$').firstMatch(t);
+    if (fiscal != null) {
+      final digits = fiscal.group(1)!;
+      final year = fiscal.group(2)!;
+      final n = int.parse(digits);
+      return '${(n + 1).toString().padLeft(digits.length, '0')}/$year';
+    }
+
+    final trailing = RegExp(r'^(.*?)(\d+)$').firstMatch(t);
+    if (trailing != null) {
+      final prefix = trailing.group(1)!;
+      final digits = trailing.group(2)!;
+      final n = int.parse(digits);
+      return '$prefix${(n + 1).toString().padLeft(digits.length, '0')}';
+    }
+
+    return t;
+  }
+
+  /// Prefer the highest-id invoice's format over an older numeric series.
+  static String nextFromLatest({
+    required Iterable<int?> ids,
+    required Iterable<String> numbers,
+    DateTime? date,
+  }) {
+    final idList = ids.toList(growable: false);
+    final numList = numbers.toList(growable: false);
+    final count = idList.length < numList.length ? idList.length : numList.length;
+    var bestId = -1;
+    String? bestNumber;
+    for (var i = 0; i < count; i++) {
+      final number = numList[i].trim();
+      if (isPlaceholderNumber(number)) continue;
+      final id = idList[i] ?? -1;
+      if (bestNumber == null || id > bestId) {
+        bestId = id;
+        bestNumber = number;
+      }
+    }
+    if (bestNumber != null) return nextAfter(bestNumber, date);
+    return nextInvoiceNumber(numList, date);
+  }
+
   static String prefixFromFull(String? full) {
     if (full == null || full.trim().isEmpty) return '';
     final parts = full.split('/');

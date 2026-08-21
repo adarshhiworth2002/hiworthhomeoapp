@@ -3,9 +3,13 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'package:provider/provider.dart';
+
+import '../../viewModels/login_viewmodel.dart';
 import '../theme.dart';
 import '../widgets/app_responsive.dart';
 import 'login_page.dart';
+import 'selction_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -40,23 +44,37 @@ class _SplashScreenState extends State<SplashScreen>
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeIn));
 
     _controller.forward();
-    Future.delayed(const Duration(seconds: 3), () {
-      if (!mounted) return;
-
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          pageBuilder: (context, animation, secondaryAnimation) =>
-              const LoginPage(),
-          transitionDuration: const Duration(milliseconds: 500),
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(
-              opacity: animation,
-              child: child,
-            );
-          },
-        ),
-      );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_goNext());
     });
+  }
+
+  Future<void> _goNext() async {
+    final login = context.read<LoginViewmodel>();
+    final minSplash = Future<void>.delayed(const Duration(seconds: 3));
+    if (!login.isLoggedIn) {
+      await login.restoreSession();
+    }
+    final stayLoggedIn = login.isLoggedIn;
+    if (stayLoggedIn) {
+      unawaited(login.tryAutoLogin());
+    }
+    await minSplash;
+    if (!mounted) return;
+
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            stayLoggedIn ? const SelectionScreen() : const LoginPage(),
+        transitionDuration: const Duration(milliseconds: 500),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: animation,
+            child: child,
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -72,8 +90,8 @@ class _SplashScreenState extends State<SplashScreen>
     final short = size.height < 560;
     final scale = AppResponsive.scaleClamp(size.shortestSide);
     final iconSize = (short ? 64.0 : 90.0) * scale;
-    final titleSize = (short ? 18.0 : 22.0) * scale;
-    final subtitleSize = (short ? 12.0 : 14.0) * scale;
+    final titleSize = (short ? 20.0 : 24.0) * scale;
+    final subtitleSize = (short ? 14.0 : 16.0) * scale;
     final iconPad = (short ? 16.0 : 25.0) * scale;
     final bottomGap = math.min(40.0, size.height * 0.06);
 
@@ -126,7 +144,7 @@ class _SplashScreenState extends State<SplashScreen>
                           style: TextStyle(
                             fontSize: titleSize,
                             fontWeight: FontWeight.bold,
-                            letterSpacing: short ? 1.2 : 2,
+                            letterSpacing: short? 3.2 : 4,
                             color: Colors.white,
                           ),
                         ),

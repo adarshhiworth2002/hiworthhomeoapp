@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -6,10 +8,11 @@ import '../../models/payment_book_model.dart';
 import '../../viewModels/payment_book_viewmodel.dart';
 import '../theme.dart';
 import '../widgets/app_responsive.dart';
+import '../widgets/payment_book_style.dart';
 import '../widgets/system_safe.dart';
 import 'invoice_list_widgets.dart';
+import 'invoice_search_filter_sheet.dart';
 import 'live_refresh_mixin.dart';
-import 'payment_book_detail_page.dart';
 
 class PaymentBookPage extends StatefulWidget {
   const PaymentBookPage({super.key});
@@ -21,22 +24,32 @@ class PaymentBookPage extends StatefulWidget {
 class _PaymentBookPageState extends State<PaymentBookPage>
     with LiveRefreshMixin {
   late final PaymentBookViewModel _viewModel;
+  String _statusFilter = 'all';
 
   @override
   void initState() {
     super.initState();
     _viewModel = PaymentBookViewModel();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _viewModel.fetch(
-        context,
-        applyFilter: PaymentBookFilter.today(),
-      );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      await _viewModel.fetch(context, forceRefresh: true, silent: true);
+      unawaited(
+        _viewModel.fetch(
+          context,
+          applyFilter: PaymentBookFilter.today(),
+        ),
+      );
     });
     startLiveRefresh(
       () => _viewModel.fetch(context, forceRefresh: true, silent: true),
+      immediate: false,
     );
+  }
+
+  List<InvoiceSummaryModel> _statusFiltered(List<InvoiceSummaryModel> source) {
+    if (_statusFilter == 'all') return source;
+    return source
+        .where((inv) => inv.sectionKey == _statusFilter)
+        .toList(growable: false);
   }
 
   @override
@@ -47,7 +60,7 @@ class _PaymentBookPageState extends State<PaymentBookPage>
   }
 
   Future<void> _openFilter() async {
-    final result = await showModalBottomSheet<_PaymentBookFilterResult>(
+    final result = await showModalBottomSheet<InvoiceSearchFilterResult>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -55,22 +68,27 @@ class _PaymentBookPageState extends State<PaymentBookPage>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (sheetContext) => _PaymentBookFilterSheet(
+      builder: (sheetContext) => InvoiceSearchFilterSheet(
         initialFilter: _viewModel.filter,
         parentContext: context,
+        datesRequired: true,
+        clearLabel: 'Clear all',
       ),
     );
     if (!mounted || result == null) return;
 
     if (result.clear) {
-      await _viewModel.resetToToday(context);
+      _viewModel.clearFilter(context);
       return;
     }
 
-    await _viewModel.fetch(
-      context,
-      forceRefresh: true,
-      applyFilter: result.filter,
+    _viewModel.applyFilter(result.filter);
+    unawaited(
+      _viewModel.fetch(
+        context,
+        forceRefresh: true,
+        silent: true,
+      ),
     );
   }
 
@@ -87,7 +105,7 @@ class _PaymentBookPageState extends State<PaymentBookPage>
             style: TextStyle(
               color: sectionText,
               fontWeight: FontWeight.w500,
-              fontSize: 15,
+              fontSize: 17,
             ),
           ),
           backgroundColor: sectionBg,
@@ -97,10 +115,6 @@ class _PaymentBookPageState extends State<PaymentBookPage>
               tooltip: 'Filter',
               onPressed: _openFilter,
               icon: const Icon(Icons.filter_list, color: sectionText),
-            ),
-            IconButton(
-              onPressed: () => _viewModel.fetch(context, forceRefresh: true),
-              icon: const Icon(Icons.refresh, color: sectionText),
             ),
           ],
         ),
@@ -119,26 +133,44 @@ class _PaymentBookPageState extends State<PaymentBookPage>
               );
             }
 
-            final filtered = model.visibleInvoices;
-            final visibleTotal = filtered.fold<double>(
-              0,
-              (sum, item) => sum + (item.total ?? 0),
-            );
-            final visibleBalance = filtered.fold<double>(
-              0,
-              (sum, item) => sum + (item.balance ?? 0),
-            );
-            final footerTotal = visibleTotal;
-            final footerBalance = visibleBalance;
+            final filtered = _statusFiltered(model.visibleInvoices);
+            final netTotal = _statusFilter == 'all'
+                ? InvoiceSummaryModel.sumTotals(filtered, includeCancel: false)
+                : InvoiceSummaryModel.sumTotals(filtered, includeCancel: true);
+            final netBalance = _statusFilter == 'all'
+                ? InvoiceSummaryModel.sumBalances(filtered, includeCancel: false)
+                : InvoiceSummaryModel.sumBalances(filtered, includeCancel: true);
+            final netCount = _statusFilter == 'all'
+                ? InvoiceSummaryModel.countBills(filtered, includeCancel: false)
+                : filtered.length;
 
             return Column(
               children: [
-                _SummaryBar(model: model),
+                if (model.filter.isActive)
+                  _SummaryBar(
+                    model: model,
+                    onClear: () => model.clearFilter(context),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  child: InvoiceStatusFilterChips(
+                    selected: _statusFilter,
+                    onSelected: (v) => setState(() => _statusFilter = v),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: PaymentBookColorLegend(),
+                ),
                 Expanded(
                   child: RefreshIndicator(
                     color: const Color(0xFFE07A2F),
-                    onRefresh: () =>
-                        model.fetch(context, forceRefresh: true),
+                    displacement: 28,
+                    onRefresh: () => model.fetch(
+                      context,
+                      forceRefresh: true,
+                      silent: true,
+                    ),
                     child: filtered.isEmpty
                         ? ListView(
                             physics: const AlwaysScrollableScrollPhysics(),
@@ -170,11 +202,7 @@ class _PaymentBookPageState extends State<PaymentBookPage>
                               final item = filtered[index];
                               return _PaymentBookCard(
                                 invoice: item,
-                                onTap: () => openPaymentBookDetail(
-                                  context,
-                                  item,
-                                ),
-                                onOpenBill: () => openInvoiceDetail(
+                                onTap: () => openInvoiceDetail(
                                   context,
                                   item,
                                   title: 'Customer Invoice',
@@ -185,9 +213,9 @@ class _PaymentBookPageState extends State<PaymentBookPage>
                   ),
                 ),
                 _TotalFooter(
-                  count: filtered.length,
-                  total: footerTotal,
-                  balance: footerBalance,
+                  count: netCount,
+                  total: netTotal,
+                  balance: netBalance,
                 ),
               ],
             );
@@ -200,18 +228,28 @@ class _PaymentBookPageState extends State<PaymentBookPage>
 }
 
 class _SummaryBar extends StatelessWidget {
-  const _SummaryBar({required this.model});
+  const _SummaryBar({
+    required this.model,
+    required this.onClear,
+  });
 
   final PaymentBookViewModel model;
+  final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
-    final from = PaymentBookViewModel.formatDisplayDate(model.filter.dateFrom);
-    final to = PaymentBookViewModel.formatDisplayDate(model.filter.dateTo);
-    final range = from == to ? from : '$from  →  $to';
-    final parts = <String>[range];
+    final parts = <String>[];
+    if (model.filter.hasDateRange) {
+      final from =
+          PaymentBookViewModel.formatDisplayDate(model.filter.dateFrom);
+      final to = PaymentBookViewModel.formatDisplayDate(model.filter.dateTo);
+      parts.add(from == to ? from : '$from  →  $to');
+    }
     if (model.filter.hasCustomer) {
       parts.add(model.filter.customerQuery.trim());
+    }
+    if (model.filter.hasInvoice) {
+      parts.add(model.filter.invoiceQuery.trim());
     }
     if (model.filter.hasCustomerType) {
       parts.add(model.filter.customerTypeLabel);
@@ -224,7 +262,7 @@ class _SummaryBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
         decoration: BoxDecoration(
           color: sectionCard,
           borderRadius: BorderRadius.circular(12),
@@ -245,10 +283,17 @@ class _SummaryBar extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: sectionText,
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
               ),
+            ),
+            IconButton(
+              tooltip: 'Clear filters',
+              onPressed: onClear,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              icon: const Icon(Icons.close, size: 18, color: sectionText),
             ),
           ],
         ),
@@ -262,44 +307,16 @@ class _PaymentBookCard extends StatelessWidget {
   const _PaymentBookCard({
     required this.invoice,
     required this.onTap,
-    required this.onOpenBill,
   });
 
   final InvoiceSummaryModel invoice;
   final VoidCallback onTap;
-  final VoidCallback onOpenBill;
-
-  static Color _rowColor(PaymentBookRowStyle style) {
-    switch (style) {
-      case PaymentBookRowStyle.walkIn:
-        return const Color(0xFFD32F2F);
-      case PaymentBookRowStyle.creditOpen:
-        return const Color(0xFF111111);
-      case PaymentBookRowStyle.creditPaid:
-        return const Color(0xFF1565C0);
-      case PaymentBookRowStyle.draft:
-        return const Color(0xFF9E9E9E);
-      case PaymentBookRowStyle.normal:
-        return sectionText;
-    }
-  }
-
-  static FontWeight _rowWeight(PaymentBookRowStyle style) {
-    switch (style) {
-      case PaymentBookRowStyle.creditOpen:
-        return FontWeight.w800;
-      case PaymentBookRowStyle.draft:
-        return FontWeight.w400;
-      default:
-        return FontWeight.w600;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     final style = invoice.paymentBookRowStyle;
-    final color = _rowColor(style);
-    final weight = _rowWeight(style);
+    final color = PaymentBookStyleColors.of(style);
+    final weight = PaymentBookStyleColors.weightOf(style);
 
     return Material(
       color: Colors.transparent,
@@ -330,7 +347,7 @@ class _PaymentBookCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: color,
-                              fontSize: 13,
+                              fontSize: 15,
                               fontWeight: FontWeight.w800,
                             ),
                           ),
@@ -343,25 +360,12 @@ class _PaymentBookCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: color,
-                              fontSize: 12,
+                              fontSize: 14,
                               fontWeight: weight,
                             ),
                           ),
                         ),
-                        Expanded(
-                          flex: 2,
-                          child: Text(
-                            invoice.displayPaymentBookStatus,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.right,
-                            style: TextStyle(
-                              color: color,
-                              fontSize: 11,
-                              fontWeight: weight,
-                            ),
-                          ),
-                        ),
+                        InvoiceBillStatusBadge(status: invoice.displayStatus),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -397,17 +401,6 @@ class _PaymentBookCard extends StatelessWidget {
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: 'Open invoice',
-                onPressed: onOpenBill,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                icon: const Icon(
-                  Icons.receipt_long_outlined,
-                  color: Color(0xFFE07A2F),
-                  size: 22,
-                ),
-              ),
             ],
           ),
         ),
@@ -441,7 +434,7 @@ class _Meta extends StatelessWidget {
           label,
           style: TextStyle(
             color: sectionTextMuted,
-            fontSize: 9,
+            fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -452,7 +445,7 @@ class _Meta extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             color: color,
-            fontSize: 12,
+            fontSize: 14,
             fontWeight: weight,
           ),
         ),
@@ -495,7 +488,7 @@ class _TotalFooter extends StatelessWidget {
               count == 1 ? 'Total (1 bill)' : 'Total ($count bills)',
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 13,
+                fontSize: 15,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -507,7 +500,7 @@ class _TotalFooter extends StatelessWidget {
                 'Balance  ${InvoiceSummaryModel.formatMoney(balance)}',
                 style: TextStyle(
                   color: sectionTextMuted,
-                  fontSize: 11,
+                  fontSize: 13,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -516,7 +509,7 @@ class _TotalFooter extends StatelessWidget {
                 InvoiceSummaryModel.formatMoney(total),
                 style: const TextStyle(
                   color: Color(0xFFE07A2F),
-                  fontSize: 16,
+                  fontSize: 18,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -664,7 +657,7 @@ class _PaymentBookFilterSheetState extends State<_PaymentBookFilterSheet> {
             const Text(
               'Search & filter',
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 18,
                 fontWeight: FontWeight.w700,
                 color: sectionText,
               ),
@@ -712,7 +705,7 @@ class _PaymentBookFilterSheetState extends State<_PaymentBookFilterSheet> {
             const SizedBox(height: 12),
             TextField(
               controller: _customerController,
-              style: const TextStyle(color: sectionText, fontSize: 14),
+              style: const TextStyle(color: sectionText, fontSize: 16),
               cursorColor: sectionAccent,
               textInputAction: TextInputAction.done,
               decoration: _fieldDecoration(
@@ -725,7 +718,7 @@ class _PaymentBookFilterSheetState extends State<_PaymentBookFilterSheet> {
               initialValue: _customerType,
               dropdownColor: Colors.white,
               iconEnabledColor: Colors.black,
-              style: const TextStyle(color: Colors.black, fontSize: 14),
+              style: const TextStyle(color: Colors.black, fontSize: 16),
               decoration: _fieldDecoration(
                 label: 'Customer Type',
                 icon: Icons.groups_outlined,
@@ -746,6 +739,14 @@ class _PaymentBookFilterSheetState extends State<_PaymentBookFilterSheet> {
                   child: Text('Normal Customers',
                       style: TextStyle(color: Colors.black)),
                 ),
+                DropdownMenuItem(
+                  value: PaymentBookCustomerType.b2b,
+                  child: Text('B2B', style: TextStyle(color: Colors.black)),
+                ),
+                DropdownMenuItem(
+                  value: PaymentBookCustomerType.b2c,
+                  child: Text('B2C', style: TextStyle(color: Colors.black)),
+                ),
               ],
               onChanged: (value) {
                 if (value == null) return;
@@ -757,7 +758,7 @@ class _PaymentBookFilterSheetState extends State<_PaymentBookFilterSheet> {
               initialValue: _paymentMode,
               dropdownColor: Colors.white,
               iconEnabledColor: Colors.black,
-              style: const TextStyle(color: Colors.black, fontSize: 14),
+              style: const TextStyle(color: Colors.black, fontSize: 16),
               decoration: _fieldDecoration(
                 label: 'Payment Mode',
                 icon: Icons.payments_outlined,

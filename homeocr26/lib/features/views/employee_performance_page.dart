@@ -5,6 +5,8 @@ import '../services/prefix_search.dart';
 import '../../models/employee_performance_model.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../viewModels/employee_performance_viewmodel.dart';
+import '../../viewModels/login_viewmodel.dart';
+import '../services/payment_history_service.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import 'employee_kpi_pages.dart';
@@ -99,15 +101,9 @@ class _EmployeePerformancePageState extends State<EmployeePerformancePage>
             style: const TextStyle(
               color: sectionText,
               fontWeight: FontWeight.w500,
-              fontSize: 15,
+              fontSize: 17,
             ),
           ),
-          actions: [
-            IconButton(
-              onPressed: () => _viewModel.fetch(context, forceRefresh: true),
-              icon: const Icon(Icons.refresh, color: sectionText),
-            ),
-          ],
         ),
         body: ResponsiveBody(
           child: Consumer<EmployeePerformanceViewModel>(
@@ -186,7 +182,7 @@ class _EmployeePerformancePageState extends State<EmployeePerformancePage>
                         'Report date: ${_formatDate(model.summary.reportDate)}',
                         style: TextStyle(
                           color: sectionTextMuted,
-                          fontSize: 12,
+                          fontSize: 14,
                         ),
                       ),
                     ),
@@ -205,7 +201,7 @@ class _EmployeePerformancePageState extends State<EmployeePerformancePage>
                       style: TextStyle(
                         color: sectionTextMuted,
                         fontWeight: FontWeight.w700,
-                        fontSize: 14,
+                        fontSize: 16,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -296,12 +292,12 @@ class _KpiDashboardEntryButton extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
+                  color: sectionAccent.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Icon(
                   Icons.dashboard_customize_outlined,
-                  color: Colors.white,
+                  color: sectionAccent,
                 ),
               ),
               const SizedBox(width: 12),
@@ -314,7 +310,7 @@ class _KpiDashboardEntryButton extends StatelessWidget {
                       style: TextStyle(
                         color: sectionText,
                         fontWeight: FontWeight.w800,
-                        fontSize: 15,
+                        fontSize: 17,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -322,13 +318,13 @@ class _KpiDashboardEntryButton extends StatelessWidget {
                       'Bills $billsToday · Sessions $activeSessions · Employees $employeeCount',
                       style: TextStyle(
                         color: sectionTextMuted,
-                        fontSize: 11,
+                        fontSize: 13,
                       ),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.arrow_forward_ios, color: Colors.white, size: 16),
+              const Icon(Icons.arrow_forward_ios, color: sectionTextMuted, size: 16),
             ],
           ),
         ),
@@ -338,8 +334,35 @@ class _KpiDashboardEntryButton extends StatelessWidget {
 }
 
 /// Separate screen for website-style KPI cards.
-class EmployeeKpiDashboardPage extends StatelessWidget {
+class EmployeeKpiDashboardPage extends StatefulWidget {
   const EmployeeKpiDashboardPage({super.key});
+
+  @override
+  State<EmployeeKpiDashboardPage> createState() =>
+      _EmployeeKpiDashboardPageState();
+}
+
+class _EmployeeKpiDashboardPageState extends State<EmployeeKpiDashboardPage>
+    with LiveRefreshMixin {
+  @override
+  void initState() {
+    super.initState();
+    startLiveRefresh(() {
+      if (!mounted) return Future.value();
+      return context.read<EmployeePerformanceViewModel>().fetch(
+            context,
+            forceRefresh: true,
+            silent: true,
+            waitForInvoices: false,
+          );
+    });
+  }
+
+  @override
+  void dispose() {
+    stopLiveRefresh();
+    super.dispose();
+  }
 
   void _openKpiDetails(BuildContext context, EmployeeKpiCard card) {
     final model = context.read<EmployeePerformanceViewModel>();
@@ -431,7 +454,7 @@ class EmployeeKpiDashboardPage extends StatelessWidget {
           style: TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
       ),
@@ -456,7 +479,7 @@ class EmployeeKpiDashboardPage extends StatelessWidget {
                       'Report date: ${_formatDate(model.summary.reportDate)}',
                       style: TextStyle(
                         color: sectionTextMuted,
-                        fontSize: 12,
+                        fontSize: 14,
                       ),
                     ),
                   ),
@@ -484,7 +507,8 @@ class EmployeeBillsListPage extends StatefulWidget {
   State<EmployeeBillsListPage> createState() => _EmployeeBillsListPageState();
 }
 
-class _EmployeeBillsListPageState extends State<EmployeeBillsListPage> {
+class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
+    with LiveRefreshMixin {
   late final TextEditingController _searchController;
   late EmployeeBillsGroup _group;
   String _searchQuery = '';
@@ -500,10 +524,12 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage> {
     final today = _dateOnly(DateTime.now());
     _fromDate = today;
     _toDate = today;
+    startLiveRefresh(_onRefresh);
   }
 
   @override
   void dispose() {
+    stopLiveRefresh();
     _searchController.dispose();
     super.dispose();
   }
@@ -613,7 +639,7 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage> {
           style: const TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
       ),
@@ -639,7 +665,7 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage> {
                 '${hasDateFilter ? ' in selected range' : ''}',
                 style: TextStyle(
                   color: sectionTextMuted,
-                  fontSize: 12,
+                  fontSize: 14,
                 ),
               ),
             ),
@@ -746,7 +772,7 @@ class _DateRangeFilterBar extends StatelessWidget {
                 style: TextStyle(
                   color: sectionTextMuted,
                   fontWeight: FontWeight.w600,
-                  fontSize: 12,
+                  fontSize: 14,
                 ),
               ),
               const Spacer(),
@@ -759,7 +785,7 @@ class _DateRangeFilterBar extends StatelessWidget {
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  child: const Text('Clear', style: TextStyle(fontSize: 12)),
+                  child: const Text('Clear', style: TextStyle(fontSize: 14)),
                 ),
             ],
           ),
@@ -824,7 +850,7 @@ class _DateChip extends StatelessWidget {
                       label,
                       style: TextStyle(
                         color: sectionTextMuted,
-                        fontSize: 10,
+                        fontSize: 12,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -835,7 +861,7 @@ class _DateChip extends StatelessWidget {
                       style: const TextStyle(
                         color: sectionText,
                         fontWeight: FontWeight.w600,
-                        fontSize: 13,
+                        fontSize: 15,
                       ),
                     ),
                   ],
@@ -911,13 +937,50 @@ bool _invoiceInDateRange(
 }
 
 /// Screenshot 3 — Open: Invoices (tap anywhere on bill row).
-class EmployeeInvoiceOpenPage extends StatelessWidget {
+class EmployeeInvoiceOpenPage extends StatefulWidget {
   const EmployeeInvoiceOpenPage({super.key, required this.invoice});
 
   final InvoiceSummaryModel invoice;
 
   @override
+  State<EmployeeInvoiceOpenPage> createState() =>
+      _EmployeeInvoiceOpenPageState();
+}
+
+class _EmployeeInvoiceOpenPageState extends State<EmployeeInvoiceOpenPage>
+    with LiveRefreshMixin {
+  late InvoiceSummaryModel _invoice;
+
+  @override
+  void initState() {
+    super.initState();
+    _invoice = widget.invoice;
+    startLiveRefresh(() => _reload());
+  }
+
+  @override
+  void dispose() {
+    stopLiveRefresh();
+    super.dispose();
+  }
+
+  Future<void> _reload() async {
+    final login = Provider.of<LoginViewmodel>(context, listen: false);
+    final sessionId = login.sessionId;
+    if (sessionId == null || sessionId.isEmpty) return;
+    final items = await PaymentHistoryService.fetchInvoices(
+      sessionId: sessionId,
+      limit: 200,
+      forceRefresh: true,
+    );
+    final next = InvoiceSummaryModel.matchInList(items, _invoice);
+    if (!mounted || next == null) return;
+    setState(() => _invoice = next);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final invoice = _invoice;
     final status = invoice.displayPaymentHistoryStatus;
     final invoiceLabel =
         '${invoice.displayNumber} - ${invoice.displayCustomer ?? ''} - ${invoice.invoiceDate ?? ''}';
@@ -933,14 +996,14 @@ class EmployeeInvoiceOpenPage extends StatelessWidget {
           style: TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
       ),
       body: ResponsiveBody(
         child: RefreshIndicator(
         color: const Color(0xFFE07A2F),
-        onRefresh: () async {},
+        onRefresh: _reload,
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: SystemSafe.listPadding(context, top: 10, extraBottom: 24),
@@ -1012,13 +1075,50 @@ class EmployeeInvoiceOpenPage extends StatelessWidget {
 }
 
 /// Screenshot 4 — Bill Details (tap View on bill row).
-class EmployeeBillDetailsPage extends StatelessWidget {
+class EmployeeBillDetailsPage extends StatefulWidget {
   const EmployeeBillDetailsPage({super.key, required this.invoice});
 
   final InvoiceSummaryModel invoice;
 
   @override
+  State<EmployeeBillDetailsPage> createState() =>
+      _EmployeeBillDetailsPageState();
+}
+
+class _EmployeeBillDetailsPageState extends State<EmployeeBillDetailsPage>
+    with LiveRefreshMixin {
+  late InvoiceSummaryModel _invoice;
+
+  @override
+  void initState() {
+    super.initState();
+    _invoice = widget.invoice;
+    startLiveRefresh(() => _reload());
+  }
+
+  @override
+  void dispose() {
+    stopLiveRefresh();
+    super.dispose();
+  }
+
+  Future<void> _reload() async {
+    final login = Provider.of<LoginViewmodel>(context, listen: false);
+    final sessionId = login.sessionId;
+    if (sessionId == null || sessionId.isEmpty) return;
+    final items = await PaymentHistoryService.fetchInvoices(
+      sessionId: sessionId,
+      limit: 200,
+      forceRefresh: true,
+    );
+    final next = InvoiceSummaryModel.matchInList(items, _invoice);
+    if (!mounted || next == null) return;
+    setState(() => _invoice = next);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final invoice = _invoice;
     return Scaffold(
       backgroundColor: sectionBg,
       appBar: AppBar(
@@ -1030,14 +1130,14 @@ class EmployeeBillDetailsPage extends StatelessWidget {
           style: TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
       ),
       body: ResponsiveBody(
         child: RefreshIndicator(
         color: const Color(0xFFE07A2F),
-        onRefresh: () async {},
+        onRefresh: _reload,
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: SystemSafe.listPadding(context, top: 10, extraBottom: 24),
@@ -1056,7 +1156,7 @@ class EmployeeBillDetailsPage extends StatelessWidget {
                   invoice.displayNumber,
                   style: const TextStyle(
                     color: sectionText,
-                    fontSize: 16,
+                    fontSize: 18,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -1176,7 +1276,7 @@ class _WebsiteKpiCard extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: Colors.blueGrey.shade700,
-                  fontSize: 10,
+                  fontSize: 12,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.3,
                   height: 1.15,
@@ -1190,7 +1290,7 @@ class _WebsiteKpiCard extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Colors.black87,
-                  fontSize: 26,
+                  fontSize: 28,
                   fontWeight: FontWeight.w800,
                   height: 1.1,
                 ),
@@ -1217,7 +1317,7 @@ class _WebsiteKpiCard extends StatelessWidget {
                       Text(
                         'VIEW DETAILS',
                         style: TextStyle(
-                          fontSize: 11,
+                          fontSize: 13,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 0.2,
                         ),
@@ -1322,7 +1422,7 @@ class _EmployeeKpiDetailPage extends StatelessWidget {
           style: const TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
       ),
@@ -1341,7 +1441,7 @@ class _EmployeeKpiDetailPage extends StatelessWidget {
                 subtitle!,
                 style: TextStyle(
                   color: sectionTextMuted,
-                  fontSize: 12,
+                  fontSize: 14,
                 ),
               ),
             ),
@@ -1384,7 +1484,7 @@ class _EmployeeKpiDetailPage extends StatelessWidget {
                                   style: const TextStyle(
                                     color: sectionText,
                                     fontWeight: FontWeight.w700,
-                                    fontSize: 14,
+                                    fontSize: 16,
                                   ),
                                 ),
                                 const SizedBox(height: 4),
@@ -1392,7 +1492,7 @@ class _EmployeeKpiDetailPage extends StatelessWidget {
                                   row.subtitle,
                                   style: TextStyle(
                                     color: sectionTextMuted,
-                                    fontSize: 11,
+                                    fontSize: 13,
                                   ),
                                 ),
                               ],
@@ -1403,7 +1503,7 @@ class _EmployeeKpiDetailPage extends StatelessWidget {
                             style: const TextStyle(
                               color: Color(0xFFE07A2F),
                               fontWeight: FontWeight.w800,
-                              fontSize: 18,
+                              fontSize: 20,
                             ),
                           ),
                           if (row.onTap != null) ...[
@@ -1454,7 +1554,7 @@ class _EmployeeCard extends StatelessWidget {
                   style: const TextStyle(
                     color: sectionText,
                     fontWeight: FontWeight.w700,
-                    fontSize: 15,
+                    fontSize: 17,
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -1516,7 +1616,7 @@ class _EmpStatChip extends StatelessWidget {
         '$label $value',
         style: TextStyle(
           color: sectionText,
-          fontSize: 11,
+          fontSize: 13,
         ),
       ),
     );
@@ -1541,7 +1641,7 @@ class _DetailRow extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
               ),
             ),
           ),
@@ -1552,7 +1652,7 @@ class _DetailRow extends StatelessWidget {
               style: const TextStyle(
                 color: sectionText,
                 fontWeight: FontWeight.w600,
-                fontSize: 12,
+                fontSize: 14,
               ),
             ),
           ),
@@ -1652,7 +1752,7 @@ class _InvoiceListCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
-                child: const Text('View', style: TextStyle(fontSize: 12)),
+                child: const Text('View', style: TextStyle(fontSize: 14)),
               ),
             ],
           ),
@@ -1686,7 +1786,7 @@ class _MiniField extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: sectionTextMuted,
-              fontSize: 10,
+              fontSize: 12,
             ),
           ),
           const SizedBox(height: 2),
@@ -1696,7 +1796,7 @@ class _MiniField extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: sectionText,
-              fontSize: emphasize ? 13 : 12,
+              fontSize: emphasize ? 15 : 14,
               fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
             ),
           ),
@@ -1726,7 +1826,7 @@ class _Meta extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 11,
+                fontSize: 13,
               ),
             ),
           ),
@@ -1735,7 +1835,7 @@ class _Meta extends StatelessWidget {
               value,
               style: TextStyle(
                 color: emphasize ? const Color(0xFFE53935) : sectionText,
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: emphasize ? FontWeight.w700 : FontWeight.w400,
               ),
             ),
@@ -1768,7 +1868,7 @@ class _AmountChip extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 10,
+                fontSize: 12,
               ),
             ),
             const SizedBox(height: 2),
@@ -1777,7 +1877,7 @@ class _AmountChip extends StatelessWidget {
               style: const TextStyle(
                 color: sectionText,
                 fontWeight: FontWeight.w700,
-                fontSize: 13,
+                fontSize: 15,
               ),
             ),
           ],

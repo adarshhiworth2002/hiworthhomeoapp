@@ -73,7 +73,7 @@ class _CustomerPaymentFromChequePageState
           style: const TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w500,
-            fontSize: 15,
+            fontSize: 17,
           ),
         ),
         backgroundColor: sectionBg,
@@ -124,9 +124,9 @@ class _CustomerPaymentFromChequePageState
                           const Text(
                             'CUSTOMER PAYMENT',
                             style: TextStyle(
-                              color: sectionText,
+                              color: Colors.white,
                               fontWeight: FontWeight.w700,
-                              fontSize: 13,
+                              fontSize: 15,
                               letterSpacing: 0.3,
                             ),
                           ),
@@ -135,7 +135,7 @@ class _CustomerPaymentFromChequePageState
                             cheque.displayCustomerPayment,
                             style: TextStyle(
                               color: Colors.white.withValues(alpha: 0.9),
-                              fontSize: 12,
+                              fontSize: 14,
                             ),
                           ),
                         ],
@@ -147,8 +147,8 @@ class _CustomerPaymentFromChequePageState
                         Text(
                           'OUTSTANDING BALANCE',
                           style: TextStyle(
-                            color: sectionTextMuted,
-                            fontSize: 9,
+                            color: Colors.white.withValues(alpha: 0.75),
+                            fontSize: 11,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -156,9 +156,9 @@ class _CustomerPaymentFromChequePageState
                         Text(
                           '₹ ${ChequeClearanceModel.formatMoney(outstanding)}',
                           style: const TextStyle(
-                            color: sectionText,
+                            color: Colors.white,
                             fontWeight: FontWeight.w800,
-                            fontSize: 15,
+                            fontSize: 17,
                           ),
                         ),
                       ],
@@ -241,7 +241,7 @@ class _CustomerPaymentFromChequePageState
                 style: TextStyle(
                   color: sectionTextMuted,
                   fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                  fontSize: 15,
                   letterSpacing: 0.5,
                 ),
               ),
@@ -373,7 +373,7 @@ class _NewPaymentGradientButton extends StatelessWidget {
                 'New Payment',
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 15,
+                  fontSize: 17,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 0.3,
                 ),
@@ -421,7 +421,7 @@ class _SectionCard extends StatelessWidget {
                 style: const TextStyle(
                   color: sectionText,
                   fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                  fontSize: 15,
                 ),
               ),
             ],
@@ -451,7 +451,7 @@ class _Meta extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = Text(
       value,
-      style: const TextStyle(color: sectionText, fontSize: 12),
+      style: const TextStyle(color: sectionText, fontSize: 14),
     );
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -464,7 +464,7 @@ class _Meta extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 11,
+                fontSize: 13,
               ),
             ),
           ),
@@ -515,7 +515,7 @@ class _InvoiceCard extends StatelessWidget {
                     : Icons.check_box_outline_blank,
                 color: invoice.selected
                     ? const Color(0xFF7E57C2)
-                    : Colors.white54,
+                    : sectionTextMuted,
                 size: 18,
               ),
               const SizedBox(width: 8),
@@ -525,7 +525,7 @@ class _InvoiceCard extends StatelessWidget {
                   style: const TextStyle(
                     color: sectionText,
                     fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                    fontSize: 15,
                   ),
                 ),
               ),
@@ -610,7 +610,7 @@ class _InvCell extends StatelessWidget {
           label,
           style: TextStyle(
             color: sectionTextMuted,
-            fontSize: 9,
+            fontSize: 11,
           ),
         ),
         const SizedBox(height: 2),
@@ -618,7 +618,7 @@ class _InvCell extends StatelessWidget {
           value,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: sectionText, fontSize: 12),
+          style: const TextStyle(color: sectionText, fontSize: 14),
         ),
       ],
     );
@@ -642,7 +642,7 @@ class _FooterRow extends StatelessWidget {
               label,
               style: TextStyle(
                 color: sectionTextMuted,
-                fontSize: 12,
+                fontSize: 14,
               ),
             ),
           ),
@@ -651,7 +651,7 @@ class _FooterRow extends StatelessWidget {
             style: const TextStyle(
               color: sectionText,
               fontWeight: FontWeight.w600,
-              fontSize: 12,
+              fontSize: 14,
             ),
           ),
         ],

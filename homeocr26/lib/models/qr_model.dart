@@ -64,6 +64,8 @@ class QrData {
   String? potency;
   String? group;
   int? productId;
+  /// Website pharmacy stock number (`stock_display_id`).
+  int? stockDisplayId;
   /// Odoo `entry.stock` row id (for restock / RPC when display id differs).
   int? stockEntryId;
   double? mrp;
@@ -96,6 +98,7 @@ class QrData {
     this.potency,
     this.group,
     this.productId,
+    this.stockDisplayId,
     this.stockEntryId,
     this.mrp,
     this.batch,
@@ -149,22 +152,44 @@ class QrData {
       invoiceNo: json['invoice_no'],
       documentType: json['document_type'],
       hsn: json['hsn'],
-      company: json['company'],
+      company: _firstNonEmptyString(json, const [
+        'company',
+        'pharmacy_company',
+        'medicine_company',
+        'comp',
+      ]),
       tax: (json['tax_percent'] as num?)?.toDouble() ??
           (json['tax'] as num?)?.toDouble(),
       expiry: json['expiry'],
-      packing: json['packing'],
-      potency: json['potency'],
-      group: json['group'],
-      productId: json['product_id'] is int
-          ? json['product_id'] as int
-          : int.tryParse(json['product_id']?.toString() ?? ''),
-      stockEntryId: json['stock_entry_id'] is int
-          ? json['stock_entry_id'] as int
-          : int.tryParse(json['stock_entry_id']?.toString() ?? ''),
+      potency: _firstNonEmptyString(json, const [
+        'potency',
+        'potency_name',
+        'power',
+      ]),
+      group: _firstNonEmptyString(json, const [
+        'group',
+        'pharmacy_group',
+        'medicine_group',
+      ]),
+      productId: _asInt(json['product_id']),
+      stockDisplayId: _asInt(json['stock_display_id']) ??
+          _asInt(json['display_id']) ??
+          _asInt(json['stock_no']),
+      stockEntryId: _asInt(json['stock_entry_id']),
       mrp: (json['mrp'] as num?)?.toDouble(),
-      batch: json['batch'],
-      productName: json['product_name'],
+      batch: _firstNonEmptyString(json, const ['batch', 'batch_no']),
+      packing: _firstNonEmptyString(json, const [
+        'packing',
+        'pack',
+        'packing_name',
+      ]),
+      productName: _firstNonEmptyString(json, const [
+        'product_name',
+        'medicine',
+        'medicine_name',
+        'name',
+        'product',
+      ]),
       rack: json['rack'],
       mfd: _firstNonEmptyString(json, const [
         'mfd',
@@ -176,6 +201,13 @@ class QrData {
       discountPercent: (json['discount_percent'] as num?)?.toDouble() ??
           (json['discount'] as num?)?.toDouble(),
     );
+  }
+
+  static int? _asInt(dynamic value) {
+    if (value == null || value == false) return null;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString().replaceAll(',', ''));
   }
 
   static String? _firstNonEmptyString(
@@ -240,6 +272,7 @@ class QrData {
       'potency': potency,
       'group': group,
       'product_id': productId,
+      'stock_display_id': stockDisplayId,
       'stock_entry_id': stockEntryId,
       'mrp': mrp,
       'batch': batch,

@@ -841,14 +841,14 @@ document.cookie = "cids=1; path=/";
       backgroundColor: const Color(0xFFF0F0F0),
       appBar: AppBar(
         backgroundColor: sectionBg,
-        foregroundColor: Colors.white,
+        foregroundColor: sectionText,
         iconTheme: const IconThemeData(color: sectionText),
         title: Text(
           title,
           style: const TextStyle(
             color: sectionText,
             fontWeight: FontWeight.w600,
-            fontSize: 16,
+            fontSize: 18,
           ),
         ),
         actions: [
@@ -858,15 +858,9 @@ document.cookie = "cids=1; path=/";
               tooltip: billNumber.isEmpty
                   ? 'Scan QR into this bill'
                   : 'Scan into $billNumber',
-              icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+              icon: const Icon(Icons.qr_code_scanner, color: sectionAccent),
               onPressed: _openScannerForCurrentBill,
             ),
-          IconButton(
-            tooltip: 'Reload',
-            icon: const Icon(Icons.refresh, color: sectionText),
-            onPressed:
-                (_signingIn || controller == null) ? null : _openInvoices,
-          ),
         ],
       ),
       body: SafeArea(
@@ -882,9 +876,15 @@ document.cookie = "cids=1; path=/";
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const CircularProgressIndicator(),
+                      const CircularProgressIndicator(
+                        color: Color(0xFFE07A2F),
+                      ),
                       const SizedBox(height: 16),
-                      Text(_status, textAlign: TextAlign.center),
+                      Text(
+                        _status,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: sectionText),
+                      ),
                     ],
                   ),
                 ),
@@ -910,7 +910,11 @@ document.cookie = "cids=1; path=/";
                         const Icon(Icons.error_outline,
                             size: 48, color: Colors.redAccent),
                         const SizedBox(height: 12),
-                        Text(_error!, textAlign: TextAlign.center),
+                        Text(
+                          _error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: sectionText),
+                        ),
                         const SizedBox(height: 16),
                         FilledButton(
                           onPressed: _openInvoices,

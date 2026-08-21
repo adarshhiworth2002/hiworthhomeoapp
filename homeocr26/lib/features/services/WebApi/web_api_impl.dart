@@ -24,6 +24,21 @@ class WebApiImpl implements WebAPI {
         body: jsonEncode(userDetails));
     print({"----${response.body}---"});
     return response;
+
+    // --- Login failure handling we added (timeout + browser-like headers). ---
+    // final url = '${AppConfig.baseAppUrl}${EndPoint.login.path}';
+    // if (kDebugMode) {
+    //   print('url::: $url');
+    // }
+    // final response = await post(
+    //   Uri.parse(url),
+    //   headers: SessionHelper.jsonHeaders(),
+    //   body: jsonEncode(userDetails),
+    // ).timeout(const Duration(seconds: 30));
+    // if (kDebugMode) {
+    //   print('login HTTP ${response.statusCode} (${response.bodyBytes.length} bytes)');
+    // }
+    // return response;
   }
 
   @override
@@ -34,10 +49,7 @@ class WebApiImpl implements WebAPI {
     print(userDetails);
     final response = await post(
         Uri.parse('${AppConfig.baseAppUrl}${EndPoint.qrFetch.path}'),
-        headers: <String, String>{
-          'Content-Type': 'application/json',
-          'Cookie': SessionHelper.cookie(sessionId),
-        },
+        headers: SessionHelper.jsonHeaders(sessionId: sessionId),
         body: jsonEncode(userDetails));
     return response;
   }
@@ -49,10 +61,7 @@ class WebApiImpl implements WebAPI {
     print(userDetails);
     final response = await post(
         Uri.parse('${AppConfig.baseAppUrl}${EndPoint.addMedicineQty.path}'),
-        headers: <String, String>{
-          'Content-Type': 'application/json',
-          'Cookie': SessionHelper.cookie(sessionId),
-        },
+        headers: SessionHelper.jsonHeaders(sessionId: sessionId),
         body: jsonEncode(userDetails));
     return response;
   }
@@ -71,9 +80,8 @@ class WebApiImpl implements WebAPI {
     }
     final response = await post(
       Uri.parse('${AppConfig.baseAppUrl}$endpointPath'),
-      headers: <String, String>{
-        'Content-Type': 'application/json',
-        'Cookie': SessionHelper.cookie(sessionId),
+      headers: {
+        ...SessionHelper.jsonHeaders(sessionId: sessionId),
         'Connection': 'keep-alive',
       },
       body: jsonEncode(userDetails),
@@ -106,10 +114,7 @@ class WebApiImpl implements WebAPI {
     print(userDetails);
     final response = await post(
         Uri.parse('${AppConfig.baseAppUrl}${EndPoint.supplierAdd.path}'),
-        headers: <String, String>{
-          'Content-Type': 'application/json',
-          'Cookie': SessionHelper.cookie(sessionId),
-        },
+        headers: SessionHelper.jsonHeaders(sessionId: sessionId),
         body: jsonEncode(userDetails));
     print(":::::::${response.body}:::::");
     return response;

@@ -58,14 +58,13 @@ class StockItemModel {
   final String? expiryColorState;
 
   factory StockItemModel.fromJson(Map<String, dynamic> json) {
-    final displayId = _asInt(json['stock_display_id'] ?? json['display_id']);
+    // Website Stock ID on this pharmacy is the `entry.stock` id /
+    // Flutter `stock_id` (e.g. 127955). Do not prefer `stock_display_id`
+    // (an older parallel sequence, e.g. 113063).
     final rowId = _asInt(json['id'] ?? json['stock_entry_id']);
-    final legacyStockId = _asInt(json['stock_id']);
-
-    // `stock_display_id` is the pharmacy display number; `id` is the Odoo row.
-    // Never treat Odoo row id as display id when a separate display id exists.
-    final resolvedDisplayId = displayId ?? legacyStockId;
-    final resolvedEntryId = rowId;
+    final listId = _asInt(json['stock_id']);
+    final resolvedDisplayId = listId ?? rowId;
+    final resolvedEntryId = rowId ?? listId;
 
     return StockItemModel(
       stockDisplayId: resolvedDisplayId,
@@ -144,6 +143,35 @@ class StockItemModel {
       holdQty: _asDouble(json['hold_qty'] ?? json['hold_quantity']),
       availableStock: _asDouble(json['available_stock']),
       expiryColorState: _display(json['expiry_color_state']),
+    );
+  }
+
+  StockItemModel withDisplayId(int displayId) {
+    if (stockDisplayId == displayId) return this;
+    return StockItemModel(
+      stockDisplayId: displayId,
+      entryStockId: entryStockId,
+      qrToken: qrToken,
+      stockDate: stockDate,
+      medicine: medicine,
+      potency: potency,
+      packing: packing,
+      company: company,
+      group: group,
+      itemQty: itemQty,
+      stock: stock,
+      mrp: mrp,
+      batch: batch,
+      mfd: mfd,
+      exp: exp,
+      expSortRaw: expSortRaw,
+      mfdSortRaw: mfdSortRaw,
+      rack: rack,
+      hsn: hsn,
+      gst: gst,
+      holdQty: holdQty,
+      availableStock: availableStock,
+      expiryColorState: expiryColorState,
     );
   }
 

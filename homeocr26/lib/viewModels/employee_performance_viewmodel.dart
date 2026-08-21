@@ -41,7 +41,10 @@ class EmployeePerformanceViewModel extends ChangeNotifier {
 
       final webApi = WebApiImpl();
       final results = await Future.wait([
-        _loadInvoices(sessionId, forceRefresh: forceRefresh),
+        _loadInvoices(
+          sessionId,
+          forceRefresh: forceRefresh && !PaymentHistoryService.hasAnyCache,
+        ),
         _loadSummaryFromApi(webApi, sessionId),
       ]);
 
