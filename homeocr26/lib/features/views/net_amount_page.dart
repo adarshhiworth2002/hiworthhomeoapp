@@ -350,14 +350,22 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage>
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                child: const PaymentBookColorLegend(),
+                child: PaymentBookColorLegend(
+                  hideStyles: const {PaymentBookRowStyle.cancel},
+                  labelOverrides: isGave
+                      ? const {PaymentBookRowStyle.draft: 'Pending'}
+                      : const {},
+                ),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: InvoiceStatusFilterChips(
                   selected: model.statusFilter,
                   onSelected: model.setStatusFilter,
-                  hideKeys: isGave ? const {'open'} : const {},
+                  hideKeys: isGave ? const {'open', 'cancel'} : const {'cancel'},
+                  labelOverrides: isGave
+                      ? const {'draft': 'Pending'}
+                      : const {},
                 ),
               ),
               Padding(
@@ -464,11 +472,13 @@ class _NetAmountListCard extends StatelessWidget {
     final style = invoice.paymentBookRowStyle;
     final color = PaymentBookStyleColors.of(style);
     final weight = PaymentBookStyleColors.weightOf(style);
-    final status = row.displayBillStatus;
+    final status = isGave && row.displayBillStatus == 'Draft'
+        ? 'Pending'
+        : row.displayBillStatus;
     final fields = <Widget>[
       _Cell(
-        label: isGave ? 'Supplier' : 'Number',
-        value: isGave ? NetAmountRow.text(row.supplier) : row.displayNumber,
+        label: isGave ? 'Supplier' : 'Customer',
+        value: isGave ? NetAmountRow.text(row.supplier) : NetAmountRow.text(row.customer),
         emphasize: true,
         color: color,
         weight: FontWeight.w800,
@@ -479,18 +489,11 @@ class _NetAmountListCard extends StatelessWidget {
         color: color,
         weight: weight,
       ),
-      if (!isGave)
-        _Cell(
-          label: 'Tax',
-          value: NetAmountRow.money(row.displayTaxAmount),
-          color: color,
-          weight: weight,
-        ),
       _Cell(
-        label: 'Paid',
-        value: NetAmountRow.money(row.paidAmount),
-        color: const Color(0xFF2E7D32),
-        weight: FontWeight.w700,
+        label: 'Invoice Number',
+        value: row.displayNumber,
+        color: color,
+        weight: weight,
       ),
       _Cell(
         label: 'Balance',
@@ -503,6 +506,12 @@ class _NetAmountListCard extends StatelessWidget {
         value: NetAmountRow.money(row.total),
         color: color,
         weight: weight,
+      ),
+      _Cell(
+        label: 'Paid',
+        value: NetAmountRow.money(row.paidAmount),
+        color: const Color(0xFF2E7D32),
+        weight: FontWeight.w700,
       ),
     ];
 

@@ -17,7 +17,6 @@ import '../services/live_data_sync.dart';
 import '../services/scan_feedback.dart';
 import 'label_camera_page.dart';
 import 'label_text_select_page.dart';
-import '../widgets/invoice_prefix_field.dart';
 import '../widgets/show_dialog_custom.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
@@ -737,8 +736,6 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   icon: Icons.shopping_cart,
                   keyboardType: TextInputType.number,
                 ),
-                const Divider(color: sectionTextMuted),
-                _buildInvoiceField(model),
               ],
             ),
           ),
@@ -817,68 +814,10 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   icon: Icons.shopping_cart,
                   keyboardType: TextInputType.number,
                 ),
-                const Divider(color: sectionTextMuted),
-                _buildInvoiceField(model),
               ],
             ),
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildInvoiceField(CustomerMedViewmodel model) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 4, bottom: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.receipt_long,
-                size: 20,
-                color: const Color(0xFFE07A2F).withValues(alpha: 0.85),
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                'Invoice Number',
-                style: TextStyle(
-                  color: sectionTextMuted,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          if (_invoiceLocked)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: sectionCard,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFE07A2F).withValues(alpha: 0.5)),
-              ),
-              child: Text(
-                _fullInvoiceNumber,
-                style: const TextStyle(
-                  color: sectionText,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.3,
-                ),
-              ),
-            )
-          else
-            InvoicePrefixField(
-              controller: invoicePrefixController,
-              hintText: '0341',
-              onSearch: (prefix) =>
-                  model.searchInvoiceSuggestions(context, prefix),
-            ),
-        ],
       ),
     );
   }

@@ -387,10 +387,6 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
                   'GST type',
                   _formatGstType(_invoice.gstType),
                 ),
-                _ReadField(
-                  'Expiry Medicine Bill',
-                  _invoice.expiryMedicineBill ? 'Yes' : 'No',
-                ),
               ],
             ),
           ),
@@ -443,6 +439,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
                 _ReadField('Billed By', _invoice.billedBy),
                 _ReadField('Status', status),
                 _ReadField('Verified By', _invoice.verifiedBy),
+                _ReadField('Expense', _invoice.expense),
               ],
             ),
           ),

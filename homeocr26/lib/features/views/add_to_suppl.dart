@@ -9,7 +9,6 @@ import 'package:provider/provider.dart';
 import '../../viewModels/supplier_med_viewmodel.dart';
 import '../services/invoice_helper.dart';
 import '../services/invoice_search_service.dart';
-import '../widgets/invoice_prefix_field.dart';
 import '../widgets/show_dialog_custom.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
@@ -440,51 +439,12 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                       );
                     },
                   ),
-                  const Divider(color: sectionTextMuted),
-                  _buildInvoiceField(model),
                   const SizedBox(height: 8),
                 ],
               ),
             ),
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildInvoiceField(SupplierMedViewModel model) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 4, bottom: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.receipt_long,
-                size: 20,
-                color: const Color(0xFFE07A2F).withValues(alpha: 0.85),
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                'Invoice Number',
-                style: TextStyle(
-                  color: sectionTextMuted,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          InvoicePrefixField(
-            controller: invoicePrefixController,
-            hintText: '1011',
-            warnOnNonDraftSelection: true,
-            onSearchSuggestions: (prefix) =>
-                model.searchInvoiceSuggestionsDetailed(context, prefix),
-          ),
-        ],
       ),
     );
   }

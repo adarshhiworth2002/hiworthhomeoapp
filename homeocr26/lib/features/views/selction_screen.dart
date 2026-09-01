@@ -293,25 +293,26 @@ class _SelectionScreenState extends State<SelectionScreen> {
                               return GridView.count(
                           physics: const AlwaysScrollableScrollPhysics(),
                           crossAxisCount: r.homeCrossAxisCount,
-                          mainAxisSpacing: 14,
-                          crossAxisSpacing: 14,
+                          mainAxisSpacing: 10,
+                          crossAxisSpacing: 10,
                           childAspectRatio: r.homeTileAspect,
                           children: [
                             
                             _HomeTile(
                               title: 'Net Amount\n(Yesterday)',
                               icon: Icons.currency_rupee_outlined,
+                              accent: const Color(0xFFE07A2F),
                               subtitle: netModel.homeLoading
                                   ? '...'
                                   : NetAmountViewModel.formatAmount(
                                       netModel.displayYouGotPaid,
                                     ),
-                              accentSubtitle: true,
                               onTap: _openNetAmount,
                             ),
                             _HomeTile(
                               title: 'Cash\nBook',
                               icon: Icons.menu_book_outlined,
+                              accent: const Color(0xFFD4A017),
                               onTap: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
@@ -323,11 +324,13 @@ class _SelectionScreenState extends State<SelectionScreen> {
                             _HomeTile(
                               title: 'Today Cheque\nClearance',
                               icon: Icons.price_check_outlined,
+                              accent: const Color(0xFF4CAF50),
                               onTap: _openChequeClearance,
                             ),
                             _HomeTile(
                               title: 'Payment\nHistory',
                               icon: Icons.history_outlined,
+                              accent: const Color(0xFF7B5EA7),
                               onTap: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
@@ -339,6 +342,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                             _HomeTile(
                               title: 'Customer\nInvoice',
                               icon: Icons.receipt_long_outlined,
+                              accent: const Color(0xFF4A90D9),
                               onTap: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
@@ -351,6 +355,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                             _HomeTile(
                               title: 'Payment\nBook',
                               icon: Icons.payments_outlined,
+                              accent: const Color(0xFFE07A9A),
                               onTap: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
@@ -359,10 +364,10 @@ class _SelectionScreenState extends State<SelectionScreen> {
                                 );
                               },
                             ),
-
                             _HomeTile(
                               title: 'Customer\nWeb View',
                               icon: Icons.language_outlined,
+                              accent: const Color(0xFF2A9D8F),
                               onTap: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
@@ -374,6 +379,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                             _HomeTile(
                               title: 'Stock',
                               icon: Icons.inventory_2_outlined,
+                              accent: const Color(0xFFC17F3A),
                               onTap: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
@@ -385,6 +391,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                             _HomeTile(
                               title: 'Employee\nPerformance',
                               icon: Icons.insights_outlined,
+                              accent: const Color(0xFF5B4B8A),
                               onTap: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
@@ -419,18 +426,17 @@ class _HomeTile extends StatelessWidget {
     required this.title,
     required this.icon,
     required this.onTap,
+    required this.accent,
     this.subtitle,
-    this.accentSubtitle = false,
   });
 
   final String title;
   final IconData icon;
   final VoidCallback onTap;
+  final Color accent;
   final String? subtitle;
-  final bool accentSubtitle;
 
   static const _ink = Color(0xFF1C1A17);
-  static const _accent = Color(0xFFE07A2F);
 
   @override
   Widget build(BuildContext context) {
@@ -440,13 +446,13 @@ class _HomeTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         onTap: onTap,
         child: Ink(
-          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.88),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.65),
+            color: Color.alphaBlend(
+              accent.withValues(alpha: 0.16),
+              Colors.white.withValues(alpha: 0.92),
             ),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: accent.withValues(alpha: 0.22)),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.16),
@@ -455,41 +461,75 @@ class _HomeTile extends StatelessWidget {
               ),
             ],
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Stack(
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: _accent.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 30, 8),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      title,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        height: 1.15,
+                        color: _ink,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(icon, color: accent, size: 20),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle!,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: accent,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-                child: Icon(icon, color: _accent, size: 22),
               ),
-              const Spacer(),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
-                  height: 1.2,
-                  color: _ink,
-                ),
-              ),
-              if (subtitle != null) ...[
-                const SizedBox(height: 6),
-                Text(
-                  subtitle!,
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: accentSubtitle
-                        ? const Color(0xFFE07A2F)
-                        : _ink,
+              Positioned(
+                right: 6,
+                top: 0,
+                bottom: 0,
+                child: IgnorePointer(
+                  child: Center(
+                    child: Container(
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: accent,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.chevron_right_rounded,
+                        color: Colors.white,
+                        size: 16,
+                      ),
+                    ),
                   ),
                 ),
-              ],
+              ),
             ],
           ),
         ),

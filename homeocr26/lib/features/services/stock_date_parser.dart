@@ -1,16 +1,16 @@
 /// Parse MFD / expiry shortcuts used on stock create/edit.
 ///
-/// - `1222` → `01/12/22` (day defaults to 1 when month+year is entered)
-/// - `0722` → `01/07/22`
+/// - `1222` → `01/12/2022` (day defaults to 1 when month+year is entered)
+/// - `0722` → `01/07/2022`
 /// - `722` is invalid (month must be two digits)
-/// Full dates like `15/12/2022` are kept when valid (shown as `15/12/22`).
+/// Full dates like `15/12/2022` are kept when valid (shown as `15/12/2022`).
 class StockDateParser {
   const StockDateParser._();
 
   static String formatDisplay(DateTime date) {
     final d = date.day.toString().padLeft(2, '0');
     final m = date.month.toString().padLeft(2, '0');
-    final y = (date.year % 100).toString().padLeft(2, '0');
+    final y = date.year.toString().padLeft(4, '0');
     return '$d/$m/$y';
   }
 

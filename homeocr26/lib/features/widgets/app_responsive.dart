@@ -77,9 +77,9 @@ class AppResponsive {
   }
 
   double get homeTileAspect {
-    if (width >= AppBreakpoints.medium) return 1.35;
-    if (width >= AppBreakpoints.compact) return 1.2;
-    return 1.05;
+    if (width >= AppBreakpoints.medium) return 1.45;
+    if (width >= AppBreakpoints.compact) return 1.28;
+    return 1.22;
   }
 
   int get kpiCrossAxisCount {

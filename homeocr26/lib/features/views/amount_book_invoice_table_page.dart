@@ -106,7 +106,9 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
     double youGaveSum = 0;
     double youGotSum = 0;
     for (final row in rows) {
-      totalSum += row.total ?? 0;
+      totalSum += row.isYouGave
+          ? (row.youGaveAmount ?? row.total ?? 0)
+          : (row.youGotAmount ?? 0);
       balanceSum += row.balance ?? 0;
       youGaveSum += row.youGaveAmount ?? 0;
       youGotSum += row.youGotAmount ?? 0;
@@ -211,6 +213,8 @@ class _InvoiceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final eventAmount =
+        invoice.isYouGave ? invoice.youGaveAmount : invoice.youGotAmount;
     final fields = <Widget>[
       _LineCell(
         label: 'Number',
@@ -226,8 +230,10 @@ class _InvoiceCard extends StatelessWidget {
         value: AmountBookLedgerBuilder.formatPaymentMode(invoice.paymentMode),
       ),
       _LineCell(
-        label: 'Total',
-        value: AmountBookViewModel.formatAmount(invoice.total),
+        label: invoice.isYouGave ? 'Bill Total' : 'Amount',
+        value: AmountBookViewModel.formatAmount(
+          invoice.isYouGave ? invoice.total : eventAmount,
+        ),
       ),
       if (invoice.isYouGave)
         _LineCell(

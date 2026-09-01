@@ -87,6 +87,63 @@ class StockViewModel extends ChangeNotifier {
   static void clearGlobalCache() {
     _sharedSnapshot = null;
     // Keep _cachedLastOffset so background id-order refine stays fast.
+    // Keep name catalogs — New Stock still needs names from prior searches.
+  }
+
+  /// Durable name catalogs across list refine/search (snapshot alone is not enough —
+  /// after id-order refine the cache only holds the oldest window, not TEST* rows).
+  static final Set<String> _knownMedicines = {};
+  static final Set<String> _knownPotencies = {};
+  static final Set<String> _knownPackings = {};
+  static final Set<String> _knownCompanies = {};
+  static final Set<String> _knownGroups = {};
+  static final Set<String> _knownRacks = {};
+
+  static List<String> get knownMedicineNames =>
+      _sortedNames(_knownMedicines);
+  static List<String> get knownPotencyNames => _sortedNames(_knownPotencies);
+  static List<String> get knownPackingNames => _sortedNames(_knownPackings);
+  static List<String> get knownCompanyNames => _sortedNames(_knownCompanies);
+  static List<String> get knownGroupNames => _sortedNames(_knownGroups);
+  static List<String> get knownRackNames => _sortedNames(_knownRacks);
+
+  static List<String> _sortedNames(Set<String> set) {
+    final list = set.toList();
+    list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return list;
+  }
+
+  static void rememberNamesFromItems(Iterable<StockItemModel> items) {
+    for (final item in items) {
+      _addKnown(_knownMedicines, item.medicine ?? '');
+      _addKnown(_knownPotencies, item.potency ?? '');
+      _addKnown(_knownPackings, item.packing ?? '');
+      _addKnown(_knownCompanies, item.company ?? '');
+      _addKnown(_knownGroups, item.group ?? '');
+      _addKnown(_knownRacks, item.rack ?? '');
+    }
+  }
+
+  static void rememberMedicineNames(Iterable<String> names) {
+    for (final name in names) {
+      _addKnown(_knownMedicines, name);
+    }
+  }
+
+  static void _addKnown(Set<String> set, String value) {
+    final t = value.trim();
+    if (t.isEmpty || t.toLowerCase() == 'false') return;
+    // Store canonical casing of first seen; ignore case-duplicates.
+    final lower = t.toLowerCase();
+    if (set.any((e) => e.toLowerCase() == lower)) return;
+    set.add(t);
+  }
+
+  /// Names already loaded for the Stock list — used to seed New Stock dropdowns.
+  static List<StockItemModel> get cachedItems {
+    final snapshot = _sharedSnapshot;
+    if (snapshot == null || snapshot.items.isEmpty) return const [];
+    return List<StockItemModel>.unmodifiable(snapshot.items);
   }
 
   static bool _isSnapshotFresh() {
@@ -98,6 +155,7 @@ class StockViewModel extends ChangeNotifier {
 
   void _applySnapshot(_StockPageSnapshot snapshot) {
     items = List<StockItemModel>.from(snapshot.items);
+    rememberNamesFromItems(items);
     hasMore = snapshot.hasMore;
     _useDescTail = snapshot.useDescTail;
     _ascOffset = snapshot.ascOffset;
@@ -186,6 +244,7 @@ class StockViewModel extends ChangeNotifier {
   /// Apply stock detail edits to the in-memory list without a full reload.
   void prependLocalItem(StockItemModel created) {
     items = [created, ...items];
+    rememberNamesFromItems([created]);
     _rebuildSearchHits();
     _saveSnapshot();
     notifyListeners();
@@ -203,6 +262,7 @@ class StockViewModel extends ChangeNotifier {
         break;
       }
     }
+    rememberNamesFromItems([updated]);
     _rebuildSearchHits();
     _saveSnapshot();
     notifyListeners();
@@ -547,6 +607,8 @@ class StockViewModel extends ChangeNotifier {
       if (prefixHits.isNotEmpty) {
         _merge(prefixHits);
       }
+      // Always remember search page names (even if prefix filter emptied list).
+      rememberNamesFromItems(page.items);
       _rebuildSearchHits();
       statusText = '${_searchHits.length} matches · ${items.length} loaded';
     } finally {
@@ -628,6 +690,7 @@ class StockViewModel extends ChangeNotifier {
     }
     // Keep overall list ordered by stock id ascending.
     items = _sortedByStockId(items);
+    rememberNamesFromItems(page);
     return added;
   }
 

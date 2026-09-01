@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
@@ -13,6 +15,8 @@ class MasterNamePickSheet {
     required List<String> options,
     String? selected,
     bool allowCreate = true,
+    /// Optional live search (e.g. medicine masters + stock) when typing.
+    Future<List<String>> Function(String query)? onRemoteSearch,
   }) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return showModalBottomSheet<String>(
@@ -28,6 +32,7 @@ class MasterNamePickSheet {
         selected: selected,
         allowCreate: allowCreate,
         dark: dark,
+        onRemoteSearch: onRemoteSearch,
       ),
     );
   }
@@ -40,6 +45,7 @@ class _MasterNamePickBody extends StatefulWidget {
     required this.allowCreate,
     required this.dark,
     this.selected,
+    this.onRemoteSearch,
   });
 
   final String title;
@@ -47,6 +53,7 @@ class _MasterNamePickBody extends StatefulWidget {
   final String? selected;
   final bool allowCreate;
   final bool dark;
+  final Future<List<String>> Function(String query)? onRemoteSearch;
 
   @override
   State<_MasterNamePickBody> createState() => _MasterNamePickBodyState();
@@ -54,17 +61,75 @@ class _MasterNamePickBody extends StatefulWidget {
 
 class _MasterNamePickBodyState extends State<_MasterNamePickBody> {
   late final TextEditingController _controller;
+  Timer? _debounce;
+  int _searchGen = 0;
+  bool _searching = false;
+  List<String> _remote = const [];
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.selected ?? '');
+    if (widget.onRemoteSearch != null) {
+      _scheduleRemote(_controller.text);
+    }
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _scheduleRemote(String raw) {
+    final search = widget.onRemoteSearch;
+    if (search == null) return;
+    _debounce?.cancel();
+    final q = raw.trim();
+    if (q.isEmpty) {
+      setState(() {
+        _remote = const [];
+        _searching = false;
+      });
+      return;
+    }
+    setState(() => _searching = true);
+    final gen = ++_searchGen;
+    _debounce = Timer(const Duration(milliseconds: 280), () async {
+      try {
+        final names = await search(q);
+        if (!mounted || gen != _searchGen) return;
+        setState(() {
+          _remote = names;
+          _searching = false;
+        });
+      } catch (_) {
+        if (!mounted || gen != _searchGen) return;
+        setState(() => _searching = false);
+      }
+    });
+  }
+
+  List<String> _merged(String query) {
+    final q = query.toLowerCase();
+    final seen = <String>{};
+    final out = <String>[];
+    void add(String name) {
+      final t = name.trim();
+      if (t.isEmpty) return;
+      if (q.isNotEmpty && !t.toLowerCase().contains(q)) return;
+      if (seen.add(t.toLowerCase())) out.add(t);
+    }
+
+    for (final name in widget.options) {
+      add(name);
+    }
+    for (final name in _remote) {
+      add(name);
+    }
+    out.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return out;
   }
 
   @override
@@ -76,11 +141,10 @@ class _MasterNamePickBodyState extends State<_MasterNamePickBody> {
         : sectionCard;
     final query = _controller.text.trim();
     final q = query.toLowerCase();
-    final filtered = widget.options
-        .where((name) => q.isEmpty || name.toLowerCase().contains(q))
-        .toList(growable: false);
+    final filtered = _merged(query);
     final canCreate = widget.allowCreate &&
         query.isNotEmpty &&
+        !filtered.any((name) => name.toLowerCase() == q) &&
         !widget.options.any((name) => name.toLowerCase() == q);
 
     return Padding(
@@ -106,6 +170,15 @@ class _MasterNamePickBodyState extends State<_MasterNamePickBody> {
                         ),
                       ),
                     ),
+                    if (_searching)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 8),
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
                     TextButton(
                       onPressed: () => Navigator.pop(context),
                       child: const Text('Close'),
@@ -118,7 +191,10 @@ class _MasterNamePickBodyState extends State<_MasterNamePickBody> {
                 child: TextField(
                   autofocus: true,
                   controller: _controller,
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (v) {
+                    setState(() {});
+                    _scheduleRemote(v);
+                  },
                   style: TextStyle(color: textColor, fontSize: 16),
                   cursorColor: sectionAccent,
                   decoration: InputDecoration(
@@ -156,7 +232,11 @@ class _MasterNamePickBodyState extends State<_MasterNamePickBody> {
                 child: filtered.isEmpty
                     ? Center(
                         child: Text(
-                          canCreate ? 'No matches — create above' : 'No matches',
+                          _searching
+                              ? 'Searching…'
+                              : (canCreate
+                                  ? 'No matches — create above'
+                                  : 'No matches'),
                           style: TextStyle(color: muted),
                         ),
                       )

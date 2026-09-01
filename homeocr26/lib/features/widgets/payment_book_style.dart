@@ -41,7 +41,16 @@ class PaymentBookStyleColors {
 }
 
 class PaymentBookColorLegend extends StatelessWidget {
-  const PaymentBookColorLegend({super.key});
+  const PaymentBookColorLegend({
+    super.key,
+    this.hideStyles = const {},
+    this.labelOverrides = const {},
+  });
+
+  /// Styles to omit from the legend (e.g. hide Cancel on Net Amount).
+  final Set<PaymentBookRowStyle> hideStyles;
+  /// Per-style label overrides (e.g. Draft → Pending on You Gave).
+  final Map<PaymentBookRowStyle, String> labelOverrides;
 
   static const _items = <(PaymentBookRowStyle, String)>[
     (PaymentBookRowStyle.walkIn, 'Walk-in / Cash'),
@@ -58,28 +67,29 @@ class PaymentBookColorLegend extends StatelessWidget {
       runSpacing: 6,
       children: [
         for (final item in _items)
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: PaymentBookStyleColors.of(item.$1),
-                  shape: BoxShape.circle,
+          if (!hideStyles.contains(item.$1))
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: PaymentBookStyleColors.of(item.$1),
+                    shape: BoxShape.circle,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 4),
-              Text(
-                item.$2,
-                style: TextStyle(
-                  color: PaymentBookStyleColors.of(item.$1),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
+                const SizedBox(width: 4),
+                Text(
+                  labelOverrides[item.$1] ?? item.$2,
+                  style: TextStyle(
+                    color: PaymentBookStyleColors.of(item.$1),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
       ],
     );
   }
@@ -96,6 +106,7 @@ class InvoiceBillStatusBadge extends StatelessWidget {
       case 'paid':
         return const Color(0xFF2E7D32);
       case 'draft':
+      case 'pending':
         return const Color(0xFF6B7280);
       case 'open':
         return const Color(0xFF1565C0);
@@ -136,12 +147,15 @@ class InvoiceStatusFilterChips extends StatelessWidget {
     required this.selected,
     required this.onSelected,
     this.hideKeys = const {},
+    this.labelOverrides = const {},
   });
 
   final String selected;
   final ValueChanged<String> onSelected;
   /// Status keys to omit (e.g. hide `open` on You Gave).
   final Set<String> hideKeys;
+  /// Per-screen chip label overrides (e.g. draft -> Pending).
+  final Map<String, String> labelOverrides;
 
   static const tabs = <(String, String)>[
     ('all', 'All'),
@@ -162,7 +176,7 @@ class InvoiceStatusFilterChips extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: FilterChip(
-                  label: Text(tab.$2),
+                  label: Text(labelOverrides[tab.$1] ?? tab.$2),
                   selected: selected == tab.$1,
                   showCheckmark: true,
                   checkmarkColor: const Color(0xFFE07A2F),

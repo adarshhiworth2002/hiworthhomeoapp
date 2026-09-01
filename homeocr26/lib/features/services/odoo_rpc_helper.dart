@@ -10,6 +10,7 @@ import 'appConfig.dart';
 import 'invoice_calc_helper.dart';
 import 'invoice_helper.dart';
 import 'session_helper.dart';
+import 'stock_date_parser.dart';
 
 class InvoiceDraftResult {
   const InvoiceDraftResult({
@@ -30,6 +31,49 @@ class InvoiceLineTaxFixResult {
 
   final bool fixed;
   final List<int> stockEntryIds;
+}
+
+/// Customer credit limit from `pharmacy.customer` (API / Odoo).
+class CustomerCreditLimitInfo {
+  const CustomerCreditLimitInfo({
+    required this.creditLimit,
+    required this.outstanding,
+    required this.availableCredit,
+    this.customerId,
+    this.customerName,
+  });
+
+  final int? customerId;
+  final String? customerName;
+  final double creditLimit;
+  final double outstanding;
+  final double availableCredit;
+
+  bool get hasLimit => creditLimit > 0.0001;
+
+  /// True when outstanding + [billAmount] would go past the credit limit.
+  bool wouldExceed(double billAmount) {
+    if (!hasLimit) return false;
+    final bill = billAmount < 0 ? 0.0 : billAmount;
+    return (outstanding + bill) > creditLimit + 0.009;
+  }
+
+  /// Same style of warning the website / API uses for over-limit credit.
+  String warningMessage(double billAmount) {
+    String money(double v) {
+      final n = v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+      return 'Rs $n';
+    }
+
+    final bill = billAmount < 0 ? 0.0 : billAmount;
+    final remaining = (creditLimit - outstanding);
+    return 'Customer credit limit exceeded.\n\n'
+        'Credit Limit: ${money(creditLimit)}\n'
+        'Outstanding: ${money(outstanding)}\n'
+        'Available: ${money(remaining < 0 ? 0 : remaining)}\n'
+        'This bill: ${money(bill)}\n\n'
+        'You can still save this bill.';
+  }
 }
 
 class OdooWebAuth {
@@ -1033,6 +1077,176 @@ class OdooRpcHelper {
     return int.tryParse('$value');
   }
 
+  /// Add a pharmacy invoice line **without** linking `stock_entry_id` or
+  /// adjusting sellable stock (free-text / non-stock bill lines).
+  static Future<bool> addManualLineToCustomerInvoice(
+    String sessionId, {
+    required int invoiceId,
+    required String productName,
+    required double quantity,
+    String? potency,
+    String? company,
+    String? pack,
+    String? group,
+    String? batch,
+    String? hsn,
+    String? rack,
+    String? mfd,
+    String? expiry,
+    double? priceUnit,
+    double? discount,
+    double? taxPercent,
+  }) async {
+    if (invoiceId <= 0 || quantity <= 0) return false;
+    final name = productName.trim();
+    if (name.isEmpty) return false;
+
+    try {
+      final available = await _modelFields(sessionId, 'account.move.line');
+      final vals = <String, dynamic>{
+        if (available.contains('display_type')) 'display_type': 'product',
+      };
+
+      Future<void> putNamed(
+        String field,
+        List<String> models,
+        String? value,
+      ) async {
+        if (!available.contains(field)) return;
+        final trimmed = (value ?? '').trim();
+        if (trimmed.isEmpty) return;
+        final id = await findOrCreateNamedRecord(
+          sessionId,
+          models: models,
+          name: trimmed,
+        );
+        if (id != null && id > 0) vals[field] = id;
+      }
+
+      await putNamed('medicine_id', const [
+        'pharmacy.medicine',
+        'product.product',
+        'product.template',
+      ], name);
+      await putNamed('potency_id', const ['pharmacy.potency'], potency);
+      await putNamed('packing_id', const [
+        'pharmacy.packing',
+        'pharmacy.pack',
+        'product.packing',
+      ], pack);
+      await putNamed('pack_id', const [
+        'pharmacy.packing',
+        'pharmacy.pack',
+        'product.packing',
+      ], pack);
+      await putNamed('pharmacy_company_id', const [
+        'pharmacy.company',
+        'pharmacy.medicine.company',
+      ], company);
+      await putNamed('pharmacy_group_id', const [
+        'pharmacy.group',
+        'pharmacy.medicine.group',
+        'product.group',
+      ], group);
+      await putNamed('rack_id', const [
+        'pharmacy.rack',
+        'stock.rack',
+      ], rack);
+
+      if (available.contains('name')) vals['name'] = name;
+      if (available.contains('product_name')) vals['product_name'] = name;
+
+      final batchText = (batch ?? '').trim();
+      if (batchText.isNotEmpty) {
+        if (available.contains('batch_no')) {
+          vals['batch_no'] = batchText;
+        } else if (available.contains('batch')) {
+          vals['batch'] = batchText;
+        }
+      }
+
+      final hsnText = (hsn ?? '').trim();
+      if (hsnText.isNotEmpty && available.contains('hsn')) {
+        vals['hsn'] = hsnText;
+      }
+      if (hsnText.isNotEmpty && available.contains('hsn_code')) {
+        vals['hsn_code'] = hsnText;
+      }
+
+      final mfdApi = StockDateParser.toApiDate(mfd);
+      final expApi = StockDateParser.toApiDate(expiry);
+      if (mfdApi != null && mfdApi.isNotEmpty) {
+        if (available.contains('mfd')) vals['mfd'] = mfdApi;
+        if (available.contains('mfd_date')) vals['mfd_date'] = mfdApi;
+      }
+      if (expApi != null && expApi.isNotEmpty) {
+        if (available.contains('expiry')) vals['expiry'] = expApi;
+        if (available.contains('expiry_date')) vals['expiry_date'] = expApi;
+        if (available.contains('exp_date')) vals['exp_date'] = expApi;
+      }
+
+      final qtyField = available.contains('quantity')
+          ? 'quantity'
+          : (available.contains('qty') ? 'qty' : null);
+      if (qtyField != null) vals[qtyField] = quantity;
+
+      if (priceUnit != null && priceUnit > 0) {
+        if (available.contains('price_unit')) vals['price_unit'] = priceUnit;
+        if (available.contains('u_price')) vals['u_price'] = priceUnit;
+        if (available.contains('mrp')) vals['mrp'] = priceUnit;
+      }
+      if (discount != null && discount > 0 && available.contains('discount')) {
+        vals['discount'] = discount;
+      }
+
+      final tax = InvoiceCalcHelper.normalizeCustomerTaxPercent(taxPercent);
+      for (final key in const [
+        'tax_percent',
+        'gst',
+        'gst_percent',
+        'tax',
+      ]) {
+        if (available.contains(key)) vals[key] = tax;
+      }
+
+      // Prefer medicine_id; fall back to name-only if master create failed.
+      if (!vals.containsKey('medicine_id') &&
+          !vals.containsKey('name') &&
+          !vals.containsKey('product_name')) {
+        if (kDebugMode) {
+          debugPrint('addManualLineToCustomerInvoice: no medicine/name vals');
+        }
+        return false;
+      }
+
+      if (kDebugMode) {
+        debugPrint(
+          'addManualLineToCustomerInvoice invoice=$invoiceId vals=$vals',
+        );
+      }
+
+      await callKw(
+        sessionId: sessionId,
+        model: 'account.move',
+        method: 'write',
+        args: [
+          [invoiceId],
+          {
+            'invoice_line_ids': [
+              [0, 0, vals],
+            ],
+          },
+        ],
+      );
+      return true;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('addManualLineToCustomerInvoice failed: $e');
+      }
+      return false;
+    }
+  }
+
   /// Add a pharmacy invoice line via [stock_entry_id] (no QR barcode required).
   static Future<bool> addStockLineToCustomerInvoice(
     String sessionId, {
@@ -1343,6 +1557,60 @@ class OdooRpcHelper {
     }
   }
 
+  /// Restore sellable `stock` (and related qty fields) on `entry.stock`.
+  static Future<bool> restoreEntrySellableStock({
+    required String sessionId,
+    required int entryId,
+    required double qty,
+  }) async {
+    if (entryId <= 0 || qty <= 0) return false;
+    return _increaseEntryStock(
+      sessionId: sessionId,
+      entryId: entryId,
+      qty: qty,
+      includeStockField: true,
+    );
+  }
+
+  /// Resolve a product invoice line id by linked `stock_entry_id`.
+  static Future<int?> findCustomerInvoiceLineIdByStockEntry({
+    required String sessionId,
+    required int invoiceId,
+    required int stockEntryId,
+  }) async {
+    if (invoiceId <= 0 || stockEntryId <= 0) return null;
+    try {
+      final available = await _modelFields(sessionId, 'account.move.line');
+      if (!available.contains('stock_entry_id')) return null;
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'account.move.line',
+        method: 'search_read',
+        args: [
+          [
+            ['move_id', '=', invoiceId],
+            ['display_type', '=', 'product'],
+            ['stock_entry_id', '=', stockEntryId],
+          ],
+        ],
+        kwargs: {
+          'fields': ['id'],
+          'limit': 1,
+          'order': 'id desc',
+        },
+      );
+      if (rows is! List || rows.isEmpty) return null;
+      final first = rows.first;
+      if (first is! Map) return null;
+      return _asInt(first['id']);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('findCustomerInvoiceLineIdByStockEntry failed: $e');
+      }
+      return null;
+    }
+  }
+
   /// Find or create a `pharmacy.customer` so the website many2one can show it.
   /// Returns the pharmacy.customer id (never a res.partner id).
   static Future<int?> findOrCreatePharmacyCustomer({
@@ -1465,6 +1733,7 @@ class OdooRpcHelper {
     bool clearDiscountCategory = false,
     String? discountType,
     double? discountRate,
+    String? expense,
     String? remarks,
     String? verifiedBy,
   }) async {
@@ -1616,6 +1885,7 @@ class OdooRpcHelper {
         );
       }
       if (discountRate != null) putIf('discount_rate', discountRate);
+      putIf('expense', (expense ?? '').trim().isEmpty ? false : expense);
       putIf('narration', (remarks ?? '').trim().isEmpty ? false : remarks);
       putIf('remarks', (remarks ?? '').trim().isEmpty ? false : remarks);
       putIf(
@@ -1764,27 +2034,104 @@ class OdooRpcHelper {
     int customerId,
   ) async {
     try {
+      final available = await _modelFields(sessionId, 'pharmacy.customer');
+      final fields = <String>['id', 'name', 'mobile', 'address', 'place'];
+      for (final f in const [
+        'credit_limit_amount',
+        'credit_limit_days',
+        'credit_limit',
+        'available_credit',
+        'remaining_credit',
+        'credit_balance',
+        'outstanding_balance',
+        'old_balance',
+        'due_amount',
+      ]) {
+        if (available.contains(f)) fields.add(f);
+      }
+      // Any other credit_* fields the server exposes.
+      for (final f in available) {
+        if (f.startsWith('credit_') && !fields.contains(f)) fields.add(f);
+      }
+
       final rows = await callKw(
         sessionId: sessionId,
         model: 'pharmacy.customer',
         method: 'read',
         args: [
           [customerId],
-          [
-            'id',
-            'name',
-            'mobile',
-            'address',
-            'place',
-            'credit_limit_amount',
-            'credit_limit_days',
-          ],
+          fields,
         ],
       );
       if (rows is! List || rows.isEmpty || rows.first is! Map) return null;
       return _normalizeOdooMap(Map<String, dynamic>.from(rows.first as Map));
     } catch (e) {
       if (kDebugMode) debugPrint('readPharmacyCustomer: $e');
+      return null;
+    }
+  }
+
+  /// Credit limit snapshot for Customer Invoice warnings (non-blocking).
+  ///
+  /// Uses `pharmacy.customer.credit_limit_amount` from the server. Outstanding
+  /// is [oldBalance] from the invoice form (`customer_old_balance`) when given.
+  static Future<CustomerCreditLimitInfo?> readCustomerCreditLimitInfo(
+    String sessionId, {
+    int? customerId,
+    String? customerName,
+    double? oldBalance,
+  }) async {
+    try {
+      Map<String, dynamic>? row;
+      if (customerId != null && customerId > 0) {
+        row = await readPharmacyCustomer(sessionId, customerId);
+      }
+      if (row == null && (customerName ?? '').trim().isNotEmpty) {
+        final want = customerName!.trim().toLowerCase();
+        final list = await searchPharmacyCustomers(sessionId, limit: 80);
+        for (final r in list) {
+          final n = (r['name'] ?? '').toString().trim().toLowerCase();
+          if (n == want) {
+            row = r;
+            break;
+          }
+        }
+      }
+      if (row == null) return null;
+
+      double asD(dynamic v) {
+        if (v is num) return v.toDouble();
+        return double.tryParse('$v') ?? 0;
+      }
+
+      final limit = asD(
+        row['credit_limit_amount'] ?? row['credit_limit'],
+      );
+      final outstanding = oldBalance ??
+          asD(
+            row['outstanding_balance'] ??
+                row['old_balance'] ??
+                row['due_amount'] ??
+                row['credit_balance'],
+          );
+      final availableField = asD(
+        row['available_credit'] ?? row['remaining_credit'],
+      );
+      final available = limit > 0
+          ? (availableField != 0
+              ? availableField
+              : (limit - outstanding).clamp(0.0, double.infinity).toDouble())
+          : 0.0;
+
+      return CustomerCreditLimitInfo(
+        customerId: _asInt(row['id']),
+        customerName: (row['name'] ?? '').toString().trim(),
+        creditLimit: limit,
+        outstanding: outstanding,
+        availableCredit: available,
+      );
+    } catch (e) {
+      if (kDebugMode) debugPrint('readCustomerCreditLimitInfo: $e');
       return null;
     }
   }
@@ -1823,6 +2170,7 @@ class OdooRpcHelper {
     String sessionId, {
     required List<String> models,
     int limit = 1000,
+    String? nameContains,
   }) async {
     for (final model in models) {
       if (_missingModels.contains(model)) continue;
@@ -1840,6 +2188,47 @@ class OdooRpcHelper {
             ? 'sequence asc, id asc'
             : (available.contains('name') ? 'name asc, id asc' : 'id asc');
 
+        final q = (nameContains ?? '').trim();
+        // Prefer name_search when filtering — finds TEST* even past the A–B page.
+        if (q.isNotEmpty) {
+          try {
+            final ns = await callKw(
+              sessionId: sessionId,
+              model: model,
+              method: 'name_search',
+              args: [q, [], 'ilike', limit.clamp(1, 200)],
+            );
+            if (ns is List && ns.isNotEmpty) {
+              final names = <String>[];
+              final seen = <String>{};
+              for (final row in ns) {
+                String name = '';
+                if (row is List && row.length >= 2) {
+                  name = row[1]?.toString().trim() ?? '';
+                } else if (row is Map) {
+                  final map = _normalizeOdooMap(Map<String, dynamic>.from(row));
+                  name = (map['display_name'] ?? map['name'] ?? '')
+                      .toString()
+                      .trim();
+                }
+                if (name.isEmpty || name == 'false') continue;
+                if (seen.add(name.toLowerCase())) names.add(name);
+              }
+              if (names.isNotEmpty) return names;
+            }
+          } catch (_) {
+            // Fall through to search_read with domain.
+          }
+        }
+
+        final domain = q.isEmpty
+            ? const <dynamic>[]
+            : <dynamic>[
+                '|',
+                ['name', 'ilike', q],
+                ['display_name', 'ilike', q],
+              ];
+
         final names = <String>[];
         final seen = <String>{};
         var offset = 0;
@@ -1850,7 +2239,7 @@ class OdooRpcHelper {
             sessionId: sessionId,
             model: model,
             method: 'search_read',
-            args: const [[]],
+            args: [domain],
             kwargs: {
               'fields': fields,
               'limit': pageSize,
@@ -4784,7 +5173,112 @@ class OdooRpcHelper {
         'product.product',
         'product.template',
       ],
+      limit: 2000,
     );
+  }
+
+  /// Live filter for New Stock Name — finds TEST* etc. past the A–B master page.
+  static Future<List<String>> searchMedicineNamesContaining(
+    String sessionId,
+    String query, {
+    int limit = 80,
+  }) {
+    final q = query.trim();
+    if (q.isEmpty) return Future.value(const []);
+    return searchPharmacyMasterNames(
+      sessionId,
+      models: const [
+        'pharmacy.medicine',
+        'product.product',
+        'product.template',
+      ],
+      limit: limit,
+      nameContains: q,
+    );
+  }
+
+  /// Medicine names from recent / searched stock rows (same source as Stock list).
+  static Future<List<String>> searchStockMedicineNames(
+    String sessionId,
+    String query, {
+    int limit = 100,
+  }) async {
+    final q = query.trim();
+    try {
+      final available = await _modelFields(sessionId, 'entry.stock');
+      if (available.isEmpty) return const [];
+
+      final fields = <String>['id'];
+      for (final f in [
+        'medicine_id',
+        'medicine_name',
+        'name',
+        'display_name',
+        'product_id',
+      ]) {
+        if (available.contains(f)) fields.add(f);
+      }
+
+      List<dynamic> domain = const [];
+      if (q.isNotEmpty) {
+        final clauses = <List<dynamic>>[];
+        if (available.contains('medicine_id')) {
+          clauses.add(['medicine_id.name', 'ilike', q]);
+        }
+        if (available.contains('medicine_name')) {
+          clauses.add(['medicine_name', 'ilike', q]);
+        }
+        if (available.contains('name')) {
+          clauses.add(['name', 'ilike', q]);
+        }
+        if (clauses.isEmpty) {
+          domain = const [];
+        } else if (clauses.length == 1) {
+          domain = [clauses.first];
+        } else {
+          domain = <dynamic>[
+            for (var i = 0; i < clauses.length - 1; i++) '|',
+            ...clauses,
+          ];
+        }
+      }
+
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'entry.stock',
+        method: 'search_read',
+        args: [domain],
+        kwargs: {
+          'fields': fields,
+          'limit': limit,
+          'offset': 0,
+          'order': 'id desc',
+        },
+      );
+      if (rows is! List) return const [];
+
+      final seen = <String>{};
+      final names = <String>[];
+      for (final row in rows.whereType<Map>()) {
+        final map = _normalizeOdooMap(Map<String, dynamic>.from(row));
+        final name = (map['medicine_id_name'] ??
+                map['medicine_name'] ??
+                map['display_name'] ??
+                map['name'] ??
+                '')
+            .toString()
+            .trim();
+        if (name.isEmpty || name == 'false') continue;
+        if (q.isNotEmpty && !name.toLowerCase().contains(q.toLowerCase())) {
+          continue;
+        }
+        if (seen.add(name.toLowerCase())) names.add(name);
+      }
+      return names;
+    } catch (e) {
+      if (kDebugMode) debugPrint('searchStockMedicineNames: $e');
+      return const [];
+    }
   }
 
   static Future<List<String>> searchRackNames(String sessionId) {

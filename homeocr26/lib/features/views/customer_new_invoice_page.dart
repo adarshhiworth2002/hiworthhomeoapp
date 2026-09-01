@@ -38,6 +38,7 @@ class _NamedOption {
     this.address,
     this.phone,
     this.defaultPaymentMode,
+    this.creditLimitAmount,
   });
 
   final String name;
@@ -46,6 +47,8 @@ class _NamedOption {
   final String? phone;
   /// Website payment mode label: Cash / Credit / …
   final String? defaultPaymentMode;
+  /// `pharmacy.customer.credit_limit_amount` from Odoo.
+  final double? creditLimitAmount;
 
   _NamedOption copyWith({
     String? name,
@@ -53,6 +56,7 @@ class _NamedOption {
     String? address,
     String? phone,
     String? defaultPaymentMode,
+    double? creditLimitAmount,
   }) {
     return _NamedOption(
       name: name ?? this.name,
@@ -60,6 +64,7 @@ class _NamedOption {
       address: address ?? this.address,
       phone: phone ?? this.phone,
       defaultPaymentMode: defaultPaymentMode ?? this.defaultPaymentMode,
+      creditLimitAmount: creditLimitAmount ?? this.creditLimitAmount,
     );
   }
 
@@ -139,6 +144,9 @@ class _BillLine {
   String tax = '';
   String hsn = '';
   String rack = '';
+  /// When true, product is taken from stock and save deducts sellable qty.
+  /// When false, free-text medicine name; bill line does not affect stock.
+  bool fromStock = true;
 
   double get taxAmtValue {
     final tp = InvoiceCalcHelper.parseNum(unitTp);
@@ -353,6 +361,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   final _phoneFocus = FocusNode(debugLabel: 'phone', skipTraversal: true);
   final _addressFocus = FocusNode(debugLabel: 'address', skipTraversal: true);
   final _discountRateCtrl = TextEditingController();
+  final _expenseTextCtrl = TextEditingController();
   final _expenseCtrl = TextEditingController();
   final _remarksCtrl = TextEditingController();
   final _verifiedByCtrl = TextEditingController();
@@ -382,7 +391,6 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   _DiscountCategoryOption? _discountCategory;
   String? _pendingDiscountCategoryName;
   List<_DiscountCategoryOption> _discountCategories = [];
-  bool _expiryMedicineBill = false;
   bool _saving = false;
   bool _removingLine = false;
   /// True after user taps Save (keep bill). Close without this restores stock.
@@ -400,6 +408,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   Set<String> _lineRequiredErrors = {};
   double? _customerAdvance;
   double? _customerOldBalance;
+  /// Soft banner when outstanding + bill total exceeds credit limit (API).
+  String? _creditLimitWarningBanner;
 
   List<_NamedOption> _customers = [];
   List<_NamedOption> _doctors = [];
@@ -518,7 +528,6 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (inv.gstType != null && inv.gstType!.trim().isNotEmpty) {
       _gstType = _normalizeGstType(inv.gstType);
     }
-    _expiryMedicineBill = inv.expiryMedicineBill;
     final discCat = (inv.discountCategory ?? '').trim();
     if (discCat.isNotEmpty) {
       _pendingDiscountCategoryName = discCat;
@@ -538,6 +547,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       _expenseCtrl.text =
           e == e.roundToDouble() ? e.toInt().toString() : e.toString();
     }
+    _expenseTextCtrl.text = (inv.expense ?? '').trim();
     _remarksCtrl.text = (inv.remarks ?? '').trim();
     _verifiedByCtrl.text = (inv.verifiedBy ?? '').trim();
     if (inv.invoiceDate != null && inv.invoiceDate!.trim().isNotEmpty) {
@@ -593,6 +603,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     _phoneFocus.dispose();
     _addressFocus.dispose();
     _discountRateCtrl.dispose();
+    _expenseTextCtrl.dispose();
     _expenseCtrl.dispose();
     _remarksCtrl.dispose();
     _verifiedByCtrl.dispose();
@@ -617,11 +628,38 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       gstType: _gstType,
       expenseAmt: InvoiceCalcHelper.parseNum(_expenseCtrl.text),
     );
+    final banner = _buildCreditLimitBanner(result);
     if (!mounted) {
       _totals = result;
+      _creditLimitWarningBanner = banner;
       return;
     }
-    setState(() => _totals = result);
+    setState(() {
+      _totals = result;
+      _creditLimitWarningBanner = banner;
+    });
+  }
+
+  String? _buildCreditLimitBanner(InvoiceCalcResult totals) {
+    final limit = _customer?.creditLimitAmount ?? 0;
+    if (limit <= 0) return null;
+    final bill = totals.total > 0 ? totals.total : totals.balance;
+    if (bill <= 0) return null;
+    final info = CustomerCreditLimitInfo(
+      creditLimit: limit,
+      outstanding: _customerOldBalance ?? 0,
+      availableCredit: limit - (_customerOldBalance ?? 0),
+      customerId: _customer?.id,
+      customerName: _customer?.name,
+    );
+    if (!info.wouldExceed(bill)) return null;
+    final remaining = limit - (_customerOldBalance ?? 0);
+    String money(double v) =>
+        v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+    return 'Credit limit warning: limit Rs ${money(limit)}, '
+        'outstanding Rs ${money(_customerOldBalance ?? 0)}, '
+        'available Rs ${money(remaining < 0 ? 0 : remaining)}, '
+        'this bill Rs ${money(bill)}.';
   }
 
   static String _formatLineNum(double v) =>
@@ -943,6 +981,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       phone: (mobile.isEmpty || mobile == 'false') ? null : mobile,
       address: addrParts.isEmpty ? null : addrParts.join(', '),
       defaultPaymentMode: isCredit ? 'Credit' : null,
+      creditLimitAmount: creditAmt > 0 ? creditAmt : null,
     );
   }
 
@@ -995,6 +1034,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       _paymentMode = payment;
       _customerAdvance = null;
       _customerOldBalance = null;
+      _creditLimitWarningBanner = null;
       if (selected.name.isNotEmpty &&
           !_customers.any(
             (c) => c.name.toLowerCase() == selected.name.toLowerCase(),
@@ -1033,14 +1073,103 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           if (widget.editInvoice?.id != null) widget.editInvoice!.id!,
         ],
       );
-      if (!mounted || hit == null) return;
+      if (!mounted) return;
+
+      // Refresh credit limit from pharmacy.customer (API).
+      final credit = await OdooRpcHelper.readCustomerCreditLimitInfo(
+        sid,
+        customerId: customer.id,
+        customerName: name,
+        oldBalance: hit?.oldBalance ?? _customerOldBalance,
+      );
+      if (!mounted) return;
+
       setState(() {
-        _customerAdvance = hit.advance;
-        _customerOldBalance = hit.oldBalance;
+        if (hit != null) {
+          _customerAdvance = hit.advance;
+          _customerOldBalance = hit.oldBalance;
+        }
+        if (credit != null &&
+            credit.hasLimit &&
+            _customer != null &&
+            _customer!.name.toLowerCase() == name.toLowerCase()) {
+          _customer = _customer!.copyWith(
+            creditLimitAmount: credit.creditLimit,
+          );
+        }
       });
+      _recalculate();
     } catch (e) {
       if (kDebugMode) debugPrint('load customer balances: $e');
     }
+  }
+
+  /// Non-blocking credit-limit warning (same rule as website / API fields).
+  /// Returns true to continue; never blocks save.
+  Future<bool> _warnIfCreditLimitExceeded() async {
+    final customer = _customer;
+    if (customer == null) return true;
+
+    final billAmount = _totals.total > 0 ? _totals.total : _totals.balance;
+    if (billAmount <= 0) return true;
+
+    CustomerCreditLimitInfo? info;
+    try {
+      final sid = await _odooSessionId();
+      if (sid.isNotEmpty) {
+        info = await OdooRpcHelper.readCustomerCreditLimitInfo(
+          sid,
+          customerId: customer.id,
+          customerName: customer.name,
+          oldBalance: _customerOldBalance,
+        );
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('credit limit check: $e');
+    }
+
+    final limit = info?.creditLimit ?? customer.creditLimitAmount ?? 0;
+    if (limit <= 0) return true;
+
+    info ??= CustomerCreditLimitInfo(
+      creditLimit: limit,
+      outstanding: _customerOldBalance ?? 0,
+      availableCredit: limit - (_customerOldBalance ?? 0),
+      customerId: customer.id,
+      customerName: customer.name,
+    );
+
+    if (!info.wouldExceed(billAmount)) return true;
+    if (!mounted) return true;
+
+    final message = info.warningMessage(billAmount);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: sectionBg,
+        title: const Text(
+          'Credit Limit Warning',
+          style: TextStyle(color: sectionText, fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          message,
+          style: const TextStyle(color: sectionText, height: 1.35),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              'OK',
+              style: TextStyle(
+                color: Color(0xFFE07A2F),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    return true;
   }
 
   void _mergeTemplateIntoPools(_LineTemplate t) {
@@ -1059,6 +1188,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     StockItemModel stock, {
     bool preservePotency = false,
     bool preserveProduct = false,
+    bool linkStockIds = true,
   }) {
     final t = _LineTemplate.fromStock(stock);
     line.applyFromStock(
@@ -1066,11 +1196,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       preservePotency: preservePotency,
       preserveProduct: preserveProduct,
     );
-    if (stock.stockId != null) {
-      line.stockDisplayId = stock.stockId;
-    }
-    if (stock.entryStockId != null) {
-      line.entryStockId = stock.entryStockId;
+    if (linkStockIds) {
+      if (stock.stockId != null) {
+        line.stockDisplayId = stock.stockId;
+      }
+      if (stock.entryStockId != null) {
+        line.entryStockId = stock.entryStockId;
+      }
     }
     _mergeTemplateIntoPools(t);
     _templates.add(t);
@@ -1172,8 +1304,23 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         setState(() => line.revision++);
         return;
       }
-      setState(() => _applyStockToLine(line, match, preservePotency: true));
-      await _applyWebsiteStockId(line);
+      setState(
+        () => _applyStockToLine(
+          line,
+          match,
+          preservePotency: true,
+          // Free-text (From stock off): fill HSN/group/tax/etc., do not link stock.
+          linkStockIds: line.fromStock,
+        ),
+      );
+      if (line.fromStock) {
+        await _applyWebsiteStockId(line);
+      } else {
+        setState(() {
+          line.stockDisplayId = null;
+          line.entryStockId = null;
+        });
+      }
       _recalculate();
       return;
     }
@@ -1560,6 +1707,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   }
 
   Future<void> _pickProductForLine(_BillLine line) async {
+    if (!line.fromStock) {
+      await _pickFreeProductForLine(line);
+      return;
+    }
+
     final stock = await _pickProductFromStock(selected: line.product);
     if (stock == null || !mounted) return;
 
@@ -1573,6 +1725,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       if (productChanged) {
         line.clearRelatedExceptProduct();
         line.stockDisplayId = null;
+        line.entryStockId = null;
+        line.addQrData = null;
+        line.addQrDataAlt = null;
       }
       if (stock.stockId != null) {
         line.stockDisplayId = stock.stockId;
@@ -1587,6 +1742,81 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     await _applyWebsiteStockId(line);
     await _enrichOptionsForProduct(line.product);
     if (!mounted) return;
+    _recalculate();
+  }
+
+  /// Free-text product (From stock off): master/create dropdown, no stock link.
+  Future<void> _pickFreeProductForLine(_BillLine line) async {
+    if (_products.length < 20) {
+      await _loadStockSuggestionPools();
+      if (!mounted) return;
+    }
+    final picked = await _pickLineValue(
+      title: 'Product',
+      options: List<String>.from(_products),
+      selected: line.product,
+      rememberInto: _products,
+      rememberKeys: _productKeys,
+      matchContains: true,
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      final productChanged =
+          (line.product ?? '').trim().toLowerCase() != picked.trim().toLowerCase();
+      line.product = picked.isEmpty ? null : picked;
+      if (productChanged) {
+        line.clearRelatedExceptProduct();
+      }
+      line.stockDisplayId = null;
+      line.entryStockId = null;
+      line.addQrData = null;
+      line.addQrDataAlt = null;
+      line.revision++;
+    });
+    // Same HSN / group / tax fill as From stock on (without linking stock).
+    final potency = (line.potency ?? '').trim();
+    if (potency.isNotEmpty) {
+      await _syncLineFromStock(line, potencyOnly: true);
+    } else if ((line.product ?? '').trim().isNotEmpty) {
+      await _syncLineFromStock(line);
+    } else {
+      _recalculate();
+    }
+  }
+
+  void _setLineFromStock(_BillLine line, bool value) {
+    if (line.fromStock == value) return;
+    setState(() {
+      line.fromStock = value;
+      if (!value) {
+        // Keep product / HSN / potency / group / etc. — only unlink stock.
+        line.stockDisplayId = null;
+        line.entryStockId = null;
+        line.addQrData = null;
+        line.addQrDataAlt = null;
+      } else {
+        // Switching back to stock: clear free-text product so user re-picks.
+        line.clearRelatedExceptProduct();
+        line.product = null;
+        line.stockDisplayId = null;
+        line.entryStockId = null;
+      }
+      line.revision++;
+      _lineRequiredErrors = {};
+    });
+    // After turning From stock off, fill missing HSN/group/tax from product/potency
+    // (same lookup as From stock on). Existing filled values stay.
+    if (!value &&
+        line.hsn.trim().isEmpty &&
+        ((line.product ?? '').trim().isNotEmpty ||
+            (line.potency ?? '').trim().isNotEmpty)) {
+      unawaited(
+        _syncLineFromStock(
+          line,
+          potencyOnly: (line.potency ?? '').trim().isNotEmpty,
+        ),
+      );
+    }
     _recalculate();
   }
 
@@ -1636,6 +1866,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final options = <String>[];
     final optionKeys = <String>{};
 
+    // Related options from matching stock rows (same lists with From stock on/off).
     if (product.isNotEmpty) {
       final related = await _stockRowsForProduct(product);
       if (!mounted) return;
@@ -1651,8 +1882,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       }
     }
 
-    // Website allows potency (etc.) without product — use master dropdown.
-    if (options.isEmpty || product.isEmpty) {
+    // From stock + product: only values from that medicine's stock rows.
+    // Otherwise (free-text / no product): master + pool create lists.
+    if (!(line.fromStock && product.isNotEmpty)) {
       for (final o in fallbackOptions) {
         final v = o.trim();
         if (v.isEmpty) continue;
@@ -1695,8 +1927,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       line.revision++;
     });
 
-    // Website: potency → Group / Tax / HSN only.
-    // Company / Pack stay as the user picked (stock sync would overwrite them).
+    // Potency → Group / Tax / HSN (same with From stock on or off).
     if (title == 'Potency') {
       await _syncLineFromStock(line, potencyOnly: true);
     } else {
@@ -1705,6 +1936,20 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   }
 
   Future<void> _pickPotencyForLine(_BillLine line) async {
+    // From stock + product: only potencies that exist on that medicine in stock.
+    if (line.fromStock && (line.product ?? '').trim().isNotEmpty) {
+      await _pickRelatedForLine(
+        line,
+        title: 'Potency',
+        readField: (s) => s.potency,
+        assignField: (v) => line.potency = v,
+        pool: _potencies,
+        poolKeys: _potencyKeys,
+        fallbackOptions: const [],
+      );
+      return;
+    }
+
     if (_potencies.isEmpty || _potencyMasterRows.isEmpty) {
       await _loadMasterDropdowns();
       if (!mounted) return;
@@ -1756,6 +2001,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     int? invoiceId,
     bool rpcAdjustedItemQty = false,
   }) {
+    line.fromStock = true;
     line.serverCommitted = true;
     line.serverCommittedQty += qty;
     line.addedThisSession = true;
@@ -1889,7 +2135,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         _mergeTemplateIntoPools(t);
         _templates.add(t);
         _lines = [..._lines, line];
-        _editingLineIndex = _lines.length - 1;
+        _editingLineIndex = null;
       }
     });
     _recalculate();
@@ -1897,9 +2143,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         ? existingIndex
         : _lines.length - 1;
     if (target >= 0 && target < _lines.length) {
-      if (existingIndex >= 0) {
-        setState(() => _editingLineIndex = target);
-      }
+      if (existingIndex >= 0) setState(() => _editingLineIndex = null);
       unawaited(_applyWebsiteStockId(_lines[target]));
       unawaited(_enrichQrLine(_lines[target]));
       unawaited(_reloadInvoiceHeaderAfterQr(invoiceId ?? _serverInvoiceId));
@@ -2522,6 +2766,47 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     for (var i = 0; i < pending.length; i++) {
       final line = pending[i];
       final qty = InvoiceCalcHelper.parseNum(line.qty);
+
+      // Free-text line: write without stock_entry_id / stock deduction.
+      if (!line.fromStock) {
+        final unit = InvoiceCalcHelper.parseNum(line.mrp);
+        final disc = InvoiceCalcHelper.parseNum(line.discount);
+        final taxPct = InvoiceCalcHelper.normalizeCustomerTaxPercent(
+          InvoiceCalcHelper.parseNum(line.tax),
+        );
+        final ok = await OdooRpcHelper.addManualLineToCustomerInvoice(
+          odooSid,
+          invoiceId: moveId,
+          productName: line.product ?? '',
+          quantity: qty,
+          potency: line.potency,
+          company: line.company,
+          pack: line.pack,
+          group: line.group,
+          batch: line.batch,
+          hsn: line.hsn,
+          rack: line.rack,
+          mfd: line.manuf,
+          expiry: line.expiry,
+          priceUnit: unit > 0 ? unit : null,
+          discount: disc > 0 ? disc : null,
+          taxPercent: taxPct,
+        );
+        if (!ok) {
+          _toast(
+            'Line ${i + 1}: could not add ${line.product ?? 'product'} to bill.',
+          );
+          return false;
+        }
+        line.serverCommitted = true;
+        line.serverCommittedQty = qty;
+        line.addedThisSession = true;
+        line.rpcAdjustedItemQty = false;
+        line.serverInvoiceId = moveId;
+        _invoiceCommittedOnServer = true;
+        continue;
+      }
+
       final existingToken = (line.addQrData ?? '').trim();
       final stockRow = existingToken.isNotEmpty
           ? null
@@ -2664,26 +2949,38 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     return true;
   }
 
-  /// Push edits on lines that already exist on the server (edit bill).
-  Future<bool> _syncCommittedLines(LoginViewmodel login) async {
-    final committed = _lines
-        .where(
-          (l) =>
-              l.serverCommitted &&
-              l.odooLineId != null &&
-              l.odooLineId! > 0 &&
-              l.hasRequiredLineFields,
-        )
-        .toList(growable: false);
-    if (committed.isEmpty) return true;
+  /// Resolve [odooLineId] for QR-added lines that never loaded edit metadata.
+  Future<void> _ensureOdooLineId(_BillLine line, String sid) async {
+    if (line.odooLineId != null && line.odooLineId! > 0) return;
+    final moveId = line.serverInvoiceId ?? _serverInvoiceId;
+    final entryId = line.entryStockId ?? line.stockDisplayId;
+    if (moveId == null || moveId <= 0 || entryId == null || entryId <= 0) {
+      return;
+    }
+    final id = await OdooRpcHelper.findCustomerInvoiceLineIdByStockEntry(
+      sessionId: sid,
+      invoiceId: moveId,
+      stockEntryId: entryId,
+    );
+    if (id != null && id > 0) line.odooLineId = id;
+  }
 
-    final sid = await _odooSessionId();
-    if (sid.isEmpty) return false;
+  /// Push one committed line's qty/price to Odoo.
+  ///
+  /// Do **not** manually adjust `entry.stock` here — writing `quantity` on
+  /// `account.move.line` already restores/deducts sellable stock on the server.
+  /// A second client-side adjust made stock climb (e.g. 2→1 restored twice).
+  Future<bool> _syncOneCommittedLine(_BillLine line, String sid) async {
+    if (!line.hasRequiredLineFields) return false;
 
-    for (final line in committed) {
-      final qty = InvoiceCalcHelper.parseNum(line.qty);
-      final mrp = InvoiceCalcHelper.parseNum(line.mrp);
-      final disc = InvoiceCalcHelper.parseNum(line.discount);
+    await _ensureOdooLineId(line, sid);
+
+    final qty = InvoiceCalcHelper.parseNum(line.qty);
+    final mrp = InvoiceCalcHelper.parseNum(line.mrp);
+    final disc = InvoiceCalcHelper.parseNum(line.discount);
+    final newQty = qty > 0 ? qty : 0.0;
+
+    if (line.odooLineId != null && line.odooLineId! > 0) {
       final ok = await OdooRpcHelper.updateCustomerInvoiceLine(
         sid,
         lineId: line.odooLineId!,
@@ -2694,6 +2991,41 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         hsn: line.hsn.trim().isEmpty ? null : line.hsn.trim(),
         rack: line.rack.trim().isEmpty ? null : line.rack.trim(),
       );
+      if (!ok) return false;
+    }
+
+    if (line.serverCommitted) {
+      final prev = line.serverCommittedQty;
+      line.serverCommittedQty = newQty;
+      if (kDebugMode && (prev - newQty).abs() > 0.0001) {
+        debugPrint(
+          'line qty synced product=${line.product} '
+          'prevCommitted=$prev → $newQty (stock via Odoo line write)',
+        );
+      }
+    }
+    return true;
+  }
+
+  /// Push edits on lines that already exist on the server (edit bill / QR).
+  Future<bool> _syncCommittedLines(LoginViewmodel login) async {
+    final committed = _lines
+        .where(
+          (l) =>
+              l.serverCommitted &&
+              l.hasRequiredLineFields &&
+              ((l.odooLineId != null && l.odooLineId! > 0) ||
+                  (l.entryStockId != null && l.entryStockId! > 0) ||
+                  (l.stockDisplayId != null && l.stockDisplayId! > 0)),
+        )
+        .toList(growable: false);
+    if (committed.isEmpty) return true;
+
+    final sid = await _odooSessionId();
+    if (sid.isEmpty) return false;
+
+    for (final line in committed) {
+      final ok = await _syncOneCommittedLine(line, sid);
       if (!ok) {
         _toast(
           'Could not update ${line.product ?? 'line'} on the server.',
@@ -2758,11 +3090,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         responsiblePersonName: (_responsible?.name ?? '').trim(),
         paymentMode: _paymentMode,
         gstType: _gstType,
-        expiryMedicineBill: _expiryMedicineBill,
         discountCategoryId: _discountCategory?.id,
         clearDiscountCategory: _discountCategory == null,
         discountType: _discountType,
         discountRate: rate,
+        expense: _expenseTextCtrl.text.trim(),
         remarks: _remarksCtrl.text.trim(),
         verifiedBy: _verifiedByCtrl.text.trim(),
       );
@@ -2815,6 +3147,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         return;
       }
     }
+
+    // Warning only — never blocks create / save.
+    await _warnIfCreditLimitExceeded();
+    if (!mounted) return;
 
     setState(() => _saving = true);
     FocusScope.of(context).unfocus();
@@ -2931,8 +3267,27 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     });
   }
 
-  void _doneEditingLine(int index) {
+  Future<void> _doneEditingLine(int index) async {
     if (!_warnIfEditingLineIncomplete(forLineIndex: index)) return;
+    if (index < 0 || index >= _lines.length) return;
+    final line = _lines[index];
+
+    // Sync qty/price to Odoo; stock follows from the line write (not a
+    // second client-side restore).
+    if (line.serverCommitted) {
+      final sid = await _odooSessionId();
+      if (sid.isEmpty) {
+        _toast('Session expired. Please log in again.');
+        return;
+      }
+      final ok = await _syncOneCommittedLine(line, sid);
+      if (!ok) {
+        _toast('Could not update quantity. Try again.');
+        return;
+      }
+    }
+
+    if (!mounted) return;
     setState(() {
       _editingLineIndex = null;
       _lineRequiredErrors = {};
@@ -3015,6 +3370,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       potency: line.potency,
       stockEntryId: line.entryStockId,
       restoreItemQty: line.rpcAdjustedItemQty,
+      sellableStockDeducted: line.fromStock,
       login: login.loginEmail,
       password: login.loginPassword,
       db: LoginViewmodel.dbName,
@@ -3415,28 +3771,6 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                           _dismissKeyboardAfterFrame();
                         },
                       ),
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'Expiry Medicine Bill',
-                                style: TextStyle(
-                                  color: sectionTextMuted,
-                                  fontSize: 15,
-                                ),
-                              ),
-                            ),
-                            Switch(
-                              value: _expiryMedicineBill,
-                              activeThumbColor: const Color(0xFFE07A2F),
-                              onChanged: (v) =>
-                                  setState(() => _expiryMedicineBill = v),
-                            ),
-                          ],
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -3484,22 +3818,42 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                           onPick: _pickLineValue,
                           onPickProduct: () => _pickProductForLine(line),
                           onPickPotency: () => _pickPotencyForLine(line),
-                          onPickCompany: () => _pickMasterNameForLine(
-                            line,
-                            title: 'Company',
-                            readValue: () => line.company,
-                            assign: (v) => line.company = v,
-                            pool: _companies,
-                            poolKeys: _companyKeys,
-                          ),
-                          onPickPack: () => _pickMasterNameForLine(
-                            line,
-                            title: 'Pack',
-                            readValue: () => line.pack,
-                            assign: (v) => line.pack = v,
-                            pool: _packs,
-                            poolKeys: _packKeys,
-                          ),
+                          onPickCompany: () => line.fromStock
+                              ? _pickRelatedForLine(
+                                  line,
+                                  title: 'Company',
+                                  readField: (s) => s.company,
+                                  assignField: (v) => line.company = v,
+                                  pool: _companies,
+                                  poolKeys: _companyKeys,
+                                  fallbackOptions: const [],
+                                )
+                              : _pickMasterNameForLine(
+                                  line,
+                                  title: 'Company',
+                                  readValue: () => line.company,
+                                  assign: (v) => line.company = v,
+                                  pool: _companies,
+                                  poolKeys: _companyKeys,
+                                ),
+                          onPickPack: () => line.fromStock
+                              ? _pickRelatedForLine(
+                                  line,
+                                  title: 'Pack',
+                                  readField: (s) => s.packing,
+                                  assignField: (v) => line.pack = v,
+                                  pool: _packs,
+                                  poolKeys: _packKeys,
+                                  fallbackOptions: const [],
+                                )
+                              : _pickMasterNameForLine(
+                                  line,
+                                  title: 'Pack',
+                                  readValue: () => line.pack,
+                                  assign: (v) => line.pack = v,
+                                  pool: _packs,
+                                  poolKeys: _packKeys,
+                                ),
                           onPickGroup: () => _pickRelatedForLine(
                             line,
                             title: 'Group',
@@ -3507,7 +3861,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                             assignField: (v) => line.group = v,
                             pool: _groups,
                             poolKeys: _groupKeys,
-                            fallbackOptions: List<String>.from(_groups),
+                            fallbackOptions: line.fromStock
+                                ? const []
+                                : List<String>.from(_groups),
                           ),
                           onPickBatch: () => _pickRelatedForLine(
                             line,
@@ -3516,7 +3872,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                             assignField: (v) => line.batch = v,
                             pool: _batches,
                             poolKeys: _batchKeys,
-                            fallbackOptions: List<String>.from(_batches),
+                            fallbackOptions: line.fromStock
+                                ? const []
+                                : List<String>.from(_batches),
                           ),
                           onPickHsn: () => _pickRelatedForLine(
                             line,
@@ -3525,7 +3883,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                             assignField: (v) => line.hsn = v ?? '',
                             pool: _hsns,
                             poolKeys: _hsnKeys,
-                            fallbackOptions: List<String>.from(_hsns),
+                            fallbackOptions: line.fromStock
+                                ? const []
+                                : List<String>.from(_hsns),
                           ),
                           onPickRack: () => _pickRelatedForLine(
                             line,
@@ -3534,8 +3894,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                             assignField: (v) => line.rack = v ?? '',
                             pool: _racks,
                             poolKeys: _rackKeys,
-                            fallbackOptions: List<String>.from(_racks),
+                            fallbackOptions: line.fromStock
+                                ? const []
+                                : List<String>.from(_racks),
                           ),
+                          onFromStockChanged: (v) => _setLineFromStock(line, v),
                           onChanged: () {
                             // Clear red highlights for fields the user just filled.
                             final missing = line.missingRequiredFields.toSet();
@@ -3659,6 +4022,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                       _MoneyRow('Discount Total', _totals.discountTotal),
                       _MoneyRow('Tax', _totals.tax),
                       _TextField(
+                        label: 'Expense',
+                        controller: _expenseTextCtrl,
+                      ),
+                      _TextField(
                         label: 'Expense Amt',
                         controller: _expenseCtrl,
                         keyboardType: const TextInputType.numberWithOptions(
@@ -3674,6 +4041,29 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                         _MoneyRow('Old Balance', _customerOldBalance!),
                       if (_customerAdvance != null && _customerAdvance != 0)
                         _MoneyRow('Advance Amount', _customerAdvance!),
+                      if (_creditLimitWarningBanner != null) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF3E0),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFFE07A2F).withValues(alpha: 0.45),
+                            ),
+                          ),
+                          child: Text(
+                            _creditLimitWarningBanner!,
+                            style: const TextStyle(
+                              color: Color(0xFF8A4B12),
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -3771,6 +4161,7 @@ class _LineCard extends StatefulWidget {
     required this.onPickBatch,
     required this.onPickHsn,
     required this.onPickRack,
+    required this.onFromStockChanged,
     required this.onChanged,
     required this.onEdit,
     required this.onDone,
@@ -3812,6 +4203,7 @@ class _LineCard extends StatefulWidget {
   final Future<void> Function() onPickBatch;
   final Future<void> Function() onPickHsn;
   final Future<void> Function() onPickRack;
+  final ValueChanged<bool> onFromStockChanged;
   final VoidCallback onChanged;
   final VoidCallback onEdit;
   final VoidCallback onDone;
@@ -3888,7 +4280,21 @@ class _LineCardState extends State<_LineCard> {
   @override
   void didUpdateWidget(covariant _LineCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.line.revision != widget.line.revision) {
+    final line = widget.line;
+    // Same mutable _BillLine instance is reused across rebuilds, so revision
+    // on oldWidget/widget can already match after QR qty bumps. Sync whenever
+    // controllers drift, or when the row expands for edit.
+    final becameExpanded = !oldWidget.expanded && widget.expanded;
+    final drifted = _qtyCtrl.text != line.qty ||
+        _mrpCtrl.text != line.mrp ||
+        _disCtrl.text != line.discount ||
+        _unitPCtrl.text != line.unitP ||
+        _taxCtrl.text != line.tax ||
+        _manufCtrl.text != (line.manuf ?? '') ||
+        _expiryCtrl.text != (line.expiry ?? '');
+    if (becameExpanded ||
+        drifted ||
+        oldWidget.line.revision != widget.line.revision) {
       _syncControllersFromLine();
     }
   }
@@ -3958,6 +4364,18 @@ class _LineCardState extends State<_LineCard> {
                 ),
               ),
             ),
+            if (!line.fromStock)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Text(
+                  'No stock',
+                  style: TextStyle(
+                    color: sectionTextMuted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
             IconButton(
               tooltip: 'Edit',
               onPressed: widget.onEdit,
@@ -4046,8 +4464,32 @@ class _LineCardState extends State<_LineCard> {
             ),
           ],
         ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'From stock',
+                  style: TextStyle(
+                    color: sectionTextMuted,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Switch(
+                value: line.fromStock,
+                activeThumbColor: const Color(0xFFE07A2F),
+                onChanged: line.serverCommitted
+                    ? null
+                    : widget.onFromStockChanged,
+              ),
+            ],
+          ),
+        ),
         _LineDropdownRow(
-          label: 'Product *',
+          label: line.fromStock ? 'Product *' : 'Product * (free text)',
           value: line.product,
           highlightError: err('Product'),
           onTap: () async {
@@ -4210,9 +4652,9 @@ class _LineCardState extends State<_LineCard> {
     if (parsed == null) {
       setState(() {
         if (manuf) {
-          _manufError = 'Invalid date (e.g. 1222 → 01/12/22)';
+          _manufError = 'Invalid date (e.g. 1222 → 01/12/2022)';
         } else {
-          _expiryError = 'Invalid date (e.g. 1222 → 01/12/22)';
+          _expiryError = 'Invalid date (e.g. 1222 → 01/12/2022)';
         }
       });
       return;

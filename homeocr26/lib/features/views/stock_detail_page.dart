@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/stock_item_model.dart';
 import '../../viewModels/login_viewmodel.dart';
+import '../../viewModels/stock_viewmodel.dart';
 import '../services/calendar_date.dart';
 import '../services/odoo_rpc_helper.dart';
 import '../services/stock_date_parser.dart';
@@ -80,6 +81,8 @@ class _StockDetailPageState extends State<StockDetailPage> {
     _gstCtrl = TextEditingController();
     _syncControllersFromItem();
     _itemQtyCtrl.addListener(_syncStockFromItemQty);
+    // Paint stock-list names immediately on New (before API masters return).
+    if (widget.isNew) _mergeNamesFromStockCache();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadMasters();
       if (widget.isNew) _loadNextStockId();
@@ -177,6 +180,9 @@ class _StockDetailPageState extends State<StockDetailPage> {
     if (sid == null || !mounted) return;
     setState(() => _loadingMasters = true);
     try {
+      // Seed immediately from durable catalogs + current list cache.
+      _mergeNamesFromStockCache();
+
       final results = await Future.wait([
         OdooRpcHelper.searchMedicineNames(sid),
         OdooRpcHelper.searchPotencyNames(sid),
@@ -184,18 +190,46 @@ class _StockDetailPageState extends State<StockDetailPage> {
         OdooRpcHelper.searchCompanyNames(sid),
         OdooRpcHelper.searchGroupNames(sid),
         OdooRpcHelper.searchRackNames(sid),
+        // Newest stock rows (TEST*, etc.) — list cache often only holds oldest window.
+        OdooRpcHelper.searchStockMedicineNames(sid, '', limit: 150),
       ]);
       if (!mounted) return;
       setState(() {
-        _medicines = results[0];
-        _potencies = results[1];
-        _packings = results[2];
-        _companies = results[3];
-        _groups = results[4];
-        _racks = results[5];
+        _mergeNames(_medicines, results[0]);
+        _mergeNames(_potencies, results[1]);
+        _mergeNames(_packings, results[2]);
+        _mergeNames(_companies, results[3]);
+        _mergeNames(_groups, results[4]);
+        _mergeNames(_racks, results[5]);
+        _mergeNames(_medicines, results[6]);
+        _mergeNamesFromStockCache();
       });
+      StockViewModel.rememberMedicineNames(results[6]);
     } finally {
       if (mounted) setState(() => _loadingMasters = false);
+    }
+  }
+
+  void _mergeNames(List<String> pool, List<String> incoming) {
+    for (final name in incoming) {
+      _remember(pool, name);
+    }
+  }
+
+  void _mergeNamesFromStockCache() {
+    _mergeNames(_medicines, StockViewModel.knownMedicineNames);
+    _mergeNames(_potencies, StockViewModel.knownPotencyNames);
+    _mergeNames(_packings, StockViewModel.knownPackingNames);
+    _mergeNames(_companies, StockViewModel.knownCompanyNames);
+    _mergeNames(_groups, StockViewModel.knownGroupNames);
+    _mergeNames(_racks, StockViewModel.knownRackNames);
+    for (final item in StockViewModel.cachedItems) {
+      _remember(_medicines, item.medicine ?? item.medicineLabel);
+      _remember(_potencies, item.potency ?? '');
+      _remember(_packings, item.packing ?? '');
+      _remember(_companies, item.company ?? '');
+      _remember(_groups, item.group ?? '');
+      _remember(_racks, item.rack ?? '');
     }
   }
 
@@ -203,19 +237,47 @@ class _StockDetailPageState extends State<StockDetailPage> {
     final t = value.trim();
     if (t.isEmpty) return;
     if (pool.any((e) => e.toLowerCase() == t.toLowerCase())) return;
-    pool.insert(0, t);
+    pool.add(t);
+  }
+
+  Future<List<String>> _searchMedicineRemote(String query) async {
+    final sid = await _odooSessionId();
+    if (sid == null) return const [];
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+    final results = await Future.wait([
+      OdooRpcHelper.searchMedicineNamesContaining(sid, q),
+      OdooRpcHelper.searchStockMedicineNames(sid, q),
+    ]);
+    final seen = <String>{};
+    final out = <String>[];
+    for (final name in [...results[0], ...results[1]]) {
+      final t = name.trim();
+      if (t.isEmpty) continue;
+      if (seen.add(t.toLowerCase())) out.add(t);
+    }
+    StockViewModel.rememberMedicineNames(out);
+    return out;
   }
 
   Future<void> _pickMaster({
     required String title,
     required List<String> options,
     required TextEditingController controller,
+    Future<List<String>> Function(String query)? onRemoteSearch,
   }) async {
+    // Refresh masters if still thin (e.g. New opened before list finished).
+    if (options.length < 5 && !_loadingMasters) {
+      await _loadMasters();
+      if (!mounted) return;
+    }
     final picked = await MasterNamePickSheet.show(
       context,
       title: title,
       options: options,
       selected: controller.text,
+      allowCreate: true,
+      onRemoteSearch: onRemoteSearch,
     );
     if (picked == null || !mounted) return;
     setState(() {
@@ -229,7 +291,7 @@ class _StockDetailPageState extends State<StockDetailPage> {
     final isMfd = identical(controller, _mfdCtrl);
     if (parsed == null) {
       final msg =
-          'Enter a valid $label. Use MMYY (e.g. 0722) or a full date.';
+          'Enter a valid $label. Use MMYY (e.g. 0722 → 01/07/2022) or a full date.';
       setState(() {
         if (isMfd) {
           _mfdError = msg;
@@ -474,6 +536,7 @@ class _StockDetailPageState extends State<StockDetailPage> {
                       title: 'Medicine',
                       options: _medicines,
                       controller: _medicineCtrl,
+                      onRemoteSearch: _searchMedicineRemote,
                     ),
                   )
                 else
