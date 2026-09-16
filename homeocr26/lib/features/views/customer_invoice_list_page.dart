@@ -42,7 +42,7 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
     });
     startLiveRefresh(
       () => _viewModel.fetch(context, forceRefresh: true, silent: true),
-      interval: const Duration(seconds: 30),
+      interval: const Duration(seconds: 8),
       immediate: false,
     );
   }
@@ -195,10 +195,12 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
     if (saved == true) {
       _searchController.clear();
       setState(() => _searchQuery = '');
+      // Instant only: bill page already upserted Dis% + expense totals.
+      // Skip network forceRefresh — it was adding multi-second lag after save.
       await _viewModel.fetch(
         this.context,
         state: 'draft',
-        forceRefresh: true,
+        forceRefresh: false,
       );
       return;
     }
@@ -277,7 +279,12 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
           final item = filtered[index];
           return InvoiceListCard(
             invoice: item,
-            onTap: () => openInvoiceDetail(context, item),
+            onTap: () async {
+              await openInvoiceDetail(context, item);
+              if (!mounted) return;
+              // Detail load upserts Dis% + expense totals into the catalog.
+              await _viewModel.fetch(this.context, forceRefresh: false);
+            },
           );
         },
       ),

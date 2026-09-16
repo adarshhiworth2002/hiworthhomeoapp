@@ -137,6 +137,10 @@ class _BillLine {
   String qty = '';
   String mrp = '';
   String discount = '';
+  /// True when [discount] was filled from Price Category Group Discount rules.
+  bool discountAutoFromCategory = false;
+  /// True only when the user typed Dis manually (do not overwrite).
+  bool discountUserEdited = false;
   /// Tax-inclusive trade price (MRP − line discount).
   String unitTp = '';
   /// Tax-exclusive unit price.
@@ -144,6 +148,8 @@ class _BillLine {
   String tax = '';
   String hsn = '';
   String rack = '';
+  /// Read-only sellable qty shown when product is picked From stock.
+  String? availableStock;
   /// When true, product is taken from stock and save deducts sellable qty.
   /// When false, free-text medicine name; bill line does not affect stock.
   bool fromStock = true;
@@ -189,6 +195,10 @@ class _BillLine {
         filled(mrp);
   }
 
+  /// Empty "Add a line" draft — no product and not yet on the server.
+  bool get isBlankDraft =>
+      !serverCommitted && (product ?? '').trim().isEmpty;
+
   /// Labels of required fields that are still empty.
   List<String> get missingRequiredFields {
     bool filled(String? v) => (v ?? '').trim().isNotEmpty;
@@ -221,12 +231,12 @@ class _BillLine {
   /// Website-style: fill related fields from stock, but never invent a
   /// different potency than the one the user picked.
   void applyFromStock(
-    _LineTemplate t, {
-    bool preservePotency = false,
-    bool preserveProduct = false,
-    bool preserveCompany = false,
-    bool preservePack = false,
-  }) {
+      _LineTemplate t, {
+        bool preservePotency = false,
+        bool preserveProduct = false,
+        bool preserveCompany = false,
+        bool preservePack = false,
+      }) {
     final keptPotency = potency;
     final keptProduct = product;
     final keptCompany = company;
@@ -264,6 +274,7 @@ class _BillLine {
     rack = '';
     unitTp = '';
     unitP = '';
+    availableStock = null;
     revision++;
   }
 }
@@ -391,6 +402,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   _DiscountCategoryOption? _discountCategory;
   String? _pendingDiscountCategoryName;
   List<_DiscountCategoryOption> _discountCategories = [];
+  /// Group Discount matrix for the selected Price Category (Company/Group/…).
+  List<PriceCategoryGroupDiscountRule> _categoryGroupRules = const [];
   bool _saving = false;
   bool _removingLine = false;
   /// True after user taps Save (keep bill). Close without this restores stock.
@@ -447,7 +460,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (pay.isEmpty) return 'Cash';
     final lower = pay.toLowerCase();
     return _paymentModes.firstWhere(
-      (m) => m.toLowerCase() == lower || lower.contains(m.toLowerCase()),
+          (m) => m.toLowerCase() == lower || lower.contains(m.toLowerCase()),
       orElse: () => 'Cash',
     );
   }
@@ -535,17 +548,17 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (inv.discountType != null) {
       final t = inv.discountType!.toLowerCase();
       _discountType =
-          t.contains('amount') || t.contains('rupee') ? 'Rupees' : 'Percentage';
+      t.contains('amount') || t.contains('rupee') ? 'Rupees' : 'Percentage';
     }
     if (inv.discountRate != null) {
       final r = inv.discountRate!;
       _discountRateCtrl.text =
-          r == r.roundToDouble() ? r.toInt().toString() : r.toString();
+      r == r.roundToDouble() ? r.toInt().toString() : r.toString();
     }
     if (inv.expenseAmt != null) {
       final e = inv.expenseAmt!;
       _expenseCtrl.text =
-          e == e.roundToDouble() ? e.toInt().toString() : e.toString();
+      e == e.roundToDouble() ? e.toInt().toString() : e.toString();
     }
     _expenseTextCtrl.text = (inv.expense ?? '').trim();
     _remarksCtrl.text = (inv.remarks ?? '').trim();
@@ -553,7 +566,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (inv.invoiceDate != null && inv.invoiceDate!.trim().isNotEmpty) {
       final parsed = CalendarDate.parse(inv.invoiceDate);
       _invoiceDateDisplay =
-          parsed != null ? CalendarDate.dmy(parsed) : inv.invoiceDate!.trim();
+      parsed != null ? CalendarDate.dmy(parsed) : inv.invoiceDate!.trim();
     }
 
     _lines = inv.lines.map((l) {
@@ -570,8 +583,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         line.addedThisSession = false;
         line.serverInvoiceId = inv.id;
       }
-      if (l.discount != null) {
-        final d = l.discount!;
+      if (l.discount != null || l.dis2Percent != null) {
+        final d = (l.discount != null && l.discount! > 0)
+            ? l.discount!
+            : (l.dis2Percent ?? l.discount!);
         line.discount = d == d.roundToDouble()
             ? d.toInt().toString()
             : d.toStringAsFixed(2);
@@ -615,13 +630,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       lines: _lines
           .map(
             (l) => InvoiceCalcLine(
-              qty: InvoiceCalcHelper.parseNum(l.qty),
-              mrp: InvoiceCalcHelper.parseNum(l.mrp),
-              discountPercent: InvoiceCalcHelper.parseNum(l.discount),
-              unitP: InvoiceCalcHelper.parseNum(l.unitP),
-              taxPercent: InvoiceCalcHelper.parseNum(l.tax),
-            ),
-          )
+          qty: InvoiceCalcHelper.parseNum(l.qty),
+          mrp: InvoiceCalcHelper.parseNum(l.mrp),
+          discountPercent: InvoiceCalcHelper.parseNum(l.discount),
+          unitP: InvoiceCalcHelper.parseNum(l.unitP),
+          taxPercent: InvoiceCalcHelper.parseNum(l.tax),
+        ),
+      )
           .toList(growable: false),
       discountType: _discountType,
       discountRate: InvoiceCalcHelper.parseNum(_discountRateCtrl.text),
@@ -764,10 +779,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   }
 
   void _addOptsInOrder(
-    List<String> into,
-    Set<String> keys,
-    Iterable<String> values,
-  ) {
+      List<String> into,
+      Set<String> keys,
+      Iterable<String> values,
+      ) {
     for (final value in values) {
       _addOpt(into, keys, value);
     }
@@ -865,18 +880,18 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           map[key] = existing == null
               ? opt
               : existing.copyWith(
-                  id: opt.id ?? existing.id,
-                  address: opt.address ?? existing.address,
-                  phone: opt.phone ?? existing.phone,
-                  defaultPaymentMode:
-                      opt.defaultPaymentMode ?? existing.defaultPaymentMode,
-                );
+            id: opt.id ?? existing.id,
+            address: opt.address ?? existing.address,
+            phone: opt.phone ?? existing.phone,
+            defaultPaymentMode:
+            opt.defaultPaymentMode ?? existing.defaultPaymentMode,
+          );
           // Also key by name-only for matches without id.
           map['|${opt.name.toLowerCase()}'] = map[key]!;
         }
         _customers = map.values.toSet().toList()
           ..sort(
-            (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
           );
       });
     } catch (e) {
@@ -893,20 +908,20 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       setState(() {
         _responsiblePeople = rows
             .map((row) {
-              final id = row['id'];
-              final name = (row['name'] ?? row['display_name'] ?? '')
-                  .toString()
-                  .trim();
-              if (name.isEmpty) return null;
-              return _NamedOption(
-                name: name,
-                id: id is num ? id.toInt() : int.tryParse('$id'),
-              );
-            })
+          final id = row['id'];
+          final name = (row['name'] ?? row['display_name'] ?? '')
+              .toString()
+              .trim();
+          if (name.isEmpty) return null;
+          return _NamedOption(
+            name: name,
+            id: id is num ? id.toInt() : int.tryParse('$id'),
+          );
+        })
             .whereType<_NamedOption>()
             .toList()
           ..sort(
-            (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
           );
       });
     } catch (e) {
@@ -946,15 +961,189 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   void _applyDiscountCategory(_DiscountCategoryOption? selected) {
     setState(() {
       _discountCategory = selected;
-      if (selected == null) return;
+      if (selected == null) {
+        _categoryGroupRules = const [];
+        for (final line in _lines) {
+          if (!line.discountAutoFromCategory) continue;
+          line.discount = '';
+          line.discountAutoFromCategory = false;
+          line.revision++;
+          _recalcLinePrices(line);
+        }
+        return;
+      }
+      // Header rate is applied only after group rules load (if none exist).
       _discountType = selected.uiDiscountType;
-      final rate = selected.rate;
-      _discountRateCtrl.text = rate == rate.roundToDouble()
-          ? rate.toInt().toString()
-          : rate.toStringAsFixed(2);
     });
-    _recalculate();
+    if (selected != null) {
+      unawaited(_loadCategoryGroupRules(selected.id, applyHeaderIfNoRules: true));
+    } else {
+      _recalculate();
+    }
     _dismissKeyboardAfterFrame();
+  }
+
+  Future<void> _loadCategoryGroupRules(
+    int categoryId, {
+    bool applyHeaderIfNoRules = false,
+  }) async {
+    try {
+      final sid = await _odooSessionId();
+      if (sid.isEmpty) return;
+      final info = await OdooRpcHelper.readPriceCategoryInfo(sid, categoryId);
+      if (!mounted) return;
+      setState(() {
+        _categoryGroupRules = info?.groupRules ?? const [];
+        if (_categoryGroupRules.isNotEmpty) {
+          // Line Dis from Group Discount must drive totals (header % would hide them).
+          _discountRateCtrl.text = '';
+        } else if (applyHeaderIfNoRules && info != null) {
+          var rate = info.headerPercentage ?? 0;
+          if (rate <= 0) {
+            for (final c in _discountCategories) {
+              if (c.id == categoryId) {
+                rate = c.rate;
+                break;
+              }
+            }
+          }
+          if (rate > 0) {
+            _discountType =
+                (info.discountType == 'amount') ? 'Rupees' : 'Percentage';
+            _discountRateCtrl.text = rate == rate.roundToDouble()
+                ? rate.toInt().toString()
+                : rate.toStringAsFixed(2);
+          }
+        }
+      });
+      await _reapplyCategoryDiscountsToAllLines();
+    } catch (e) {
+      if (kDebugMode) debugPrint('load category group rules: $e');
+      _recalculate();
+    }
+  }
+
+  Future<void> _applyCustomerPriceCategory(_NamedOption customer) async {
+    try {
+      final sid = await _odooSessionId();
+      if (sid.isEmpty) return;
+      final info = await OdooRpcHelper.readCustomerPriceCategory(
+        sid,
+        customerId: customer.id,
+        customerName: customer.name,
+      );
+      if (!mounted) return;
+      if (info == null) return;
+
+      _DiscountCategoryOption? option;
+      for (final c in _discountCategories) {
+        if (c.id == info.categoryId) {
+          option = c;
+          break;
+        }
+      }
+      option ??= _DiscountCategoryOption(
+        id: info.categoryId,
+        name: info.categoryName,
+        discountType: info.discountType,
+        rate: info.headerPercentage ?? 0,
+        displayName: info.categoryName,
+      );
+      final resolved = option;
+
+      setState(() {
+        if (!_discountCategories.any((c) => c.id == resolved.id)) {
+          _discountCategories = [..._discountCategories, resolved];
+        }
+        _discountCategory = resolved;
+        _categoryGroupRules = info.groupRules;
+        if (info.hasGroupRules) {
+          _discountRateCtrl.text = '';
+        } else if ((info.headerPercentage ?? 0) > 0) {
+          _discountType =
+              info.discountType == 'amount' ? 'Rupees' : 'Percentage';
+          final rate = info.headerPercentage!;
+          _discountRateCtrl.text = rate == rate.roundToDouble()
+              ? rate.toInt().toString()
+              : rate.toStringAsFixed(2);
+        }
+      });
+      await _reapplyCategoryDiscountsToAllLines();
+    } catch (e) {
+      if (kDebugMode) debugPrint('apply customer price category: $e');
+    }
+  }
+
+  Future<void> _reapplyCategoryDiscountsToAllLines() async {
+    if (!mounted) return;
+    for (final line in _lines) {
+      await _maybeApplyLineDiscount(line, forceCategoryRefresh: true);
+    }
+    _recalculate();
+  }
+
+  /// Prefer Price Category Group Discount rules; fall back to company/group %.
+  Future<void> _maybeApplyLineDiscount(
+    _BillLine line, {
+    bool forceCategoryRefresh = false,
+  }) async {
+    // Never overwrite a Dis% the user typed in Add a line.
+    if (line.discountUserEdited) {
+      _recalculate();
+      return;
+    }
+
+    final canOverwrite = line.discount.trim().isEmpty ||
+        line.discountAutoFromCategory ||
+        forceCategoryRefresh;
+    if (!canOverwrite) {
+      _recalculate();
+      return;
+    }
+
+    // 1) Customer Price Category → Group Discount matrix (screenshot rules).
+    if (_categoryGroupRules.isNotEmpty) {
+      final matched = OdooRpcHelper.matchGroupDiscountPercent(
+        rules: _categoryGroupRules,
+        company: line.company,
+        group: line.group,
+        potency: line.potency,
+        packing: line.pack,
+      );
+      if (matched != null && matched > 0) {
+        final text = matched == matched.roundToDouble()
+            ? matched.toInt().toString()
+            : matched.toStringAsFixed(2);
+        if (!mounted) return;
+        setState(() {
+          line.discount = text;
+          line.discountAutoFromCategory = true;
+          line.revision++;
+        });
+        if (kDebugMode) {
+          debugPrint(
+            'group discount match '
+            '${line.company}/${line.group}/${line.potency}/${line.pack} → $text%',
+          );
+        }
+        _recalcLinePrices(line);
+        _recalculate();
+        return;
+      }
+      // No rule matched — clear previous auto discount for this category.
+      if (forceCategoryRefresh && line.discountAutoFromCategory) {
+        if (!mounted) return;
+        setState(() {
+          line.discount = '';
+          line.discountAutoFromCategory = false;
+          line.revision++;
+        });
+        _recalcLinePrices(line);
+      }
+    }
+
+    // 2) Fallback: flat discount on pharmacy.group / pharmacy.company.
+    await _maybeApplyCompanyOrGroupDiscount(line);
   }
 
   _NamedOption? _customerFromRow(Map<String, dynamic> row) {
@@ -1013,7 +1202,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         final sid = await _odooSessionId();
         if (sid.isNotEmpty) {
           final row =
-              await OdooRpcHelper.readPharmacyCustomer(sid, picked.id!);
+          await OdooRpcHelper.readPharmacyCustomer(sid, picked.id!);
           if (row != null) {
             selected = _customerFromRow(row) ?? picked;
           }
@@ -1037,26 +1226,29 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       _creditLimitWarningBanner = null;
       if (selected.name.isNotEmpty &&
           !_customers.any(
-            (c) => c.name.toLowerCase() == selected.name.toLowerCase(),
+                (c) => c.name.toLowerCase() == selected.name.toLowerCase(),
           )) {
         _customers = [..._customers, selected]
           ..sort(
-            (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
           );
       } else {
         // Upgrade cached option with details.
         _customers = _customers
             .map(
               (c) => c.name.toLowerCase() == selected.name.toLowerCase()
-                  ? selected
-                  : c,
-            )
+              ? selected
+              : c,
+        )
             .toList();
       }
     });
     // Filling address must not steal the caret onto that field.
     _dismissKeyboardAfterFrame();
     unawaited(_loadCustomerBalances(selected));
+    if (selected.name.isNotEmpty) {
+      unawaited(_applyCustomerPriceCategory(selected));
+    }
   }
 
   Future<void> _loadCustomerBalances(_NamedOption customer) async {
@@ -1183,19 +1375,26 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     _addOpt(_racks, _rackKeys, t.rack);
   }
 
+  String? _formatAvailableStock(StockItemModel stock) {
+    final v = stock.availableStock ?? stock.stock ?? stock.itemQty;
+    if (v == null) return null;
+    return v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+  }
+
   void _applyStockToLine(
-    _BillLine line,
-    StockItemModel stock, {
-    bool preservePotency = false,
-    bool preserveProduct = false,
-    bool linkStockIds = true,
-  }) {
+      _BillLine line,
+      StockItemModel stock, {
+        bool preservePotency = false,
+        bool preserveProduct = false,
+        bool linkStockIds = true,
+      }) {
     final t = _LineTemplate.fromStock(stock);
     line.applyFromStock(
       t,
       preservePotency: preservePotency,
       preserveProduct: preserveProduct,
     );
+    line.availableStock = _formatAvailableStock(stock);
     if (linkStockIds) {
       if (stock.stockId != null) {
         line.stockDisplayId = stock.stockId;
@@ -1259,17 +1458,54 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   StockItemModel? _pickBestStockRow(List<StockItemModel> matches) {
     if (matches.isEmpty) return null;
     matches.sort(
-      (a, b) => _stockDefaultScore(b).compareTo(_stockDefaultScore(a)),
+          (a, b) => _stockDefaultScore(b).compareTo(_stockDefaultScore(a)),
     );
     return matches.first;
   }
 
   /// Exact product + potency stock row (when both are set).
+  /// Prefer rows that also match company / pack / batch when those are set.
   StockItemModel? _exactStockMatch(_BillLine line, List<StockItemModel> rows) {
+    return _matchStockForAvailable(line, rows, requirePotency: true);
+  }
+
+  bool _fieldEquals(String? a, String? b) {
+    final left = _normField(a);
+    final right = _normField(b);
+    if (left.isEmpty || right.isEmpty) return false;
+    return left == right;
+  }
+
+  /// Match stock for Available Stock using product + potency + company +
+  /// batch + pack. All five must be set and match before a qty is shown.
+  StockItemModel? _matchStockForAvailable(
+    _BillLine line,
+    List<StockItemModel> rows, {
+    bool requirePotency = false,
+  }) {
     if (rows.isEmpty) return null;
     final product = _normField(line.product);
     final potency = _normField(line.potency);
-    if (product.isEmpty || potency.isEmpty) return null;
+    final company = _normField(line.company);
+    final batch = _normField(line.batch);
+    final pack = _normField(line.pack);
+    if (product.isEmpty) return null;
+
+    // Available Stock UI: only when the full identity is chosen.
+    if (!requirePotency &&
+        (potency.isEmpty ||
+            company.isEmpty ||
+            batch.isEmpty ||
+            pack.isEmpty)) {
+      return null;
+    }
+
+    // Sync / defaults: product+potency required; company/pack/batch optional filters.
+    if (requirePotency && potency.isEmpty) return null;
+
+    final needCompany = company.isNotEmpty;
+    final needBatch = batch.isNotEmpty;
+    final needPack = pack.isNotEmpty;
 
     final matches = <StockItemModel>[];
     for (final row in rows) {
@@ -1277,20 +1513,53 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       final productOk = name == product || name.startsWith(product);
       if (!productOk) continue;
       if (!_potencyEquals(row.potency, line.potency)) continue;
+      if (needCompany && !_fieldEquals(row.company, line.company)) continue;
+      if (needBatch && !_fieldEquals(row.batch, line.batch)) continue;
+      if (needPack && !_fieldEquals(row.packing, line.pack)) continue;
       matches.add(row);
     }
     return _pickBestStockRow(matches);
   }
 
+  /// Refresh Available Stock from the row that matches product / potency /
+  /// company / batch / pack (From stock lines only).
+  Future<void> _refreshAvailableStockForLine(_BillLine line) async {
+    if (!line.fromStock) {
+      if (line.availableStock != null) {
+        setState(() => line.availableStock = null);
+      }
+      return;
+    }
+    final product = (line.product ?? '').trim();
+    if (product.isEmpty) {
+      setState(() => line.availableStock = null);
+      return;
+    }
+    final rows = await _stockRowsForProduct(product);
+    if (!mounted) return;
+    final match = _matchStockForAvailable(line, rows);
+    setState(() {
+      if (match == null) {
+        line.availableStock = null;
+        return;
+      }
+      line.availableStock = _formatAvailableStock(match);
+      if (match.stockId != null) line.stockDisplayId = match.stockId;
+      if (match.entryStockId != null) line.entryStockId = match.entryStockId;
+    });
+  }
+
   Future<void> _syncLineFromStock(
-    _BillLine line, {
-    bool potencyOnly = false,
-  }) async {
+      _BillLine line, {
+        bool potencyOnly = false,
+      }) async {
     final product = (line.product ?? '').trim();
     final potency = (line.potency ?? '').trim();
     if (product.isEmpty && potency.isEmpty) return;
 
     // Product + potency → exact medicine row (not when potency-only pick).
+    // Prefer company / pack / batch when already chosen so Available Stock
+    // reflects the matching stock entry.
     if (!potencyOnly && product.isNotEmpty && potency.isNotEmpty) {
       final rows = await _stockRowsForProduct(product);
       if (!mounted) return;
@@ -1298,14 +1567,19 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       if (match == null) {
         if (kDebugMode) {
           debugPrint(
-            'No stock defaults for product="$product" potency="$potency"',
+            'No stock defaults for product="$product" potency="$potency" '
+            '— falling back to potency HSN/Group/Tax',
           );
         }
-        setState(() => line.revision++);
+        // Non-stock / free-text medicine: still fill Group / HSN / Tax from potency.
+        await _syncLineFromStock(line, potencyOnly: true);
+        if (line.fromStock) {
+          await _refreshAvailableStockForLine(line);
+        }
         return;
       }
       setState(
-        () => _applyStockToLine(
+            () => _applyStockToLine(
           line,
           match,
           preservePotency: true,
@@ -1315,12 +1589,14 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       );
       if (line.fromStock) {
         await _applyWebsiteStockId(line);
+        await _refreshAvailableStockForLine(line);
       } else {
         setState(() {
           line.stockDisplayId = null;
           line.entryStockId = null;
         });
       }
+      await _maybeApplyLineDiscount(line);
       _recalculate();
       return;
     }
@@ -1349,8 +1625,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
             setState(() {
               _applyPotencyDefaultsToLine(line, defaults);
               final idx = _potencyMasterRows.indexWhere(
-                (r) =>
-                    (r['name'] ?? '').trim().toLowerCase() ==
+                    (r) =>
+                (r['name'] ?? '').trim().toLowerCase() ==
                     potency.toLowerCase(),
               );
               if (idx >= 0) {
@@ -1550,10 +1826,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   }
 
   void _applyPotencyDefaultsToLine(
-    _BillLine line,
-    Map<String, String> defaults, {
-    bool onlyEmpty = false,
-  }) {
+      _BillLine line,
+      Map<String, String> defaults, {
+        bool onlyEmpty = false,
+      }) {
     void setStr(void Function(String? v) assign, String? value, List<String> pool, Set<String> keys) {
       final v = (value ?? '').trim();
       if (v.isEmpty) return;
@@ -1687,7 +1963,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final items = await _fetchStockSearch(target);
     final exact = items
         .where((s) =>
-            s.medicineLabel.trim().toLowerCase() == target.toLowerCase())
+    s.medicineLabel.trim().toLowerCase() == target.toLowerCase())
         .toList(growable: false);
     if (exact.isNotEmpty) return exact;
     return items.where((s) => _sameMedicine(s, target)).toList(growable: false);
@@ -1735,12 +2011,16 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       if (stock.entryStockId != null) {
         line.entryStockId = stock.entryStockId;
       }
+      // Available Stock waits until potency + company + batch + pack match.
+      line.availableStock = null;
       line.revision++;
       _addOpt(_products, _productKeys, name);
     });
 
     await _applyWebsiteStockId(line);
     await _enrichOptionsForProduct(line.product);
+    if (!mounted) return;
+    await _refreshAvailableStockForLine(line);
     if (!mounted) return;
     _recalculate();
   }
@@ -1794,12 +2074,14 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         line.entryStockId = null;
         line.addQrData = null;
         line.addQrDataAlt = null;
+        line.availableStock = null;
       } else {
         // Switching back to stock: clear free-text product so user re-picks.
         line.clearRelatedExceptProduct();
         line.product = null;
         line.stockDisplayId = null;
         line.entryStockId = null;
+        line.availableStock = null;
       }
       line.revision++;
       _lineRequiredErrors = {};
@@ -1822,13 +2104,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
   /// Full master list for Company / Pack (all API names + free-text create).
   Future<void> _pickMasterNameForLine(
-    _BillLine line, {
-    required String title,
-    required String? Function() readValue,
-    required void Function(String? v) assign,
-    required List<String> pool,
-    required Set<String> poolKeys,
-  }) async {
+      _BillLine line, {
+        required String title,
+        required String? Function() readValue,
+        required void Function(String? v) assign,
+        required List<String> pool,
+        required Set<String> poolKeys,
+      }) async {
     if (pool.length < 30) {
       await _loadMasterDropdowns();
       if (!mounted) return;
@@ -1847,21 +2129,28 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       line.revision++;
     });
     // Do not re-sync from stock — that overwrites a manually chosen Company/Pack.
-    _recalculate();
+    if (line.fromStock) {
+      await _refreshAvailableStockForLine(line);
+    }
+    if ((title == 'Company' || title == 'Pack') && picked.isNotEmpty) {
+      await _maybeApplyLineDiscount(line);
+    } else {
+      _recalculate();
+    }
   }
 
   /// Pick potency / related field (website-style).
   /// Potency can be chosen without product; related fields then fill from stock
   /// rows that share that potency (Group, HSN, …) while product stays blank.
   Future<void> _pickRelatedForLine(
-    _BillLine line, {
-    required String title,
-    required String? Function(StockItemModel s) readField,
-    required void Function(String? v) assignField,
-    required List<String> pool,
-    required Set<String> poolKeys,
-    required List<String> fallbackOptions,
-  }) async {
+      _BillLine line, {
+        required String title,
+        required String? Function(StockItemModel s) readField,
+        required void Function(String? v) assignField,
+        required List<String> pool,
+        required Set<String> poolKeys,
+        required List<String> fallbackOptions,
+      }) async {
     final product = (line.product ?? '').trim();
     final options = <String>[];
     final optionKeys = <String>{};
@@ -1930,6 +2219,16 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     // Potency → Group / Tax / HSN (same with From stock on or off).
     if (title == 'Potency') {
       await _syncLineFromStock(line, potencyOnly: true);
+      await _maybeApplyLineDiscount(line);
+    } else if (title == 'Company' ||
+        title == 'Group' ||
+        title == 'Pack' ||
+        title == 'BATCH') {
+      if (line.fromStock &&
+          (title == 'Company' || title == 'Pack' || title == 'BATCH')) {
+        await _refreshAvailableStockForLine(line);
+      }
+      await _maybeApplyLineDiscount(line);
     } else {
       _recalculate();
     }
@@ -1969,6 +2268,50 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     });
 
     await _syncLineFromStock(line, potencyOnly: true);
+    await _maybeApplyLineDiscount(line);
+  }
+
+  /// When line discount is empty, fill from pharmacy.group / pharmacy.company.
+  Future<void> _maybeApplyCompanyOrGroupDiscount(_BillLine line) async {
+    if (line.discount.trim().isNotEmpty) {
+      _recalculate();
+      return;
+    }
+    final group = (line.group ?? '').trim();
+    final company = (line.company ?? '').trim();
+    if (group.isEmpty && company.isEmpty) {
+      _recalculate();
+      return;
+    }
+    try {
+      final sid = await _odooSessionId();
+      if (sid.isEmpty) {
+        _recalculate();
+        return;
+      }
+      double? disc;
+      if (group.isNotEmpty) {
+        disc = await OdooRpcHelper.fetchGroupDiscount(sid, group);
+      }
+      if ((disc == null || disc <= 0) && company.isNotEmpty) {
+        disc = await OdooRpcHelper.fetchCompanyDiscount(sid, company);
+      }
+      if (!mounted) return;
+      if (disc != null && disc > 0) {
+        final text = disc == disc.roundToDouble()
+            ? disc.toInt().toString()
+            : disc.toStringAsFixed(2);
+        setState(() {
+          line.discount = text;
+          line.discountAutoFromCategory = false;
+          line.revision++;
+        });
+        _recalcLinePrices(line);
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('company/group discount: $e');
+    }
+    _recalculate();
   }
 
   String? _primaryAddQrToken(QrData data) {
@@ -1995,12 +2338,12 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   }
 
   void _markLineServerCommitted(
-    _BillLine line,
-    QrData data,
-    double qty, {
-    int? invoiceId,
-    bool rpcAdjustedItemQty = false,
-  }) {
+      _BillLine line,
+      QrData data,
+      double qty, {
+        int? invoiceId,
+        bool rpcAdjustedItemQty = false,
+      }) {
     line.fromStock = true;
     line.serverCommitted = true;
     line.serverCommittedQty += qty;
@@ -2022,6 +2365,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     } else if (data.productId != null) {
       line.stockDisplayId ??= data.productId;
     }
+    // Show Available Stock on the bill line (same value as the QR stock dialog).
+    final stock = data.availableStock ?? data.stockQty;
+    if (stock != null && stock >= 0) {
+      line.availableStock = stock == stock.roundToDouble()
+          ? stock.toInt().toString()
+          : stock.toStringAsFixed(2);
+    }
     final alt = _alternateAddQrToken(data, line.addQrData);
     if (alt != null && alt.isNotEmpty) {
       line.addQrDataAlt ??= alt;
@@ -2029,11 +2379,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   }
 
   void _addOrUpdateLineFromQr(
-    QrData data,
-    double qty, {
-    int? invoiceId,
-    bool rpcAdjustedItemQty = false,
-  }) {
+      QrData data,
+      double qty, {
+        int? invoiceId,
+        bool rpcAdjustedItemQty = false,
+      }) {
     String? money(double? v) {
       if (v == null) return null;
       return v == v.roundToDouble()
@@ -2049,19 +2399,31 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         : qty.toString();
     final manuf = data.mfd?.trim();
     final unitP = money(data.unitPrice);
-    final discount = money(data.discountPercent);
+    // Do not auto-fill line discount from QR — only show when user enters it.
 
-    final existingIndex = _lines.indexWhere((l) {
-      final sameProduct =
-          (l.product ?? '').trim().toLowerCase() == (product ?? '').toLowerCase();
-      final samePotency =
-          (l.potency ?? '').trim().toLowerCase() == (potency ?? '').toLowerCase();
-      final sameBatch =
-          (l.batch ?? '').trim().toLowerCase() == (batch ?? '').toLowerCase();
-      return sameProduct && samePotency && sameBatch && (product ?? '').isNotEmpty;
-    });
-
+    late final int existingIndex;
     setState(() {
+      // Drop unused blank "Add a line" drafts so QR results aren't mixed with
+      // an empty expanded card. User can tap Add a line again when needed.
+      if (_lines.any((l) => l.isBlankDraft)) {
+        _lines = _lines.where((l) => !l.isBlankDraft).toList();
+      }
+      _editingLineIndex = null;
+      _lineRequiredErrors = {};
+
+      existingIndex = _lines.indexWhere((l) {
+        final sameProduct = (l.product ?? '').trim().toLowerCase() ==
+            (product ?? '').toLowerCase();
+        final samePotency = (l.potency ?? '').trim().toLowerCase() ==
+            (potency ?? '').toLowerCase();
+        final sameBatch = (l.batch ?? '').trim().toLowerCase() ==
+            (batch ?? '').toLowerCase();
+        return sameProduct &&
+            samePotency &&
+            sameBatch &&
+            (product ?? '').isNotEmpty;
+      });
+
       if (existingIndex >= 0) {
         final line = _lines[existingIndex];
         final prev = double.tryParse(line.qty) ?? 0;
@@ -2077,9 +2439,6 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         if (line.unitP.trim().isEmpty && unitP != null) {
           // unitP from scan may be tax-inclusive — recalc from MRP instead.
           _recalcLinePrices(line);
-        }
-        if (line.discount.trim().isEmpty && discount != null) {
-          line.discount = discount;
         }
         _markLineServerCommitted(
           line,
@@ -2123,7 +2482,6 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         );
         line.applyFromStock(t);
         line.qty = qtyText;
-        if (discount != null) line.discount = discount;
         _recalcLinePrices(line);
         _markLineServerCommitted(
           line,
@@ -2135,7 +2493,6 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         _mergeTemplateIntoPools(t);
         _templates.add(t);
         _lines = [..._lines, line];
-        _editingLineIndex = null;
       }
     });
     _recalculate();
@@ -2143,10 +2500,21 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         ? existingIndex
         : _lines.length - 1;
     if (target >= 0 && target < _lines.length) {
-      if (existingIndex >= 0) setState(() => _editingLineIndex = null);
       unawaited(_applyWebsiteStockId(_lines[target]));
       unawaited(_enrichQrLine(_lines[target]));
+      unawaited(_resolveOdooLineIdAfterQr(_lines[target]));
       unawaited(_reloadInvoiceHeaderAfterQr(invoiceId ?? _serverInvoiceId));
+    }
+  }
+
+  /// Bind QR-added bill lines to `account.move.line` so Dis% can be written.
+  Future<void> _resolveOdooLineIdAfterQr(_BillLine line) async {
+    try {
+      final sid = await _odooSessionId();
+      if (sid.isEmpty) return;
+      await _ensureOdooLineId(line, sid);
+    } catch (e) {
+      if (kDebugMode) debugPrint('resolveOdooLineIdAfterQr: $e');
     }
   }
 
@@ -2180,6 +2548,14 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         if (doctor.isNotEmpty) {
           _doctor = _NamedOption(name: doctor);
         }
+        if ((inv.expense ?? '').trim().isNotEmpty) {
+          _expenseTextCtrl.text = inv.expense!.trim();
+        }
+        if (inv.expenseAmt != null) {
+          final e = inv.expenseAmt!;
+          _expenseCtrl.text =
+              e == e.roundToDouble() ? e.toInt().toString() : e.toString();
+        }
         final pay = (inv.paymentMode ?? '').trim();
         if (pay.isNotEmpty) {
           _paymentMode = _normalizePaymentMode(pay);
@@ -2190,7 +2566,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         if ((inv.invoiceDate ?? '').trim().isNotEmpty) {
           final parsed = CalendarDate.parse(inv.invoiceDate);
           _invoiceDateDisplay =
-              parsed != null ? CalendarDate.dmy(parsed) : inv.invoiceDate!.trim();
+          parsed != null ? CalendarDate.dmy(parsed) : inv.invoiceDate!.trim();
         }
       });
       if (_customer != null) unawaited(_loadCustomerBalances(_customer!));
@@ -2200,8 +2576,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   }
 
   Future<void> _enrichQrLine(_BillLine line) async {
-    if (line.hasRequiredLineFields) return;
+    if (line.hasRequiredLineFields) {
+      await _maybeApplyLineDiscount(line);
+      return;
+    }
     await _syncLineFromStock(line);
+    if (!mounted) return;
+    await _maybeApplyLineDiscount(line);
     if (!mounted) return;
     setState(() {});
     _recalculate();
@@ -2248,11 +2629,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
             final trimmed = query.trim();
             final canCreate = trimmed.isNotEmpty &&
                 !hits.any(
-                  (item) =>
-                      item.medicineLabel.toLowerCase() == trimmed.toLowerCase(),
+                      (item) =>
+                  item.medicineLabel.toLowerCase() == trimmed.toLowerCase(),
                 ) &&
                 !_products.any(
-                  (name) => name.toLowerCase() == trimmed.toLowerCase(),
+                      (name) => name.toLowerCase() == trimmed.toLowerCase(),
                 );
 
             String subtitle(StockItemModel item) {
@@ -2320,7 +2701,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                             debounce?.cancel();
                             debounce = Timer(
                               const Duration(milliseconds: 350),
-                              () => runSearch(setModal),
+                                  () => runSearch(setModal),
                             );
                           },
                         ),
@@ -2368,7 +2749,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                               final sub = subtitle(item);
                               final isSelected =
                                   selected != null &&
-                                  selected.toLowerCase() == name.toLowerCase();
+                                      selected.toLowerCase() == name.toLowerCase();
                               return ListTile(
                                 title: Text(
                                   name,
@@ -2377,17 +2758,17 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                 subtitle: sub.isEmpty
                                     ? null
                                     : Text(
-                                        sub,
-                                        style: const TextStyle(
-                                          color: sectionTextMuted,
-                                          fontSize: 14,
-                                        ),
-                                      ),
+                                  sub,
+                                  style: const TextStyle(
+                                    color: sectionTextMuted,
+                                    fontSize: 14,
+                                  ),
+                                ),
                                 trailing: isSelected
                                     ? const Icon(
-                                        Icons.check,
-                                        color: Color(0xFFE07A2F),
-                                      )
+                                  Icons.check,
+                                  color: Color(0xFFE07A2F),
+                                )
                                     : null,
                                 onTap: () => Navigator.pop(ctx, item),
                               );
@@ -2431,14 +2812,14 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
             final q = query.trim().toLowerCase();
             final filtered = options
                 .where((o) {
-                  if (q.isEmpty) return true;
-                  final name = o.name.toLowerCase();
-                  return matchContains ? name.contains(q) : name.startsWith(q);
-                })
+              if (q.isEmpty) return true;
+              final name = o.name.toLowerCase();
+              return matchContains ? name.contains(q) : name.startsWith(q);
+            })
                 .toList(growable: false);
             final canCreate = query.trim().isNotEmpty &&
                 !options.any(
-                  (o) => o.name.toLowerCase() == query.trim().toLowerCase(),
+                      (o) => o.name.toLowerCase() == query.trim().toLowerCase(),
                 );
             return Padding(
               padding: EdgeInsets.only(
@@ -2536,38 +2917,38 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                       Expanded(
                         child: filtered.isEmpty
                             ? Center(
-                                child: Text(
-                                  canCreate
-                                      ? 'No matches — create above'
-                                      : options.isEmpty
-                                          ? 'No saved options — type to create'
-                                          : 'Start typing…',
-                                  style: const TextStyle(color: sectionTextMuted),
-                                ),
-                              )
+                          child: Text(
+                            canCreate
+                                ? 'No matches — create above'
+                                : options.isEmpty
+                                ? 'No saved options — type to create'
+                                : 'Start typing…',
+                            style: const TextStyle(color: sectionTextMuted),
+                          ),
+                        )
                             : ListView.builder(
-                                itemCount: filtered.length,
-                                itemBuilder: (_, i) {
-                                  final item = filtered[i];
-                                  final isSelected =
-                                      selected?.name == item.name &&
-                                          selected?.id == item.id;
-                                  return ListTile(
-                                    title: Text(
-                                      item.name,
-                                      style:
-                                          const TextStyle(color: sectionText),
-                                    ),
-                                    trailing: isSelected
-                                        ? const Icon(
-                                            Icons.check,
-                                            color: const Color(0xFFE07A2F),
-                                          )
-                                        : null,
-                                    onTap: () => Navigator.pop(ctx, item),
-                                  );
-                                },
+                          itemCount: filtered.length,
+                          itemBuilder: (_, i) {
+                            final item = filtered[i];
+                            final isSelected =
+                                selected?.name == item.name &&
+                                    selected?.id == item.id;
+                            return ListTile(
+                              title: Text(
+                                item.name,
+                                style:
+                                const TextStyle(color: sectionText),
                               ),
+                              trailing: isSelected
+                                  ? const Icon(
+                                Icons.check,
+                                color: const Color(0xFFE07A2F),
+                              )
+                                  : null,
+                              onTap: () => Navigator.pop(ctx, item),
+                            );
+                          },
+                        ),
                       ),
                     ],
                   ),
@@ -2673,8 +3054,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   /// True when this bill already exists as an Odoo `account.move`.
   bool get _hasServerInvoice =>
       _serverInvoiceId != null ||
-      _invoiceCommittedOnServer ||
-      widget.editInvoice?.id != null;
+          _invoiceCommittedOnServer ||
+          widget.editInvoice?.id != null;
 
   /// Create the draft on the server when the UI only has a local preview number.
   Future<bool> _ensureServerInvoice(LoginViewmodel login) async {
@@ -2740,10 +3121,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final pending = _lines
         .where(
           (l) =>
-              !l.serverCommitted &&
-              l.hasRequiredLineFields &&
-              InvoiceCalcHelper.parseNum(l.qty) > 0,
-        )
+      !l.serverCommitted &&
+          l.hasRequiredLineFields &&
+          InvoiceCalcHelper.parseNum(l.qty) > 0,
+    )
         .toList(growable: false);
     if (pending.isEmpty) return true;
 
@@ -2811,12 +3192,12 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       final stockRow = existingToken.isNotEmpty
           ? null
           : await OdooRpcHelper.findEntryStockRow(
-              odooSid,
-              stockDisplayId: line.stockDisplayId,
-              medicine: line.product,
-              batch: line.batch,
-              potency: line.potency,
-            );
+        odooSid,
+        stockDisplayId: line.stockDisplayId,
+        medicine: line.product,
+        batch: line.batch,
+        potency: line.potency,
+      );
 
       if (stockRow != null) {
         final display = OdooRpcHelper.displayIdFromEntryStockRow(stockRow);
@@ -2844,7 +3225,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       // Path A: Flutter add_to_invoice (QR / barcode).
       if (token != null && token.isNotEmpty) {
         final qtyValue = qty == qty.roundToDouble() ? qty.toInt() : qty;
+        final disc = InvoiceCalcHelper.parseNum(line.discount);
+        final mrp = InvoiceCalcHelper.parseNum(line.mrp);
         final params = <String, dynamic>{
+          'invoice_id': moveId,
           'invoice_number': _invoiceNumber.trim(),
           'qr_data': token,
           'quantity': qtyValue,
@@ -2856,6 +3240,15 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         params['tax'] = taxPct;
         params['gst'] = taxPct;
         params['gst_percent'] = taxPct;
+        if (disc > 0) {
+          params['discount'] = disc;
+          params['dis2_percent'] = disc;
+          params['discount_percent'] = disc;
+        }
+        if (mrp > 0) {
+          params['mrp'] = mrp;
+          params['price_unit'] = mrp;
+        }
         if (kDebugMode) {
           debugPrint('save add_to_invoice line ${i + 1}: $params');
         }
@@ -2894,16 +3287,45 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                 : int.tryParse(idRaw?.toString() ?? '');
             if (id != null) {
               line.serverInvoiceId = id;
+              // If API spawned a different move, abandon the empty draft we made.
+              if (id != moveId && _draftCreatedThisSession) {
+                try {
+                  await OdooRpcHelper.deleteCustomerInvoiceDraft(
+                    odooSid,
+                    moveId,
+                  );
+                } catch (e) {
+                  if (kDebugMode) {
+                    debugPrint('cleanup abandoned draft #$moveId: $e');
+                  }
+                }
+                _draftCreatedThisSession = false;
+              }
               _serverInvoiceId = id;
             }
             final name =
-                (result['invoice_name'] ?? result['invoice_number'] ?? '')
-                    .toString()
-                    .trim();
+            (result['invoice_name'] ?? result['invoice_number'] ?? '')
+                .toString()
+                .trim();
             final match = RegExp(r'(\d{3,5}/\d{4}-\d{2})').firstMatch(name);
             if (match != null) {
               _invoiceNumber = match.group(1)!;
             }
+          }
+          // add_to_invoice often ignores Dis% — write it onto the new line now.
+          await _ensureOdooLineId(line, odooSid);
+          if (line.odooLineId != null && line.odooLineId! > 0) {
+            await OdooRpcHelper.updateCustomerInvoiceLine(
+              odooSid,
+              lineId: line.odooLineId!,
+              quantity: qty,
+              priceUnit: mrp > 0 ? mrp : null,
+              discount: disc,
+              batch: line.batch,
+              hsn: line.hsn.trim().isEmpty ? null : line.hsn.trim(),
+              rack: line.rack.trim().isEmpty ? null : line.rack.trim(),
+              taxPercent: taxPct,
+            );
           }
           continue;
         } catch (e) {
@@ -2916,13 +3338,16 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       if (stockRow == null) {
         _toast(
           'Line ${i + 1}: could not find stock for '
-          '${line.product ?? 'product'}. Pick from stock list or use QR scan.',
+              '${line.product ?? 'product'}. Pick from stock list or use QR scan.',
         );
         return false;
       }
 
       final unit = InvoiceCalcHelper.parseNum(line.mrp);
       final disc = InvoiceCalcHelper.parseNum(line.discount);
+      final taxPct = InvoiceCalcHelper.normalizeCustomerTaxPercent(
+        InvoiceCalcHelper.parseNum(line.tax),
+      );
       final ok = await OdooRpcHelper.addStockLineToCustomerInvoice(
         odooSid,
         invoiceId: moveId,
@@ -2930,6 +3355,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         quantity: qty,
         priceUnit: unit > 0 ? unit : null,
         discount: disc > 0 ? disc : null,
+        taxPercent: taxPct,
       );
       if (!ok) {
         _toast(
@@ -2950,19 +3376,54 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   }
 
   /// Resolve [odooLineId] for QR-added lines that never loaded edit metadata.
-  Future<void> _ensureOdooLineId(_BillLine line, String sid) async {
+  ///
+  /// `add_to_invoice` often links a different `stock_entry_id` than the QR
+  /// scan row, so stock-entry lookup alone fails — fall back to product/batch
+  /// / newest product line on the move.
+  Future<void> _ensureOdooLineId(
+    _BillLine line,
+    String sid, {
+    Set<int>? excludeLineIds,
+  }) async {
     if (line.odooLineId != null && line.odooLineId! > 0) return;
     final moveId = line.serverInvoiceId ?? _serverInvoiceId;
-    final entryId = line.entryStockId ?? line.stockDisplayId;
-    if (moveId == null || moveId <= 0 || entryId == null || entryId <= 0) {
-      return;
-    }
-    final id = await OdooRpcHelper.findCustomerInvoiceLineIdByStockEntry(
+    if (moveId == null || moveId <= 0) return;
+
+    final id = await OdooRpcHelper.resolveCustomerInvoiceLineId(
       sessionId: sid,
       invoiceId: moveId,
-      stockEntryId: entryId,
+      stockEntryId: line.entryStockId,
+      stockDisplayId: line.stockDisplayId,
+      productName: line.product,
+      batch: line.batch,
+      excludeLineIds: excludeLineIds,
     );
-    if (id != null && id > 0) line.odooLineId = id;
+    if (id != null && id > 0) {
+      line.odooLineId = id;
+      if (kDebugMode) {
+        debugPrint(
+          'ensureOdooLineId product=${line.product} batch=${line.batch} '
+          '→ $id entry=${line.entryStockId} display=${line.stockDisplayId}',
+        );
+      }
+    }
+  }
+
+  /// Resolve every committed bill line to an Odoo `account.move.line` id.
+  Future<void> _resolveAllOdooLineIds(String sid, int moveId) async {
+    final claimed = <int>{};
+    for (final line in _lines) {
+      final existing = line.odooLineId;
+      if (existing != null && existing > 0) claimed.add(existing);
+    }
+    for (final line in _lines) {
+      if (!line.serverCommitted && !line.hasRequiredLineFields) continue;
+      if (line.odooLineId != null && line.odooLineId! > 0) continue;
+      line.serverInvoiceId ??= moveId;
+      await _ensureOdooLineId(line, sid, excludeLineIds: claimed);
+      final id = line.odooLineId;
+      if (id != null && id > 0) claimed.add(id);
+    }
   }
 
   /// Push one committed line's qty/price to Odoo.
@@ -2980,7 +3441,21 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final disc = InvoiceCalcHelper.parseNum(line.discount);
     final newQty = qty > 0 ? qty : 0.0;
 
-    if (line.odooLineId != null && line.odooLineId! > 0) {
+    if (line.odooLineId == null || line.odooLineId! <= 0) {
+      // Without a line id we cannot persist Dis% — fail loudly when Dis set.
+      if (disc > 0.01) {
+        if (kDebugMode) {
+          debugPrint(
+            'syncOneCommittedLine: no odooLineId for '
+            '${line.product} Dis=$disc — cannot write',
+          );
+        }
+        return false;
+      }
+    } else {
+      final taxPct = InvoiceCalcHelper.normalizeCustomerTaxPercent(
+        InvoiceCalcHelper.parseNum(line.tax),
+      );
       final ok = await OdooRpcHelper.updateCustomerInvoiceLine(
         sid,
         lineId: line.odooLineId!,
@@ -2990,6 +3465,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         batch: line.batch,
         hsn: line.hsn.trim().isEmpty ? null : line.hsn.trim(),
         rack: line.rack.trim().isEmpty ? null : line.rack.trim(),
+        taxPercent: taxPct,
       );
       if (!ok) return false;
     }
@@ -3000,7 +3476,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       if (kDebugMode && (prev - newQty).abs() > 0.0001) {
         debugPrint(
           'line qty synced product=${line.product} '
-          'prevCommitted=$prev → $newQty (stock via Odoo line write)',
+              'prevCommitted=$prev → $newQty (stock via Odoo line write)',
         );
       }
     }
@@ -3011,18 +3487,18 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   Future<bool> _syncCommittedLines(LoginViewmodel login) async {
     final committed = _lines
         .where(
-          (l) =>
-              l.serverCommitted &&
-              l.hasRequiredLineFields &&
-              ((l.odooLineId != null && l.odooLineId! > 0) ||
-                  (l.entryStockId != null && l.entryStockId! > 0) ||
-                  (l.stockDisplayId != null && l.stockDisplayId! > 0)),
+          (l) => l.serverCommitted && l.hasRequiredLineFields,
         )
         .toList(growable: false);
     if (committed.isEmpty) return true;
 
     final sid = await _odooSessionId();
     if (sid.isEmpty) return false;
+
+    final moveId = _serverInvoiceId ?? widget.editInvoice?.id;
+    if (moveId != null && moveId > 0) {
+      await _resolveAllOdooLineIds(sid, moveId);
+    }
 
     for (final line in committed) {
       final ok = await _syncOneCommittedLine(line, sid);
@@ -3086,6 +3562,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         address: _addressCtrl.text.trim(),
         phone: _phoneCtrl.text.trim(),
         doctor: (_doctor?.name ?? '').trim(),
+        doctorId: _doctor?.id,
         responsiblePersonId: _responsible?.id,
         responsiblePersonName: (_responsible?.name ?? '').trim(),
         paymentMode: _paymentMode,
@@ -3095,11 +3572,21 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         discountType: _discountType,
         discountRate: rate,
         expense: _expenseTextCtrl.text.trim(),
+        expenseAmt: () {
+          final raw = _expenseCtrl.text.trim();
+          if (raw.isEmpty) return null;
+          final n = InvoiceCalcHelper.parseNum(raw);
+          return n == 0 && raw != '0' && raw != '0.0' ? null : n;
+        }(),
         remarks: _remarksCtrl.text.trim(),
         verifiedBy: _verifiedByCtrl.text.trim(),
       );
       // Keep local customer id in sync with pharmacy.customer created/resolved.
-      if (ok && customerName.isNotEmpty && mounted) {
+      // Skip when we already have a pharmacy.customer id (avoids slow re-reads).
+      if (ok &&
+          customerName.isNotEmpty &&
+          mounted &&
+          (_customer?.id == null || _customer!.id! <= 0)) {
         final resolved = await OdooRpcHelper.findOrCreatePharmacyCustomer(
           sessionId: sid,
           name: customerName,
@@ -3114,7 +3601,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
             if (!_customers.any((c) => c.id == resolved)) {
               _customers = [..._customers, _customer!]
                 ..sort(
-                  (a, b) =>
+                      (a, b) =>
                       a.name.toLowerCase().compareTo(b.name.toLowerCase()),
                 );
             }
@@ -3133,6 +3620,14 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   Future<void> _saveBill() async {
     if (_saving) return;
 
+    // Never create/save an invoice without at least one product line.
+    // This check must happen before _ensureServerInvoice(), otherwise an empty
+    // Odoo draft gets created even when the user has entered no bill data.
+    if (_lines.isEmpty) {
+      _toast('Please add at least one product before saving the bill.');
+      return;
+    }
+
     final responsibleName = (_responsible?.name ?? '').trim();
     if (_isCreditPayment && responsibleName.isEmpty) {
       _toast('Responsible Person is required for Credit bills');
@@ -3148,12 +3643,16 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       }
     }
 
-    // Warning only — never blocks create / save.
-    await _warnIfCreditLimitExceeded();
-    if (!mounted) return;
-
+    // Block double-taps before any await (credit warning / server calls).
     setState(() => _saving = true);
     FocusScope.of(context).unfocus();
+
+    // Warning only — never blocks create / save.
+    await _warnIfCreditLimitExceeded();
+    if (!mounted) {
+      _saving = false;
+      return;
+    }
     SystemChannels.textInput.invokeMethod('TextInput.hide');
 
     try {
@@ -3182,6 +3681,18 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         return;
       }
 
+      // Save the customer/header first so the invoice is linked to the
+      // pharmacy.customer record before products are committed. This is
+      // important for the customer invoice list, which uses the customer
+      // relation rather than only the display name.
+      final headerBeforeLines = await _syncHeaderToOdoo(login);
+      if (!headerBeforeLines) {
+        _toast(
+          'Could not save customer details to the bill. Please try again.',
+        );
+        return;
+      }
+
       // Manually added products must go through add_to_invoice (like QR).
       final linesOk = await _commitPendingLines(login);
       if (!linesOk) return;
@@ -3189,18 +3700,79 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       final syncedLines = await _syncCommittedLines(login);
       if (!syncedLines) return;
 
+      // add_to_invoice can return/resolve a different account.move id, so
+      // write the customer/header once more after all lines are committed.
       final synced = await _syncHeaderToOdoo(login);
       if (!synced) {
         _toast(
           'Bill was created but customer details could not be saved. '
-          'Open the bill and try again.',
+              'Open the bill and try again.',
         );
+      }
+
+      // Website TOTAL/DIS: push app Dis% (not stale Odoo 0) via parent onchange.
+      final moveId = _serverInvoiceId ?? widget.editInvoice?.id;
+      if (moveId != null && moveId > 0) {
+        final sid = await _odooSessionId();
+        if (sid.isNotEmpty) {
+          // Resolve line ids for QR lines before website Dis% sync.
+          // Stock-entry match often fails after add_to_invoice — use product.
+          await _resolveAllOdooLineIds(sid, moveId);
+          final appLines = <Map<String, dynamic>>[];
+          for (final line in _lines) {
+            if (!line.hasRequiredLineFields) continue;
+            var lineId = line.odooLineId;
+            if (lineId == null || lineId <= 0) {
+              await _ensureOdooLineId(line, sid);
+              lineId = line.odooLineId;
+            }
+            final mrp = InvoiceCalcHelper.parseNum(line.mrp);
+            final disc = InvoiceCalcHelper.parseNum(line.discount);
+            if (lineId == null || lineId <= 0 || mrp <= 0) {
+              if (kDebugMode && disc > 0.01) {
+                debugPrint(
+                  'save sync skip Dis=$disc — no line id for ${line.product}',
+                );
+              }
+              continue;
+            }
+            appLines.add(
+              OdooRpcHelper.pharmacyLineDiscountSpec(
+                lineId: lineId,
+                mrp: mrp,
+                discount: disc,
+                quantity: InvoiceCalcHelper.parseNum(line.qty),
+                taxPercent: InvoiceCalcHelper.normalizeCustomerTaxPercent(
+                  InvoiceCalcHelper.parseNum(line.tax),
+                ),
+              ),
+            );
+          }
+          if (kDebugMode) {
+            debugPrint(
+              'save sync website Dis% move=$moveId lines=${appLines.length} '
+              'total=${_totals.total} '
+              'dis=${appLines.map((e) => e['discount']).join(",")}',
+            );
+          }
+          await OdooRpcHelper.syncPharmacyWebsiteTotals(
+            sid,
+            invoiceId: moveId,
+            total: _totals.total,
+            balance: _totals.balance,
+            untaxed: _totals.untaxed > 0 ? _totals.untaxed : _totals.subtotal,
+            taxAmount: _totals.taxAmount,
+            discountTotal: _totals.discountTotal,
+            appLines: appLines,
+          );
+        }
       }
 
       if (!mounted) return;
       final shown = _invoiceNumber.trim().isEmpty
           ? 'draft'
           : _invoiceNumber.trim();
+      _publishSavedInvoiceLocally();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Bill $shown saved')),
       );
@@ -3215,6 +3787,54 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// Push local Dis% + expense totals into list caches so the Customer Invoice
+  /// / Payment Book screens show the bill amount immediately (without waiting
+  /// for a full payment-history refetch).
+  void _publishSavedInvoiceLocally() {
+    final id = _serverInvoiceId ?? widget.editInvoice?.id;
+    if (id == null || id <= 0) return;
+    final total = _totals.total;
+    final dateRaw = _invoiceDateDisplay.trim();
+    final parsedDate = CalendarDate.parse(dateRaw);
+    final summary = InvoiceSummaryModel(
+      id: id,
+      invoiceNumber: _invoiceNumber.trim().isEmpty
+          ? null
+          : _invoiceNumber.trim(),
+      customer: (_customer?.name ?? '').trim().isEmpty
+          ? null
+          : _customer!.name.trim(),
+      pharmacyCustomerId: _customer?.id,
+      address: _addressCtrl.text.trim().isEmpty
+          ? null
+          : _addressCtrl.text.trim(),
+      phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
+      doctor: (_doctor?.name ?? '').trim().isEmpty
+          ? null
+          : _doctor!.name.trim(),
+      invoiceDate: parsedDate != null
+          ? CalendarDate.ymd(parsedDate)
+          : CalendarDate.ymd(),
+      status: 'draft',
+      moveState: 'draft',
+      paymentState: 'not_paid',
+      paymentMode: _paymentMode,
+      gstType: _gstType,
+      discountType: _discountType,
+      discountRate: InvoiceCalcHelper.parseNum(_discountRateCtrl.text),
+      expense: _expenseTextCtrl.text.trim().isEmpty
+          ? null
+          : _expenseTextCtrl.text.trim(),
+      expenseAmt: InvoiceCalcHelper.parseNum(_expenseCtrl.text),
+      taxAmount: _totals.taxAmount,
+      subtotal: _totals.subtotal,
+      discountTotal: _totals.discountTotal,
+      total: total,
+      balance: _totals.balance,
+    );
+    CustomerInvoiceViewModel.upsertInvoice(summary);
   }
 
   void _toast(String message) {
@@ -3271,6 +3891,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (!_warnIfEditingLineIncomplete(forLineIndex: index)) return;
     if (index < 0 || index >= _lines.length) return;
     final line = _lines[index];
+
+    // Apply Customer Group Discount once more after all Add-a-line fields are set.
+    await _maybeApplyLineDiscount(line);
 
     // Sync qty/price to Odoo; stock follows from the line write (not a
     // second client-side restore).
@@ -3359,16 +3982,24 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       _toast('Session expired. Please log in again.');
       return false;
     }
+    // Resolve AML id before remove — QR display stock id often ≠ line
+    // stock_entry_id, so matching by entry alone used to miss.
+    final odooSid = await _odooSessionId();
+    if (odooSid.isNotEmpty) {
+      await _ensureOdooLineId(line, odooSid);
+    }
 
     return InvoiceStockRestoreHelper.restoreAfterLineDelete(
       flutterSessionId: sessionId,
       invoiceNumber: _invoiceNumber,
       invoiceId: line.serverInvoiceId ?? _serverInvoiceId,
+      invoiceLineId: line.odooLineId,
       quantity: line.serverCommittedQty,
       productName: line.product,
       batch: line.batch,
       potency: line.potency,
       stockEntryId: line.entryStockId,
+      stockDisplayId: line.stockDisplayId,
       restoreItemQty: line.rpcAdjustedItemQty,
       sellableStockDeducted: line.fromStock,
       login: login.loginEmail,
@@ -3379,8 +4010,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
   bool get _hasUnsavedServerLines =>
       _lines.any(
-        (l) =>
-            l.addedThisSession &&
+            (l) =>
+        l.addedThisSession &&
             l.serverCommitted &&
             l.serverCommittedQty > 0,
       );
@@ -3449,26 +4080,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
     setState(() => _removingLine = true);
     try {
-      final committed = _lines
-          .where(
-            (l) =>
-                l.addedThisSession &&
-                l.serverCommitted &&
-                l.serverCommittedQty > 0,
-          )
-          .toList(growable: false);
-      var allOk = true;
-      for (final line in committed) {
-        final ok = await _restoreLineStock(line);
-        if (!ok) allOk = false;
-      }
-      if (!allOk) {
-        _toast('Could not restore all stock. Check the bill and try again.');
-        // Still attempt draft delete so the bill does not linger on the list.
-      }
-
       var deleted = false;
       if (shouldDeleteDraft && draftId != null) {
+        // Full draft delete unlinks every AML and Odoo restores stock —
+        // skip per-line remove (display id ≠ stock_entry_id used to fail
+        // and show "Could not restore stock" even when discard succeeded).
         final sid = await _odooSessionId();
         if (sid.isNotEmpty) {
           deleted = await OdooRpcHelper.deleteCustomerInvoiceDraft(
@@ -3490,6 +4106,25 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         PaymentHistoryService.clearCache();
         if (!deleted) {
           _toast('Bill may still appear until the next refresh.');
+        }
+      } else {
+        final committed = _lines
+            .where(
+              (l) =>
+                  l.addedThisSession &&
+                  l.serverCommitted &&
+                  l.serverCommittedQty > 0,
+            )
+            .toList(growable: false);
+        var allOk = true;
+        for (final line in committed) {
+          final ok = await _restoreLineStock(line);
+          if (!ok) allOk = false;
+        }
+        if (!allOk) {
+          _toast(
+            'Could not restore all stock. Check the bill and try again.',
+          );
         }
       }
 
@@ -3528,604 +4163,617 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         await _discardAndClose();
       },
       child: Scaffold(
-      backgroundColor: sectionBg,
-      appBar: AppBar(
-        iconTheme: const IconThemeData(color: sectionText),
         backgroundColor: sectionBg,
-        elevation: 0,
-        title: Text(
-          _invoiceNumber,
-          style: const TextStyle(
-            color: sectionText,
-            fontWeight: FontWeight.w600,
-            fontSize: 18,
+        appBar: AppBar(
+          iconTheme: const IconThemeData(color: sectionText),
+          backgroundColor: sectionBg,
+          elevation: 0,
+          title: Text(
+            _invoiceNumber,
+            style: const TextStyle(
+              color: sectionText,
+              fontWeight: FontWeight.w600,
+              fontSize: 18,
+            ),
           ),
+          actions: [
+            if (!_isPaidEdit)
+              IconButton(
+                tooltip: 'Scan QR into this bill',
+                onPressed: _saving || _removingLine ? null : _openScanner,
+                icon: const Icon(Icons.qr_code_scanner, color: sectionAccent),
+              ),
+          ],
         ),
-        actions: [
-          if (!_isPaidEdit)
-            IconButton(
-              tooltip: 'Scan QR into this bill',
-              onPressed: _saving || _removingLine ? null : _openScanner,
-              icon: const Icon(Icons.qr_code_scanner, color: sectionAccent),
-            ),
-        ],
-      ),
-      body: ResponsiveBody(
-      child: ListView(
-        padding: SystemSafe.listPadding(context, extraBottom: 110),
-        children: [
-          Row(
+        body: ResponsiveBody(
+          child: ListView(
+            padding: SystemSafe.listPadding(context, extraBottom: 110),
             children: [
-              _StatusChip(
-                label: 'Draft',
-                selected: (widget.editInvoice?.sectionKey ?? 'draft') == 'draft',
+              Row(
+                children: [
+                  _StatusChip(
+                    label: 'Draft',
+                    selected: (widget.editInvoice?.sectionKey ?? 'draft') == 'draft',
+                  ),
+                  const SizedBox(width: 8),
+                  _StatusChip(
+                    label: 'Open',
+                    selected: widget.editInvoice?.sectionKey == 'open',
+                  ),
+                  const SizedBox(width: 8),
+                  _StatusChip(
+                    label: 'Paid',
+                    selected: _isPaidEdit,
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
-              _StatusChip(
-                label: 'Open',
-                selected: widget.editInvoice?.sectionKey == 'open',
-              ),
-              const SizedBox(width: 8),
-              _StatusChip(
-                label: 'Paid',
-                selected: _isPaidEdit,
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          const Center(
-            child: Text(
-              'CASH/CREDIT TAX INVOICE',
-              style: TextStyle(
-                color: Color(0xFFE53935),
-                fontWeight: FontWeight.w800,
-                fontSize: 17,
-                letterSpacing: 0.3,
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
+              const SizedBox(height: 14),
+              const Center(
                 child: Text(
-                  _invoiceNumber,
-                  style: const TextStyle(
+                  'CASH/CREDIT TAX INVOICE',
+                  style: TextStyle(
                     color: Color(0xFFE53935),
                     fontWeight: FontWeight.w800,
-                    fontSize: 18,
+                    fontSize: 17,
+                    letterSpacing: 0.3,
                   ),
                 ),
               ),
-              Text(
-                _invoiceDateDisplay,
-                style: const TextStyle(color: sectionTextMuted, fontSize: 15),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _invoiceNumber,
+                      style: const TextStyle(
+                        color: Color(0xFFE53935),
+                        fontWeight: FontWeight.w800,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    _invoiceDateDisplay,
+                    style: const TextStyle(color: sectionTextMuted, fontSize: 15),
+                  ),
+                ],
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _Card(
-                  child: Column(
-                    children: [
-                      _PickerField(
-                        label: 'Customer',
-                        value: _customer?.name,
-                        hint: 'Select or create customer',
-                        onTap: () async {
-                          final picked = await _pickOrCreateName(
-                            title: 'Customer (Pharmacy)',
-                            options: _customers,
-                            selected: _customer,
-                            onCreate: (name) async {
-                              await BillNameStore.rememberCustomer(name);
-                              // Create pharmacy.customer immediately so website
-                              // Customer many2one has a real id on save.
-                              try {
-                                final sid = await _odooSessionId();
-                                if (sid.isEmpty) return;
-                                final id =
-                                    await OdooRpcHelper.findOrCreatePharmacyCustomer(
-                                  sessionId: sid,
-                                  name: name,
-                                  address: _addressCtrl.text.trim(),
-                                  phone: _phoneCtrl.text.trim(),
-                                );
-                                if (id != null && mounted) {
-                                  final opt = _NamedOption(name: name, id: id);
-                                  setState(() {
-                                    _customers = [..._customers, opt]
-                                      ..sort(
-                                        (a, b) => a.name.toLowerCase().compareTo(
-                                              b.name.toLowerCase(),
-                                            ),
-                                      );
-                                  });
-                                }
-                              } catch (e) {
-                                if (kDebugMode) {
-                                  debugPrint('create pharmacy.customer: $e');
-                                }
+              const SizedBox(height: 12),
+              _Card(
+                child: Column(
+                  children: [
+                    _PickerField(
+                      label: 'Customer',
+                      value: _customer?.name,
+                      hint: 'Select or create customer',
+                      onTap: () async {
+                        final picked = await _pickOrCreateName(
+                          title: 'Customer (Pharmacy)',
+                          options: _customers,
+                          selected: _customer,
+                          onCreate: (name) async {
+                            await BillNameStore.rememberCustomer(name);
+                            // Create pharmacy.customer immediately so website
+                            // Customer many2one has a real id on save.
+                            try {
+                              final sid = await _odooSessionId();
+                              if (sid.isEmpty) return;
+                              final id =
+                              await OdooRpcHelper.findOrCreatePharmacyCustomer(
+                                sessionId: sid,
+                                name: name,
+                                address: _addressCtrl.text.trim(),
+                                phone: _phoneCtrl.text.trim(),
+                              );
+                              if (id != null && mounted) {
+                                final opt = _NamedOption(name: name, id: id);
+                                setState(() {
+                                  _customers = [..._customers, opt]
+                                    ..sort(
+                                          (a, b) => a.name.toLowerCase().compareTo(
+                                        b.name.toLowerCase(),
+                                      ),
+                                    );
+                                });
                               }
-                            },
-                          );
-                          if (picked == null || !mounted) return;
-                          if (picked.name.isEmpty) {
-                            setState(() {
-                              _customer = null;
-                              _addressCtrl.clear();
-                              _phoneCtrl.clear();
-                              _paymentMode = 'Cash';
-                            });
-                            return;
-                          }
-                          // Prefer newly created option that now has an id.
-                          var resolved = picked;
-                          if (picked.id == null) {
-                            final match = _customers.cast<_NamedOption?>().firstWhere(
-                                  (c) =>
-                                      c != null &&
-                                      c.name.toLowerCase() ==
-                                          picked.name.toLowerCase() &&
-                                      c.id != null,
-                                  orElse: () => null,
-                                );
-                            if (match != null) resolved = match;
-                          }
-                          await _applyCustomerSelection(resolved);
-                        },
-                      ),
-                      _TextField(
-                        label: 'Phone No',
-                        controller: _phoneCtrl,
-                        focusNode: _phoneFocus,
-                        keyboardType: TextInputType.phone,
-                        textInputAction: TextInputAction.next,
-                        onSubmitted: (_) =>
-                            FocusScope.of(context).requestFocus(_addressFocus),
-                      ),
-                      _TextField(
-                        label: 'Address',
-                        controller: _addressCtrl,
-                        focusNode: _addressFocus,
-                        maxLines: 2,
-                        textInputAction: TextInputAction.done,
-                        onSubmitted: (_) => FocusScope.of(context).unfocus(),
-                      ),
-                      _StaticDropdown(
-                        label: 'Payment Mode',
-                        value: _paymentMode,
-                        items: _paymentModes,
-                        onChanged: (v) {
-                          setState(() => _paymentMode = v);
-                          _dismissKeyboardAfterFrame();
-                        },
-                      ),
-                      _PickerField(
-                        label: _isCreditPayment
-                            ? 'Responsible Person *'
-                            : 'Responsible Person',
-                        value: _responsible?.name,
-                        hint: _isCreditPayment
-                            ? 'Required for Credit'
-                            : 'Optional',
-                        onTap: () async {
-                          final picked = await _pickOrCreateName(
-                            title: 'Responsible Person',
-                            options: _responsiblePeople,
-                            selected: _responsible,
-                            onCreate: (name) async {
-                              // Local-only until website create API exists.
-                            },
-                          );
-                          if (picked == null || !mounted) return;
+                            } catch (e) {
+                              if (kDebugMode) {
+                                debugPrint('create pharmacy.customer: $e');
+                              }
+                            }
+                          },
+                        );
+                        if (picked == null || !mounted) return;
+                        if (picked.name.isEmpty) {
                           setState(() {
-                            _responsible =
-                                picked.name.isEmpty ? null : picked;
-                            if (picked.name.isNotEmpty &&
-                                !_responsiblePeople.any((r) =>
-                                    r.name.toLowerCase() ==
-                                    picked.name.toLowerCase())) {
-                              _responsiblePeople = [
-                                ..._responsiblePeople,
-                                picked,
-                              ]..sort((a, b) => a.name
+                            _customer = null;
+                            _addressCtrl.clear();
+                            _phoneCtrl.clear();
+                            _paymentMode = 'Cash';
+                          });
+                          return;
+                        }
+                        // Prefer newly created option that now has an id.
+                        var resolved = picked;
+                        if (picked.id == null) {
+                          final match = _customers.cast<_NamedOption?>().firstWhere(
+                                (c) =>
+                            c != null &&
+                                c.name.toLowerCase() ==
+                                    picked.name.toLowerCase() &&
+                                c.id != null,
+                            orElse: () => null,
+                          );
+                          if (match != null) resolved = match;
+                        }
+                        await _applyCustomerSelection(resolved);
+                      },
+                    ),
+                    _TextField(
+                      label: 'Phone No',
+                      controller: _phoneCtrl,
+                      focusNode: _phoneFocus,
+                      keyboardType: TextInputType.phone,
+                      textInputAction: TextInputAction.next,
+                      onSubmitted: (_) =>
+                          FocusScope.of(context).requestFocus(_addressFocus),
+                    ),
+                    _TextField(
+                      label: 'Address',
+                      controller: _addressCtrl,
+                      focusNode: _addressFocus,
+                      maxLines: 2,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => FocusScope.of(context).unfocus(),
+                    ),
+                    _StaticDropdown(
+                      label: 'Payment Mode',
+                      value: _paymentMode,
+                      items: _paymentModes,
+                      onChanged: (v) {
+                        setState(() => _paymentMode = v);
+                        _dismissKeyboardAfterFrame();
+                      },
+                    ),
+                    _PickerField(
+                      label: _isCreditPayment
+                          ? 'Responsible Person *'
+                          : 'Responsible Person',
+                      value: _responsible?.name,
+                      hint: _isCreditPayment
+                          ? 'Required for Credit'
+                          : 'Optional',
+                      onTap: () async {
+                        final picked = await _pickOrCreateName(
+                          title: 'Responsible Person',
+                          options: _responsiblePeople,
+                          selected: _responsible,
+                          onCreate: (name) async {
+                            // Local-only until website create API exists.
+                          },
+                        );
+                        if (picked == null || !mounted) return;
+                        setState(() {
+                          _responsible =
+                          picked.name.isEmpty ? null : picked;
+                          if (picked.name.isNotEmpty &&
+                              !_responsiblePeople.any((r) =>
+                              r.name.toLowerCase() ==
+                                  picked.name.toLowerCase())) {
+                            _responsiblePeople = [
+                              ..._responsiblePeople,
+                              picked,
+                            ]..sort((a, b) => a.name
+                                .toLowerCase()
+                                .compareTo(b.name.toLowerCase()));
+                          }
+                        });
+                      },
+                    ),
+                    _PickerField(
+                      label: 'Doctor',
+                      value: _doctor?.name,
+                      hint: 'Select or create doctor',
+                      onTap: () async {
+                        final picked = await _pickOrCreateName(
+                          title: 'Doctor',
+                          options: _doctors,
+                          selected: _doctor,
+                          onCreate: BillNameStore.rememberDoctor,
+                        );
+                        if (picked == null || !mounted) return;
+                        setState(() {
+                          _doctor = picked.name.isEmpty ? null : picked;
+                          if (picked.name.isNotEmpty &&
+                              !_doctors.any((d) =>
+                              d.name.toLowerCase() ==
+                                  picked.name.toLowerCase())) {
+                            _doctors = [..._doctors, picked]
+                              ..sort((a, b) => a.name
                                   .toLowerCase()
                                   .compareTo(b.name.toLowerCase()));
-                            }
-                          });
-                        },
-                      ),
-                      _PickerField(
-                        label: 'Doctor',
-                        value: _doctor?.name,
-                        hint: 'Select or create doctor',
-                        onTap: () async {
-                          final picked = await _pickOrCreateName(
-                            title: 'Doctor',
-                            options: _doctors,
-                            selected: _doctor,
-                            onCreate: BillNameStore.rememberDoctor,
-                          );
-                          if (picked == null || !mounted) return;
-                          setState(() {
-                            _doctor = picked.name.isEmpty ? null : picked;
-                            if (picked.name.isNotEmpty &&
-                                !_doctors.any((d) =>
-                                    d.name.toLowerCase() ==
-                                    picked.name.toLowerCase())) {
-                              _doctors = [..._doctors, picked]
-                                ..sort((a, b) => a.name
-                                    .toLowerCase()
-                                    .compareTo(b.name.toLowerCase()));
-                            }
-                          });
-                        },
-                      ),
-                      _StaticDropdown(
-                        label: 'GST type',
-                        value: _gstType,
-                        items: _gstTypes,
-                        onChanged: (v) {
-                          setState(() => _gstType = v);
-                          _recalculate();
-                          _dismissKeyboardAfterFrame();
-                        },
-                      ),
-                    ],
-                  ),
+                          }
+                        });
+                      },
+                    ),
+                    _StaticDropdown(
+                      label: 'GST type',
+                      value: _gstType,
+                      items: _gstTypes,
+                      onChanged: (v) {
+                        setState(() => _gstType = v);
+                        _recalculate();
+                        _dismissKeyboardAfterFrame();
+                      },
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                _Card(
-                  title: 'Invoice Lines',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (_lines.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.only(bottom: 8),
-                          child: Text(
-                            'No lines yet. Add a line or scan a product.',
-                            style:
-                                TextStyle(color: sectionTextMuted, fontSize: 14),
+              ),
+              const SizedBox(height: 12),
+              _Card(
+                title: 'Invoice Lines',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (_lines.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          'No lines yet. Add a line or scan a product.',
+                          style:
+                          TextStyle(color: sectionTextMuted, fontSize: 14),
+                        ),
+                      ),
+                    ..._lines.asMap().entries.map((e) {
+                      final i = e.key;
+                      final line = e.value;
+                      return _LineCard(
+                        index: i,
+                        line: line,
+                        expanded: _editingLineIndex == i,
+                        errorFields: _editingLineIndex == i
+                            ? _lineRequiredErrors
+                            : const <String>{},
+                        products: List<String>.from(_products),
+                        potencies: List<String>.from(_potencies),
+                        companies: List<String>.from(_companies),
+                        batches: List<String>.from(_batches),
+                        packs: List<String>.from(_packs),
+                        groups: List<String>.from(_groups),
+                        hsns: List<String>.from(_hsns),
+                        racks: List<String>.from(_racks),
+                        productPool: _products,
+                        potencyPool: _potencies,
+                        companyPool: _companies,
+                        batchPool: _batches,
+                        packPool: _packs,
+                        groupPool: _groups,
+                        hsnPool: _hsns,
+                        rackPool: _racks,
+                        onPick: _pickLineValue,
+                        onPickProduct: () => _pickProductForLine(line),
+                        onPickPotency: () => _pickPotencyForLine(line),
+                        onPickCompany: () => line.fromStock
+                            ? _pickRelatedForLine(
+                          line,
+                          title: 'Company',
+                          readField: (s) => s.company,
+                          assignField: (v) => line.company = v,
+                          pool: _companies,
+                          poolKeys: _companyKeys,
+                          fallbackOptions: const [],
+                        )
+                            : _pickMasterNameForLine(
+                          line,
+                          title: 'Company',
+                          readValue: () => line.company,
+                          assign: (v) => line.company = v,
+                          pool: _companies,
+                          poolKeys: _companyKeys,
+                        ),
+                        onPickPack: () => line.fromStock
+                            ? _pickRelatedForLine(
+                          line,
+                          title: 'Pack',
+                          readField: (s) => s.packing,
+                          assignField: (v) => line.pack = v,
+                          pool: _packs,
+                          poolKeys: _packKeys,
+                          fallbackOptions: const [],
+                        )
+                            : _pickMasterNameForLine(
+                          line,
+                          title: 'Pack',
+                          readValue: () => line.pack,
+                          assign: (v) => line.pack = v,
+                          pool: _packs,
+                          poolKeys: _packKeys,
+                        ),
+                        onPickGroup: () => _pickRelatedForLine(
+                          line,
+                          title: 'Group',
+                          readField: (s) => s.group,
+                          assignField: (v) => line.group = v,
+                          pool: _groups,
+                          poolKeys: _groupKeys,
+                          fallbackOptions: line.fromStock
+                              ? const []
+                              : List<String>.from(_groups),
+                        ),
+                        onPickBatch: () => _pickRelatedForLine(
+                          line,
+                          title: 'BATCH',
+                          readField: (s) => s.batch,
+                          assignField: (v) => line.batch = v,
+                          pool: _batches,
+                          poolKeys: _batchKeys,
+                          fallbackOptions: line.fromStock
+                              ? const []
+                              : List<String>.from(_batches),
+                        ),
+                        onPickHsn: () => _pickRelatedForLine(
+                          line,
+                          title: 'HSN',
+                          readField: (s) => s.hsn,
+                          assignField: (v) => line.hsn = v ?? '',
+                          pool: _hsns,
+                          poolKeys: _hsnKeys,
+                          fallbackOptions: line.fromStock
+                              ? const []
+                              : List<String>.from(_hsns),
+                        ),
+                        onPickRack: () => _pickRelatedForLine(
+                          line,
+                          title: 'Rack',
+                          readField: (s) => s.rack,
+                          assignField: (v) => line.rack = v ?? '',
+                          pool: _racks,
+                          poolKeys: _rackKeys,
+                          fallbackOptions: line.fromStock
+                              ? const []
+                              : List<String>.from(_racks),
+                        ),
+                        onFromStockChanged: (v) => _setLineFromStock(line, v),
+                        onChanged: () {
+                          // Clear red highlights for fields the user just filled.
+                          final missing = line.missingRequiredFields.toSet();
+                          if (_lineRequiredErrors.isNotEmpty) {
+                            final next = _lineRequiredErrors
+                                .where(missing.contains)
+                                .toSet();
+                            if (next.length != _lineRequiredErrors.length) {
+                              _lineRequiredErrors = next;
+                            }
+                          }
+                          _recalcLinePrices(line);
+                          setState(() {});
+                          _recalculate();
+                        },
+                        onEdit: () => _editLine(i),
+                        onDone: () => _doneEditingLine(i),
+                        onDelete: _removingLine
+                            ? null
+                            : () {
+                          _removeLine(i);
+                        },
+                      );
+                    }),
+                    Align(
+                      alignment: Alignment.center,
+                      child: TextButton.icon(
+                        onPressed: _addLine,
+                        style: TextButton.styleFrom(
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
                           ),
                         ),
-                      ..._lines.asMap().entries.map((e) {
-                        final i = e.key;
-                        final line = e.value;
-                        return _LineCard(
-                          index: i,
-                          line: line,
-                          expanded: _editingLineIndex == i,
-                          errorFields: _editingLineIndex == i
-                              ? _lineRequiredErrors
-                              : const <String>{},
-                          products: List<String>.from(_products),
-                          potencies: List<String>.from(_potencies),
-                          companies: List<String>.from(_companies),
-                          batches: List<String>.from(_batches),
-                          packs: List<String>.from(_packs),
-                          groups: List<String>.from(_groups),
-                          hsns: List<String>.from(_hsns),
-                          racks: List<String>.from(_racks),
-                          productPool: _products,
-                          potencyPool: _potencies,
-                          companyPool: _companies,
-                          batchPool: _batches,
-                          packPool: _packs,
-                          groupPool: _groups,
-                          hsnPool: _hsns,
-                          rackPool: _racks,
-                          onPick: _pickLineValue,
-                          onPickProduct: () => _pickProductForLine(line),
-                          onPickPotency: () => _pickPotencyForLine(line),
-                          onPickCompany: () => line.fromStock
-                              ? _pickRelatedForLine(
-                                  line,
-                                  title: 'Company',
-                                  readField: (s) => s.company,
-                                  assignField: (v) => line.company = v,
-                                  pool: _companies,
-                                  poolKeys: _companyKeys,
-                                  fallbackOptions: const [],
-                                )
-                              : _pickMasterNameForLine(
-                                  line,
-                                  title: 'Company',
-                                  readValue: () => line.company,
-                                  assign: (v) => line.company = v,
-                                  pool: _companies,
-                                  poolKeys: _companyKeys,
-                                ),
-                          onPickPack: () => line.fromStock
-                              ? _pickRelatedForLine(
-                                  line,
-                                  title: 'Pack',
-                                  readField: (s) => s.packing,
-                                  assignField: (v) => line.pack = v,
-                                  pool: _packs,
-                                  poolKeys: _packKeys,
-                                  fallbackOptions: const [],
-                                )
-                              : _pickMasterNameForLine(
-                                  line,
-                                  title: 'Pack',
-                                  readValue: () => line.pack,
-                                  assign: (v) => line.pack = v,
-                                  pool: _packs,
-                                  poolKeys: _packKeys,
-                                ),
-                          onPickGroup: () => _pickRelatedForLine(
-                            line,
-                            title: 'Group',
-                            readField: (s) => s.group,
-                            assignField: (v) => line.group = v,
-                            pool: _groups,
-                            poolKeys: _groupKeys,
-                            fallbackOptions: line.fromStock
-                                ? const []
-                                : List<String>.from(_groups),
-                          ),
-                          onPickBatch: () => _pickRelatedForLine(
-                            line,
-                            title: 'BATCH',
-                            readField: (s) => s.batch,
-                            assignField: (v) => line.batch = v,
-                            pool: _batches,
-                            poolKeys: _batchKeys,
-                            fallbackOptions: line.fromStock
-                                ? const []
-                                : List<String>.from(_batches),
-                          ),
-                          onPickHsn: () => _pickRelatedForLine(
-                            line,
-                            title: 'HSN',
-                            readField: (s) => s.hsn,
-                            assignField: (v) => line.hsn = v ?? '',
-                            pool: _hsns,
-                            poolKeys: _hsnKeys,
-                            fallbackOptions: line.fromStock
-                                ? const []
-                                : List<String>.from(_hsns),
-                          ),
-                          onPickRack: () => _pickRelatedForLine(
-                            line,
-                            title: 'Rack',
-                            readField: (s) => s.rack,
-                            assignField: (v) => line.rack = v ?? '',
-                            pool: _racks,
-                            poolKeys: _rackKeys,
-                            fallbackOptions: line.fromStock
-                                ? const []
-                                : List<String>.from(_racks),
-                          ),
-                          onFromStockChanged: (v) => _setLineFromStock(line, v),
-                          onChanged: () {
-                            // Clear red highlights for fields the user just filled.
-                            final missing = line.missingRequiredFields.toSet();
-                            if (_lineRequiredErrors.isNotEmpty) {
-                              final next = _lineRequiredErrors
-                                  .where(missing.contains)
-                                  .toSet();
-                              if (next.length != _lineRequiredErrors.length) {
-                                _lineRequiredErrors = next;
-                              }
-                            }
-                            _recalcLinePrices(line);
-                            setState(() {});
-                            _recalculate();
-                          },
-                          onEdit: () => _editLine(i),
-                          onDone: () => _doneEditingLine(i),
-                          onDelete: _removingLine
-                              ? null
-                              : () {
-                                  _removeLine(i);
-                                },
-                        );
-                      }),
-                      TextButton.icon(
-                        onPressed: _addLine,
-                        icon: const Icon(Icons.add, color: const Color(0xFFE07A2F)),
+                        icon: const Icon(
+                          Icons.add,
+                          color: Color(0xFFE07A2F),
+                        ),
                         label: const Text(
                           'Add a line',
                           style: TextStyle(
-                            color: const Color(0xFFE07A2F),
+                            color: Color(0xFFE07A2F),
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _Card(
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: _StaticDropdown(
-                                label: 'Discount Category',
-                                value: _discountCategory?.name,
-                                items: _discountCategories
-                                    .map((e) => e.name)
-                                    .toList(),
-                                onChanged: (v) {
-                                  if (v == null || v.isEmpty) {
-                                    _applyDiscountCategory(null);
-                                    return;
-                                  }
-                                  _DiscountCategoryOption? match;
-                                  for (final c in _discountCategories) {
-                                    if (c.name.toLowerCase() ==
-                                        v.toLowerCase()) {
-                                      match = c;
-                                      break;
-                                    }
-                                  }
-                                  _applyDiscountCategory(match);
-                                },
-                              ),
-                            ),
-                            if (_discountCategory != null)
-                              IconButton(
-                                tooltip: 'Clear discount category',
-                                onPressed: () => _applyDiscountCategory(null),
-                                icon: const Icon(
-                                  Icons.delete_outline,
-                                  color: Colors.redAccent,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      _StaticDropdown(
-                        label: 'Discount Type',
-                        value: _discountType,
-                        items: _discountTypes,
-                        onChanged: (v) {
-                          setState(() => _discountType = v);
-                          _recalculate();
-                          _dismissKeyboardAfterFrame();
-                        },
-                      ),
-                      _TextField(
-                        label: (_discountType ?? 'Percentage')
-                                .toLowerCase()
-                                .contains('rupee')
-                            ? 'Discount Rate (₹)'
-                            : 'Discount Rate (%)',
-                        controller: _discountRateCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                      ),
-                      const _ReadRow('Billed By', 'Administrator'),
-                      _ReadRow(
-                        'Status',
-                        widget.editInvoice?.displayStatus ?? 'Draft',
-                      ),
-                      _TextField(
-                        label: 'Verified By',
-                        controller: _verifiedByCtrl,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _Card(
-                  child: Column(
-                    children: [
-                      _MoneyRow('Subtotal', _totals.subtotal),
-                      _MoneyRow('Discount Total', _totals.discountTotal),
-                      _MoneyRow('Tax', _totals.tax),
-                      _TextField(
-                        label: 'Expense',
-                        controller: _expenseTextCtrl,
-                      ),
-                      _TextField(
-                        label: 'Expense Amt',
-                        controller: _expenseCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                      ),
-                      _MoneyRow('Expense Amt', _totals.expenseAmt),
-                      _MoneyRow('Total', _totals.total, emphasize: true),
-                      _MoneyRow('Tax Amount', _totals.taxAmount),
-                      _MoneyRow('Balance', _totals.balance, emphasize: true),
-                      if (_customerOldBalance != null &&
-                          _customerOldBalance != 0)
-                        _MoneyRow('Old Balance', _customerOldBalance!),
-                      if (_customerAdvance != null && _customerAdvance != 0)
-                        _MoneyRow('Advance Amount', _customerAdvance!),
-                      if (_creditLimitWarningBanner != null) ...[
-                        const SizedBox(height: 10),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFF3E0),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: const Color(0xFFE07A2F).withValues(alpha: 0.45),
-                            ),
-                          ),
-                          child: Text(
-                            _creditLimitWarningBanner!,
-                            style: const TextStyle(
-                              color: Color(0xFF8A4B12),
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                              height: 1.35,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _Card(
-                  child: _TextField(
-                    label: 'Remarks',
-                    controller: _remarksCtrl,
-                    maxLines: 3,
-                  ),
-                ),
-              ],
-            ),
-            ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-            AppResponsive.of(context).pagePadding,
-            8,
-            AppResponsive.of(context).pagePadding,
-            SystemSafe.actionBarBottomPadding(context),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFFE07A2F),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  onPressed: _saving ? null : _saveBill,
-                  child: _saving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Text('Save'),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: sectionText,
-                    side: const BorderSide(color: sectionTextMuted),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  onPressed:
-                      _saving || _removingLine ? null : _discardAndClose,
-                  child: const Text('Close'),
+              const SizedBox(height: 12),
+              _Card(
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _StaticDropdown(
+                              label: 'Discount Category',
+                              value: _discountCategory?.name,
+                              items: _discountCategories
+                                  .map((e) => e.name)
+                                  .toList(),
+                              onChanged: (v) {
+                                if (v == null || v.isEmpty) {
+                                  _applyDiscountCategory(null);
+                                  return;
+                                }
+                                _DiscountCategoryOption? match;
+                                for (final c in _discountCategories) {
+                                  if (c.name.toLowerCase() ==
+                                      v.toLowerCase()) {
+                                    match = c;
+                                    break;
+                                  }
+                                }
+                                _applyDiscountCategory(match);
+                              },
+                            ),
+                          ),
+                          if (_discountCategory != null)
+                            IconButton(
+                              tooltip: 'Clear discount category',
+                              onPressed: () => _applyDiscountCategory(null),
+                              icon: const Icon(
+                                Icons.delete_outline,
+                                color: Colors.redAccent,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    _StaticDropdown(
+                      label: 'Discount Type',
+                      value: _discountType,
+                      items: _discountTypes,
+                      onChanged: (v) {
+                        setState(() => _discountType = v);
+                        _recalculate();
+                        _dismissKeyboardAfterFrame();
+                      },
+                    ),
+                    _TextField(
+                      label: (_discountType ?? 'Percentage')
+                          .toLowerCase()
+                          .contains('rupee')
+                          ? 'Discount Rate (₹)'
+                          : 'Discount Rate (%)',
+                      controller: _discountRateCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                    ),
+                    const _ReadRow('Billed By', 'Administrator'),
+                    _ReadRow(
+                      'Status',
+                      widget.editInvoice?.displayStatus ?? 'Draft',
+                    ),
+                    _TextField(
+                      label: 'Verified By',
+                      controller: _verifiedByCtrl,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              _Card(
+                child: Column(
+                  children: [
+                    _MoneyRow('Subtotal', _totals.subtotal),
+                    _MoneyRow('Discount Total', _totals.discountTotal),
+                    _MoneyRow('Tax', _totals.tax),
+                    _TextField(
+                      label: 'Expense',
+                      controller: _expenseTextCtrl,
+                    ),
+                    _TextField(
+                      label: 'Expense Amt',
+                      controller: _expenseCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                    ),
+                    _MoneyRow('Expense Amt', _totals.expenseAmt),
+                    _MoneyRow('Total', _totals.total, emphasize: true),
+                    _MoneyRow('Tax Amount', _totals.taxAmount),
+                    _MoneyRow('Balance', _totals.balance, emphasize: true),
+                    if (_customerOldBalance != null &&
+                        _customerOldBalance != 0)
+                      _MoneyRow('Old Balance', _customerOldBalance!),
+                    if (_customerAdvance != null && _customerAdvance != 0)
+                      _MoneyRow('Advance Amount', _customerAdvance!),
+                    if (_creditLimitWarningBanner != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF3E0),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: const Color(0xFFE07A2F).withValues(alpha: 0.45),
+                          ),
+                        ),
+                        child: Text(
+                          _creditLimitWarningBanner!,
+                          style: const TextStyle(
+                            color: Color(0xFF8A4B12),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              _Card(
+                child: _TextField(
+                  label: 'Remarks',
+                  controller: _remarksCtrl,
+                  maxLines: 3,
                 ),
               ),
             ],
           ),
         ),
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              AppResponsive.of(context).pagePadding,
+              8,
+              AppResponsive.of(context).pagePadding,
+              SystemSafe.actionBarBottomPadding(context),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFE07A2F),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    onPressed: _saving ? null : _saveBill,
+                    child: _saving
+                        ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                        : const Text('Save'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: sectionText,
+                      side: const BorderSide(color: sectionTextMuted),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    onPressed:
+                    _saving || _removingLine ? null : _discardAndClose,
+                    child: const Text('Close'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-    ),
     );
   }
 }
@@ -4189,11 +4837,11 @@ class _LineCard extends StatefulWidget {
   final List<String> hsnPool;
   final List<String> rackPool;
   final Future<String?> Function({
-    required String title,
-    required List<String> options,
-    String? selected,
-    List<String>? rememberInto,
-    Set<String>? rememberKeys,
+  required String title,
+  required List<String> options,
+  String? selected,
+  List<String>? rememberInto,
+  Set<String>? rememberKeys,
   }) onPick;
   final Future<void> Function() onPickProduct;
   final Future<void> Function() onPickPotency;
@@ -4394,8 +5042,8 @@ class _LineCardState extends State<_LineCard> {
           right: _CompactField('Company', line.company),
         ),
         _CompactLineRow(
-          left: _CompactField('BATCH', line.batch),
-          right: _CompactField('Pack', line.pack),
+          left: _CompactField('Pack', line.pack),
+          right: _CompactField('BATCH', line.batch),
         ),
         _CompactLineRow(
           left: _CompactField('MFD', line.manuf),
@@ -4403,27 +5051,36 @@ class _LineCardState extends State<_LineCard> {
         ),
         _CompactLineRow(
           left: _CompactField('Group', line.group),
-          right: _CompactField('Qty', fmtNum(qty > 0 ? qty : null)),
+          right: const _CompactField('', null),
+        ),
+        if (line.fromStock && (line.availableStock ?? '').trim().isNotEmpty)
+          _CompactLineRow(
+            left: _CompactField('Available Stock', line.availableStock),
+            right: const _CompactField('', null),
+          ),
+        _CompactLineRow(
+          left: _CompactField('Qty', fmtNum(qty > 0 ? qty : null)),
+          right: _CompactField('Mrp', fmtMoney(mrp > 0 ? mrp : null)),
         ),
         _CompactLineRow(
-          left: _CompactField('Mrp', fmtMoney(mrp > 0 ? mrp : null)),
-          right: _CompactField('Dis', fmtNum(disc > 0 ? disc : null)),
+          left: _CompactField('Dis', fmtNum(disc > 0 ? disc : null)),
+          right: _CompactField('Unit TP', fmtMoney(unitTp > 0 ? unitTp : null)),
         ),
         _CompactLineRow(
-          left: _CompactField('Unit TP', fmtMoney(unitTp > 0 ? unitTp : null)),
-          right: _CompactField('Unit P', fmtMoney(unitP > 0 ? unitP : null)),
-        ),
-        _CompactLineRow(
-          left: _CompactField('Tax', fmtNum(taxPct > 0 ? taxPct : null)),
+          left: _CompactField('Unit P', fmtMoney(unitP > 0 ? unitP : null)),
           right: _CompactField(
             'Tax Amt',
             taxAmt > 0 ? taxAmt.toStringAsFixed(2) : null,
           ),
         ),
         _CompactLineRow(
+          left: _CompactField('Tax', fmtNum(taxPct > 0 ? taxPct : null)),
+          right: _CompactField('Hsn', line.hsn.isEmpty ? null : line.hsn),
+        ),
+        _CompactLineRow(
           left: _CompactField('Total', fmtMoney(total > 0 ? total : null),
               emphasize: true),
-          right: _CompactField('Hsn', line.hsn.isEmpty ? null : line.hsn),
+          right: const _CompactField('', null),
         ),
       ],
     );
@@ -4516,6 +5173,14 @@ class _LineCardState extends State<_LineCard> {
           },
         ),
         _LineDropdownRow(
+          label: 'Pack',
+          value: line.pack,
+          onTap: () async {
+            await widget.onPickPack();
+            await afterPick();
+          },
+        ),
+        _LineDropdownRow(
           label: 'BATCH',
           value: line.batch,
           onTap: () async {
@@ -4554,14 +5219,6 @@ class _LineCardState extends State<_LineCard> {
           errorText: _expiryError,
         ),
         _LineDropdownRow(
-          label: 'Pack',
-          value: line.pack,
-          onTap: () async {
-            await widget.onPickPack();
-            await afterPick();
-          },
-        ),
-        _LineDropdownRow(
           label: 'Group *',
           value: line.group,
           highlightError: err('Group'),
@@ -4570,6 +5227,11 @@ class _LineCardState extends State<_LineCard> {
             await afterPick();
           },
         ),
+        if (line.fromStock)
+          _LineReadOnlyRow(
+            label: 'Available Stock',
+            value: line.availableStock,
+          ),
         _LineTextRow(
           label: 'Qty *',
           controller: _qtyCtrl,
@@ -4604,6 +5266,8 @@ class _LineCardState extends State<_LineCard> {
           textInputAction: TextInputAction.next,
           onChanged: (v) {
             line.discount = v;
+            line.discountAutoFromCategory = false;
+            line.discountUserEdited = true;
             widget.onChanged();
           },
           onNext: () => _moveTo(_taxFocus),
@@ -4751,10 +5415,10 @@ class _LineDropdownRow extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                 decoration: highlightError
                     ? BoxDecoration(
-                        color: Colors.red.withValues(alpha: 0.22),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: Colors.redAccent),
-                      )
+                  color: Colors.red.withValues(alpha: 0.22),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.redAccent),
+                )
                     : null,
                 child: Text(
                   label,
@@ -4764,7 +5428,7 @@ class _LineDropdownRow extends StatelessWidget {
                         : sectionTextMuted,
                     fontSize: 14,
                     fontWeight:
-                        highlightError ? FontWeight.w700 : FontWeight.w400,
+                    highlightError ? FontWeight.w700 : FontWeight.w400,
                   ),
                 ),
               ),
@@ -4772,7 +5436,7 @@ class _LineDropdownRow extends StatelessWidget {
             Expanded(
               child: Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                 decoration: BoxDecoration(
                   color: sectionCard,
                   borderRadius: BorderRadius.circular(8),
@@ -4835,7 +5499,7 @@ class _LineReadOnlyRow extends StatelessWidget {
           Expanded(
             child: Container(
               padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
               decoration: BoxDecoration(
                 color: sectionCard,
                 borderRadius: BorderRadius.circular(8),
@@ -4901,10 +5565,10 @@ class _LineTextRow extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                   decoration: showError
                       ? BoxDecoration(
-                          color: Colors.red.withValues(alpha: 0.22),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: Colors.redAccent),
-                        )
+                    color: Colors.red.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.redAccent),
+                  )
                       : null,
                   child: Text(
                     label,
@@ -5101,7 +5765,7 @@ class _TextField extends StatelessWidget {
               filled: true,
               fillColor: sectionCard,
               contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
               ),
@@ -5151,11 +5815,11 @@ class _PickerField extends StatelessWidget {
               child: Container(
                 width: double.infinity,
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(10),
                   border:
-                      Border.all(color: sectionCardBorder),
+                  Border.all(color: sectionCardBorder),
                 ),
                 child: Row(
                   children: [
@@ -5199,7 +5863,7 @@ class _StaticDropdown extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final safeValue =
-        value != null && items.contains(value) ? value : null;
+    value != null && items.contains(value) ? value : null;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Column(

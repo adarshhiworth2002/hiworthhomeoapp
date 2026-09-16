@@ -6,7 +6,7 @@ import '../../models/payment_book_model.dart';
 class PaymentBookStyleColors {
   const PaymentBookStyleColors._();
 
-  static const Color billRed = Color(0xFFD32F2F);
+  static const Color billRed = Color(0xFF1565C0);
 
   static Color of(PaymentBookRowStyle style) {
     switch (style) {
@@ -16,9 +16,9 @@ class PaymentBookStyleColors {
         return billRed;
       case PaymentBookRowStyle.creditOpen:
         // Credit unpaid text — green (was black).
-        return const Color(0xFF2E7D32);
+        return const Color(0xFFD32F2F);
       case PaymentBookRowStyle.creditPaid:
-        return const Color(0xFF1565C0);
+        return const Color(0xFF2E7D32);
       case PaymentBookRowStyle.draft:
         return const Color(0xFF6B7280);
       case PaymentBookRowStyle.cancel:
@@ -54,8 +54,8 @@ class PaymentBookColorLegend extends StatelessWidget {
 
   static const _items = <(PaymentBookRowStyle, String)>[
     (PaymentBookRowStyle.walkIn, 'Walk-in / Cash'),
-    (PaymentBookRowStyle.creditOpen, 'Credit unpaid'),
-    (PaymentBookRowStyle.creditPaid, 'Credit paid'),
+    (PaymentBookRowStyle.creditOpen, 'Credit Unpaid'),
+    (PaymentBookRowStyle.creditPaid, 'Credit Paid'),
     (PaymentBookRowStyle.draft, 'Draft'),
     (PaymentBookRowStyle.cancel, 'Cancel'),
   ];
@@ -97,9 +97,10 @@ class PaymentBookColorLegend extends StatelessWidget {
 
 /// Draft / Open / Paid / Cancel pill (top-right of list cards).
 class InvoiceBillStatusBadge extends StatelessWidget {
-  const InvoiceBillStatusBadge({super.key, required this.status});
+  const InvoiceBillStatusBadge({super.key, required this.status, this.colorOverride});
 
   final String status;
+  final Color? colorOverride;
 
   static Color colorFor(String status) {
     switch (status.toLowerCase().trim()) {
@@ -125,7 +126,7 @@ class InvoiceBillStatusBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: colorFor(label),
+        color: colorOverride ?? colorFor(label),
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
@@ -165,6 +166,19 @@ class InvoiceStatusFilterChips extends StatelessWidget {
     ('cancel', 'Cancel'),
   ];
 
+  static const _yellowHint = Color(0xFFF9A825);
+
+  static String? _subtitleFor(String key) {
+    switch (key) {
+      case 'draft':
+        return '(Incomplete)';
+      case 'open':
+        return '(Credit Pending)';
+      default:
+        return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -176,13 +190,19 @@ class InvoiceStatusFilterChips extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: FilterChip(
-                  label: Text(labelOverrides[tab.$1] ?? tab.$2),
+                  label: _ChipLabel(
+                    title: labelOverrides[tab.$1] ?? tab.$2,
+                    subtitle: _subtitleFor(tab.$1),
+                    selected: selected == tab.$1,
+                  ),
                   selected: selected == tab.$1,
                   showCheckmark: true,
                   checkmarkColor: const Color(0xFFE07A2F),
                   onSelected: (_) => onSelected(tab.$1),
                   selectedColor: Colors.white,
                   backgroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 6),
                   side: BorderSide(
                     color: selected == tab.$1
                         ? const Color(0xFFE07A2F)
@@ -198,6 +218,50 @@ class InvoiceStatusFilterChips extends StatelessWidget {
               ),
         ],
       ),
+    );
+  }
+}
+
+class _ChipLabel extends StatelessWidget {
+  const _ChipLabel({
+    required this.title,
+    required this.selected,
+    this.subtitle,
+  });
+
+  final String title;
+  final String? subtitle;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final titleColor =
+        selected ? const Color(0xFFE07A2F) : Colors.black;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            color: titleColor,
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+            height: 1.1,
+          ),
+        ),
+        if (subtitle != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            subtitle!,
+            style: const TextStyle(
+              color: InvoiceStatusFilterChips._yellowHint,
+              fontWeight: FontWeight.w700,
+              fontSize: 10,
+              height: 1.05,
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

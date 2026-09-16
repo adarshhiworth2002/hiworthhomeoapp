@@ -18,14 +18,19 @@ class InvoiceCalcHelper {
     var lineDiscTotal = 0.0;
     var grossSubtotal = 0.0;
     final nets = <({double net, double taxPct})>[];
+    final type = (discountType ?? 'Percentage').toLowerCase();
+    final hasBillDiscount = discountRate > 0;
 
     for (final line in lines) {
       final qty = line.qty;
       if (qty <= 0 || line.mrp <= 0) continue;
 
       final gross = qty * line.mrp;
-      final lineDisc =
-          line.discountPercent > 0 ? gross * line.discountPercent / 100.0 : 0.0;
+      // A bill-level discount replaces the server's copied line discount.
+      // Applying both gives 75 for a Rs 100 item at 50%, instead of Rs 50.
+      final lineDisc = !hasBillDiscount && line.discountPercent > 0
+          ? gross * line.discountPercent / 100.0
+          : 0.0;
       final net = (gross - lineDisc).clamp(0.0, double.infinity);
       grossSubtotal += gross;
       lineDiscTotal += lineDisc;
@@ -33,7 +38,6 @@ class InvoiceCalcHelper {
     }
 
     final linesSubtotal = nets.fold<double>(0, (s, e) => s + e.net);
-    final type = (discountType ?? 'Percentage').toLowerCase();
     var billDisc = 0.0;
     if (discountRate > 0 && linesSubtotal > 0) {
       if (type.contains('amount') ||

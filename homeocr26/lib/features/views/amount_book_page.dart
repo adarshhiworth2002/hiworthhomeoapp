@@ -57,7 +57,7 @@ class _AmountBookPageState extends State<AmountBookPage>
         await _viewModel.prefetchBalances(context, refreshStale: true);
       },
       // Head + stale balance refresh so website advance/old edits appear.
-      interval: const Duration(seconds: 12),
+      interval: const Duration(seconds: 8),
       immediate: false,
     );
   }
@@ -869,71 +869,83 @@ class _CustomerCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: sectionCardBorder),
         ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    summary.customerName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 16,
-                      color: sectionText,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${summary.entryCount} entr${summary.entryCount == 1 ? 'y' : 'ies'}',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: sectionTextMuted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Keep ~55% for the name (ellipsis) so balance always has room.
+            final nameMax = (constraints.maxWidth * 0.55).clamp(80.0, 420.0);
+            return Row(
               children: [
-                Text(
-                  'Balance',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: sectionTextMuted,
-                    fontWeight: FontWeight.w600,
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: nameMax),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        summary.customerName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                          color: sectionText,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${summary.entryCount} entr${summary.entryCount == 1 ? 'y' : 'ies'}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: sectionTextMuted,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: cashYouGaveSoft,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    AmountBookViewModel.formatAmount(summary.lastBalance),
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
-                      color: cashYouGave,
+                const Spacer(),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      'Balance',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: sectionTextMuted,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: cashYouGaveSoft,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        AmountBookViewModel.formatAmount(summary.lastBalance),
+                        maxLines: 1,
+                        softWrap: false,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          color: cashYouGave,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                Icon(
+                  Icons.chevron_right,
+                  color: sectionTextMuted,
+                  size: 20,
                 ),
               ],
-            ),
-            Icon(
-              Icons.chevron_right,
-              color: sectionTextMuted,
-              size: 20,
-            ),
-          ],
+            );
+          },
         ),
       ),
     );

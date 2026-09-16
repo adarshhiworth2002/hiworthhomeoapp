@@ -9,6 +9,7 @@ import 'api_request_helper.dart';
 import 'calendar_date.dart';
 import 'endPoints.dart';
 import 'invoice_series_classifier.dart';
+import 'payment_history_service.dart';
 
 class PaymentBookService {
   const PaymentBookService._();
@@ -17,7 +18,7 @@ class PaymentBookService {
   static DateTime? _cachedAt;
   static String? _cacheKey;
   static Future<PaymentBookModel>? _inFlight;
-  static const _cacheTtl = Duration(seconds: 60);
+  static const _cacheTtl = Duration(seconds: 8);
 
   /// `get_payment_book` crashes on string `date_from`/`date_to`
   /// (`'str' object has no attribute 'strftime'`).
@@ -119,12 +120,15 @@ class PaymentBookService {
     }
 
     // Client-side filters (API may ignore customer name; history fallback
-    // also needs type/mode filtering).
-    final filtered = _applyLocalFilters(
-      book,
-      customer: customer,
-      customerType: customerType,
-      paymentMode: paymentMode,
+    // also needs type/mode filtering). Always re-apply trusted Dis% totals
+    // after filters so parallel home refreshes cannot flash MRP amounts.
+    final filtered = _applyTrustedTotals(
+      _applyLocalFilters(
+        book,
+        customer: customer,
+        customerType: customerType,
+        paymentMode: paymentMode,
+      ),
     );
 
     if (kDebugMode) {
@@ -182,7 +186,7 @@ class PaymentBookService {
       return _cache ?? const PaymentBookModel();
     }
 
-    return PaymentBookModel.fromResponse(map);
+    return _applyTrustedTotals(PaymentBookModel.fromResponse(map));
   }
 
   /// Fallback when payment-book date params are broken on the server.
@@ -223,7 +227,9 @@ class PaymentBookService {
       return const PaymentBookModel();
     }
 
-    final invoices = InvoiceSummaryModel.parseList(map);
+    final invoices = InvoiceSummaryModel.parseList(map)
+        .map(PaymentHistoryService.withTrustedTotals)
+        .toList(growable: false);
     // Keep only rows inside the requested date window (API may return extra).
     final ranged = invoices.where((inv) {
       final day = CalendarDate.parse(inv.invoiceDate);
@@ -259,6 +265,37 @@ class PaymentBookService {
       totalBalance: bal,
       totalAmount: tot,
       invoices: ranged,
+    );
+  }
+
+  static PaymentBookModel _applyTrustedTotals(PaymentBookModel book) {
+    final list = book.invoices
+        .map(PaymentHistoryService.withTrustedTotals)
+        .toList(growable: false);
+    if (identical(list, book.invoices)) return book;
+    var changed = false;
+    for (var i = 0; i < list.length; i++) {
+      if (!identical(list[i], book.invoices[i])) {
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) return book;
+    var bal = 0.0;
+    var tot = 0.0;
+    for (final inv in list) {
+      bal += inv.balance ?? 0;
+      tot += inv.total ?? 0;
+    }
+    return PaymentBookModel(
+      cardName: book.cardName,
+      dateFrom: book.dateFrom,
+      dateTo: book.dateTo,
+      homeCount: book.homeCount,
+      totalCount: list.length,
+      totalBalance: bal,
+      totalAmount: tot,
+      invoices: list,
     );
   }
 
@@ -380,6 +417,40 @@ class PaymentBookService {
       totalBalance: balance,
       totalAmount: amount,
       invoices: kept,
+    );
+    _cachedAt = DateTime.now();
+  }
+
+  /// Patch / insert one invoice so the home Payment Book card updates instantly.
+  static void upsertInvoice(InvoiceSummaryModel invoice) {
+    final id = invoice.id;
+    if (id == null || id <= 0) return;
+    final patched = PaymentHistoryService.withTrustedTotals(invoice);
+    final book = _cache;
+    final list = List<InvoiceSummaryModel>.from(book?.invoices ?? const []);
+    final idx = list.indexWhere((i) => i.id == id);
+    if (idx >= 0) {
+      list[idx] = PaymentHistoryService.withTrustedTotals(
+        list[idx].mergedWith(patched),
+      );
+    } else {
+      list.insert(0, patched);
+    }
+    var balance = 0.0;
+    var amount = 0.0;
+    for (final inv in list) {
+      balance += inv.balance ?? 0;
+      amount += inv.total ?? 0;
+    }
+    _cache = PaymentBookModel(
+      cardName: book?.cardName ?? 'Payment Book',
+      dateFrom: book?.dateFrom,
+      dateTo: book?.dateTo,
+      homeCount: list.length,
+      totalCount: list.length,
+      totalBalance: balance,
+      totalAmount: amount,
+      invoices: list,
     );
     _cachedAt = DateTime.now();
   }

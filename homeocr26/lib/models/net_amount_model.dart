@@ -155,6 +155,7 @@ class NetAmountRow {
     this.invoicePaidFlag = false,
     this.number,
     this.invoiceDate,
+    this.createdAt,
     this.expiry,
     this.expiryMedicineBill = false,
     this.verifyStatus,
@@ -185,6 +186,8 @@ class NetAmountRow {
   final bool invoicePaidFlag;
   final String? number;
   final String? invoiceDate;
+  /// Raw Odoo `create_date` — used only for cash-book timestamps.
+  final String? createdAt;
   final String? expiry;
   final bool expiryMedicineBill;
   final String? verifyStatus;
@@ -253,6 +256,7 @@ class NetAmountRow {
       invoiceNumber: number,
       customer: asSupplier ? supplier : (customer ?? supplier),
       invoiceDate: invoiceDate,
+      createdAt: createdAt,
       expiryMedicineBill: expiryMedicineBill,
       verifyStatus: verifyStatus,
       billedBy: billedBy,
@@ -282,6 +286,7 @@ class NetAmountRow {
           ? invoice.invoiceNumber
           : invoice.displayNumber,
       invoiceDate: invoice.invoiceDate,
+      createdAt: invoice.createdAt,
       billedBy: invoice.billedBy ?? invoice.responsiblePerson,
       taxAmount: invoice.taxAmount,
       balance: invoice.balance,
@@ -430,6 +435,7 @@ class NetAmountRow {
       invoicePaidFlag: detail.invoicePaidFlag || invoicePaidFlag,
       number: detail.number ?? number,
       invoiceDate: detail.invoiceDate ?? invoiceDate,
+      createdAt: detail.createdAt ?? createdAt,
       expiry: detail.expiry ?? expiry,
       expiryMedicineBill:
           detail.expiryMedicineBill || expiryMedicineBill,
@@ -462,6 +468,7 @@ class NetAmountRow {
     bool? invoicePaidFlag,
     String? number,
     String? invoiceDate,
+    String? createdAt,
     String? expiry,
     bool? expiryMedicineBill,
     String? verifyStatus,
@@ -491,6 +498,7 @@ class NetAmountRow {
       invoicePaidFlag: invoicePaidFlag ?? this.invoicePaidFlag,
       number: number ?? this.number,
       invoiceDate: invoiceDate ?? this.invoiceDate,
+      createdAt: createdAt ?? this.createdAt,
       expiry: expiry ?? this.expiry,
       expiryMedicineBill: expiryMedicineBill ?? this.expiryMedicineBill,
       verifyStatus: verifyStatus ?? this.verifyStatus,
@@ -642,6 +650,11 @@ class NetAmountRow {
         // Prefer accounting `date` only after real invoice dates.
         // Never use create_date here — it is UTC and shifts the calendar day.
         'date',
+      ]),
+      createdAt: _str(flat, const [
+        'create_date',
+        'created_at',
+        'create_datetime',
       ]),
       expiry: _str(flat, const [
         'expiry',

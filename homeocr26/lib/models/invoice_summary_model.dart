@@ -27,9 +27,11 @@ class InvoiceLineModel {
     this.total,
     this.hsn,
     this.rack,
+    this.stockEntryId,
   });
 
   final int? id;
+  final int? stockEntryId;
   final String? productName;
   final String? potency;
   final String? company;
@@ -135,8 +137,16 @@ class InvoiceLineModel {
       orderedQty: _num(json, const ['ordered_qty', 'ordered_quantity']),
       freeQty: _num(json, const ['free_qty', 'free_quantity']),
       mrp: _num(json, const ['mrp']),
-      discount: _num(json, const ['discount', 'dis', 'discount_percent']),
-      dis2Percent: _num(json, const ['dis2_percent', 'dis2', 'discount2']),
+      discount: _lineDiscountPercent(json),
+      dis2Percent: _num(json, const [
+        'dis2_percent',
+        'dis2',
+        'discount2',
+        'dis',
+        'dis_percent',
+        'discount_percent',
+        'discount',
+      ]),
       unit: _str(json, const [
         'unit',
         'uom',
@@ -171,6 +181,12 @@ class InvoiceLineModel {
         'rack_no',
         'location',
       ]),
+      stockEntryId: json['stock_entry_id'] is int
+          ? json['stock_entry_id'] as int
+          : json['stock_entry_id'] is List &&
+                  (json['stock_entry_id'] as List).isNotEmpty
+              ? int.tryParse('${(json['stock_entry_id'] as List).first}')
+              : int.tryParse('${json['stock_entry_id']}'),
     );
   }
 
@@ -178,6 +194,7 @@ class InvoiceLineModel {
     for (final key in keys) {
       final value = json[key];
       if (value == null || value == false) continue;
+      if (value is num) continue;
       if (value is List && value.length >= 2) {
         final name = value[1]?.toString().trim() ?? '';
         if (name.isNotEmpty && name != 'false') return name;
@@ -198,6 +215,34 @@ class InvoiceLineModel {
     }
     return null;
   }
+
+  /// Prefer pharmacy Dis% aliases over standard `discount` (often 0 when Unit TP
+  /// already includes the cut).
+  static double? _lineDiscountPercent(Map json) {
+    const keys = [
+      'dis',
+      'dis_percent',
+      'discount_percent',
+      'dis2_percent',
+      'dis2',
+      'discount2',
+      'discount',
+    ];
+    double? first;
+    for (final key in keys) {
+      final value = json[key];
+      double? parsed;
+      if (value is num) {
+        parsed = value.toDouble();
+      } else {
+        parsed = double.tryParse(value?.toString() ?? '');
+      }
+      if (parsed == null) continue;
+      first ??= parsed;
+      if (parsed > 0) return parsed;
+    }
+    return first;
+  }
 }
 
 class InvoiceSummaryModel {
@@ -211,6 +256,7 @@ class InvoiceSummaryModel {
     this.responsiblePerson,
     this.doctor,
     this.invoiceDate,
+    this.createdAt,
     this.expiryMedicineBill = false,
     this.verifyStatus,
     this.billedBy,
@@ -257,6 +303,8 @@ class InvoiceSummaryModel {
   final String? responsiblePerson;
   final String? doctor;
   final String? invoiceDate;
+  /// Raw Odoo `create_date` (datetime with time). Not used as the bill date.
+  final String? createdAt;
   final bool expiryMedicineBill;
   final String? verifyStatus;
   final String? billedBy;
@@ -325,7 +373,9 @@ class InvoiceSummaryModel {
     return null;
   }
 
-  /// Website footer totals — prefer API values; recompute from lines when needed.
+  /// Website footer totals — prefer line-based calc when lines exist so Dis%
+  /// and expense match what the user entered (Odoo amount_total often ignores
+  /// pharmacy line discount / expense mapping).
   InvoiceCalcResult websiteTotals() {
     final expense = expenseAmt ?? 0;
     if (lines.isNotEmpty) {
@@ -335,7 +385,7 @@ class InvoiceSummaryModel {
               (line) => InvoiceCalcLine(
                 qty: line.qty ?? 0,
                 mrp: line.mrp ?? line.total ?? 0,
-                discountPercent: line.discount ?? 0,
+                discountPercent: line.discount ?? line.dis2Percent ?? 0,
                 unitP: line.unitPrice ?? 0,
                 taxPercent: line.tax ?? 0,
               ),
@@ -347,23 +397,16 @@ class InvoiceSummaryModel {
         expenseAmt: expense,
       );
 
-      final lineSubtotal = lines.fold<double>(
-        0,
-        (sum, line) => sum + (line.total ?? 0),
-      );
-      final lineTax = lines.fold<double>(
-        0,
-        (sum, line) => sum + (line.taxAmount ?? 0),
-      );
-
+      // Keep Odoo / cash-book residual when known. Line calc always sets
+      // balance == total, which wrongly replaces amount_residual after refresh.
       return InvoiceCalcResult(
-        subtotal: subtotal ?? (lineSubtotal > 0 ? lineSubtotal : calc.subtotal),
-        discountTotal: discountTotal ?? calc.discountTotal,
-        tax: taxAmount ?? (lineTax > 0 ? lineTax : calc.tax),
-        taxAmount: taxAmount ?? (lineTax > 0 ? lineTax : calc.taxAmount),
+        subtotal: calc.subtotal,
+        discountTotal: calc.discountTotal,
+        tax: calc.tax,
+        taxAmount: calc.taxAmount,
         expenseAmt: expense,
-        total: total ?? calc.total,
-        balance: balance ?? total ?? calc.balance,
+        total: calc.total,
+        balance: balance ?? calc.balance,
         untaxed: calc.untaxed,
       );
     }
@@ -377,6 +420,60 @@ class InvoiceSummaryModel {
       total: total ?? 0,
       balance: balance ?? total ?? 0,
       untaxed: (subtotal ?? 0) - (taxAmount ?? 0),
+    );
+  }
+
+  /// Copy with [total]/[balance]/[subtotal] from [websiteTotals] so list
+  /// screens match the bill detail (Odoo list APIs ignore line Dis%).
+  InvoiceSummaryModel withComputedSectionAmounts() {
+    if (lines.isEmpty) return this;
+    final calc = websiteTotals();
+    return InvoiceSummaryModel(
+      id: id,
+      invoiceNumber: invoiceNumber,
+      customer: customer,
+      pharmacyCustomerId: pharmacyCustomerId,
+      address: address,
+      phone: phone,
+      responsiblePerson: responsiblePerson,
+      doctor: doctor,
+      invoiceDate: invoiceDate,
+      createdAt: createdAt,
+      expiryMedicineBill: expiryMedicineBill,
+      verifyStatus: verifyStatus,
+      billedBy: billedBy,
+      taxAmount: calc.taxAmount,
+      balance: balance ?? calc.balance,
+      subtotal: calc.subtotal,
+      discountTotal: calc.discountTotal,
+      total: calc.total,
+      supplierInvoiceNo: supplierInvoiceNo,
+      poNumber: poNumber,
+      supplierInvoiceAmount: supplierInvoiceAmount,
+      previousInvoice: previousInvoice,
+      deliveryDate: deliveryDate,
+      status: status,
+      moveState: moveState,
+      paymentState: paymentState,
+      isPaid: isPaid,
+      paymentMode: paymentMode,
+      advanceAmount: advanceAmount,
+      oldBalance: oldBalance,
+      gstType: gstType,
+      discountCategory: discountCategory,
+      discountType: discountType,
+      discountRate: discountRate,
+      verifiedBy: verifiedBy,
+      expense: expense,
+      expenseAmt: expenseAmt ?? calc.expenseAmt,
+      remarks: remarks,
+      workMinutes: workMinutes,
+      workHours: workHours,
+      isCreditCustomer: isCreditCustomer,
+      sequencePrefix: sequencePrefix,
+      invoiceType: invoiceType,
+      b2bFlag: b2bFlag,
+      lines: lines,
     );
   }
 
@@ -394,6 +491,7 @@ class InvoiceSummaryModel {
       responsiblePerson: other.responsiblePerson ?? responsiblePerson,
       doctor: other.doctor ?? doctor,
       invoiceDate: other.invoiceDate ?? invoiceDate,
+      createdAt: other.createdAt ?? createdAt,
       expiryMedicineBill:
           other.expiryMedicineBill || expiryMedicineBill,
       verifyStatus: other.verifyStatus ?? verifyStatus,
@@ -660,13 +758,30 @@ class InvoiceSummaryModel {
         'responsible_person',
         'responsible',
       ]),
-      doctor: _str(json, const ['doctor', 'doctor_name']),
+      doctor: _str(json, const [
+        'doctor_name',
+        'doctor_id_name',
+        'physician_name',
+        'physician_id_name',
+        'prescriber_name',
+        'prescriber_id_name',
+        'doctor',
+        'physician',
+        'prescriber',
+        'dr_name',
+        'doc_name',
+      ]),
       invoiceDate: _str(json, const [
         'invoice_date',
         'date_invoice',
         'bill_date',
         // Never fall back to create_date (UTC datetime → wrong local day).
         'date',
+      ]),
+      createdAt: _str(json, const [
+        'create_date',
+        'created_at',
+        'create_datetime',
       ]),
       expiryMedicineBill: json['expiry_medicine_bill'] == true ||
           json['expiry_medicine_bill'] == 1,
@@ -752,13 +867,29 @@ class InvoiceSummaryModel {
       gstType: _str(json, const ['gst_type', 'gst_type_name']),
       discountCategory: _str(json, const [
         'discount_category',
+        'discount_category_id_name',
         'discount_cat',
       ]),
-      discountType: _str(json, const ['discount_type']),
-      discountRate: _num(json, const ['discount_rate', 'discount_percent']),
+      discountType: _str(json, const ['discount_type', 'discount_mode']),
+      discountRate: _num(json, const ['discount_rate', 'discount_percent', 'discount_percentage']),
       verifiedBy: _str(json, const ['verified_by', 'verified_by_name']),
-      expense: _str(json, const ['expense']),
-      expenseAmt: _num(json, const ['expense_amt', 'expense_amount']),
+      expense: _str(json, const [
+        'customer_expense',
+        'expense',
+        'expense_note',
+        'expense_text',
+        'expenses',
+        'expense_description',
+      ]),
+      expenseAmt: _num(json, const [
+        'customer_expense_amount',
+        'expense_amt',
+        'expense_amount',
+        'expenses_amt',
+        'expense_total',
+        'other_charge',
+        'other_charges',
+      ]),
       remarks: _str(json, const ['remarks', 'narration', 'note']),
       workMinutes: _str(json, const [
         'work_minutes',
@@ -903,6 +1034,8 @@ class InvoiceSummaryModel {
     for (final key in keys) {
       final value = json[key];
       if (value == null || value == false) continue;
+      // Bare numeric ids (Many2one after normalize) are not display names.
+      if (value is num) continue;
       // Odoo many2one: [id, "Name"]
       if (value is List && value.length >= 2) {
         final name = value[1]?.toString().trim();

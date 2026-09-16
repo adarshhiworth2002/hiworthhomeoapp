@@ -117,14 +117,16 @@ class StockItemModel {
       stock: _asDouble(
         json['stock'] ?? json['stock_qty'] ?? json['available_stock'],
       ),
-      mrp: _asDouble(json['mrp']),
-      batch: _display(json['batch']),
-      mfd: _display(json['mfd_date'] ?? json['mfd'] ?? json['manufacturing_date']),
+      mrp: _asDouble(json['mrp'] ?? json['mrp_price'] ?? json['price_mrp']),
+      batch: _display(json['batch'] ?? json['batch_no'] ?? json['lot_no']),
+      mfd: _display(json['mfd_date'] ?? json['mfd'] ?? json['manufacturing_date'] ?? json['manufacture_date'] ?? json['manuf_date']),
       exp: _display(
         json['exp_date_display'] ??
             json['exp_date'] ??
             json['exp'] ??
-            json['expiry'],
+            json['expiry'] ??
+            json['expiry_date'] ??
+            json['expiration_date'],
       ),
       // Prefer ISO exp_date for reliable sorting when display format varies.
       expSortRaw: _display(json['exp_date'] ?? json['exp_date_display']),
@@ -139,7 +141,7 @@ class StockItemModel {
         'hsn_code',
         'hsn',
       ]),
-      gst: _asDouble(json['gst'] ?? json['gst_percent']),
+      gst: _asDouble(json['gst'] ?? json['gst_percent'] ?? json['tax_percent'] ?? json['tax']),
       holdQty: _asDouble(json['hold_qty'] ?? json['hold_quantity']),
       availableStock: _asDouble(json['available_stock']),
       expiryColorState: _display(json['expiry_color_state']),

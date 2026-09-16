@@ -17,7 +17,7 @@ enum NetAmountSection { youGot, youGave }
 class NetAmountViewModel extends ChangeNotifier {
   static const String sectionYouGot = 'all';
   static const String sectionYouGave = 'you_gave';
-  static const _cacheTtl = Duration(seconds: 60);
+  static const _cacheTtl = Duration(seconds: 12);
 
   bool homeLoading = false;
   bool detailLoading = false;

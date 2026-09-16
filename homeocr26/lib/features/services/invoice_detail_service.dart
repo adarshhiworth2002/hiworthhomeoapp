@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/invoice_summary_model.dart';
+import '../../viewModels/customer_invoice_viewmodel.dart';
 import '../../viewModels/login_viewmodel.dart';
 import 'odoo_rpc_helper.dart';
 import 'payment_history_service.dart';
@@ -52,7 +53,16 @@ class InvoiceDetailService {
     var merged = seed;
     if (results[0] != null) merged = merged.mergedWith(results[0]!);
     if (results[1] != null) merged = merged.mergedWith(results[1]!);
-    return merged;
+
+    // Bake Dis% + expense into total/balance so Customer Invoice / Payment
+    // Book list rows match the detail footer (Odoo list APIs use MRP only).
+    final sectioned = merged.withComputedSectionAmounts();
+    if (sectioned.id != null &&
+        sectioned.lines.isNotEmpty &&
+        sectioned.total != null) {
+      CustomerInvoiceViewModel.upsertInvoice(sectioned);
+    }
+    return sectioned;
   }
 
   static bool _needsPaymentHistory(InvoiceSummaryModel seed) {

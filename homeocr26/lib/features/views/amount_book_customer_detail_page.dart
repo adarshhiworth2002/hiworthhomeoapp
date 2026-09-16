@@ -57,7 +57,7 @@ class _AmountBookCustomerDetailPageState
           force: true,
         );
       },
-      interval: const Duration(seconds: 12),
+      interval: const Duration(seconds: 8),
       immediate: false,
     );
   }
@@ -124,9 +124,7 @@ class _AmountBookCustomerDetailPageState
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
               child: _YouWillGetBox(
-                amount: entries.isEmpty
-                    ? summary.lastBalance
-                    : entries.first.balance,
+                amount: model.footerForCustomer(summary.customerName).balance,
               ),
             ),
             Padding(
@@ -225,6 +223,7 @@ class _AmountBookCustomerDetailPageState
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: _LedgerEntryCard(
+            key: ValueKey(entry.ledgerKey),
             entry: entry,
             onTap: () => _openInvoiceTable(context, entry),
           ),
@@ -245,6 +244,9 @@ class _AmountBookCustomerDetailPageState
             date: entry.sortDate,
             isYouGave: entry.isYouGave,
             invoices: entry.invoices,
+            paymentId: entry.paymentId,
+            paymentName: entry.paymentName ??
+                (!entry.isYouGave ? entry.displayNumber : null),
           ),
         ),
       ),
@@ -271,6 +273,7 @@ class _AmountBookCustomerDetailPageState
 
 class _LedgerEntryCard extends StatelessWidget {
   const _LedgerEntryCard({
+    super.key,
     required this.entry,
     required this.onTap,
   });
@@ -282,7 +285,7 @@ class _LedgerEntryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final gaveAmount = entry.youGaveAmount;
     final gotAmount = entry.youGotAmount;
-    final timeLabel = _formatTime(entry.sortDate);
+    final timeLabel = entry.displayTime;
 
     return Material(
       color: Colors.transparent,
@@ -297,7 +300,7 @@ class _LedgerEntryCard extends StatelessWidget {
             border: Border.all(color: sectionCardBorder),
           ),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
                 child: Column(
@@ -374,16 +377,6 @@ class _LedgerEntryCard extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  static String _formatTime(DateTime? date) {
-    if (date == null) return '';
-    if (date.hour == 0 && date.minute == 0) return '';
-    final h = date.hour;
-    final m = date.minute.toString().padLeft(2, '0');
-    final period = h >= 12 ? 'PM' : 'AM';
-    final hour12 = h % 12 == 0 ? 12 : h % 12;
-    return '$hour12:$m $period';
   }
 }
 

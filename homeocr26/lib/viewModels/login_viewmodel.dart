@@ -78,6 +78,7 @@ class LoginViewmodel extends ChangeNotifier {
             InvoiceSearchService.clearCache();
             InvoiceDetailService.clearCache();
             PaymentHistoryService.clearCache();
+            PaymentHistoryService.clearTrustedTotals();
             PaymentBookService.clearCache();
             ChequeClearanceService.clearCache();
             ChequeNotificationService.resetSession();
@@ -356,6 +357,7 @@ class LoginViewmodel extends ChangeNotifier {
     InvoiceSearchService.clearCache();
     InvoiceDetailService.clearCache();
     PaymentHistoryService.clearCache();
+    PaymentHistoryService.clearTrustedTotals();
     PaymentBookService.clearCache();
     ChequeClearanceService.clearCache();
     ChequeNotificationService.resetSession();

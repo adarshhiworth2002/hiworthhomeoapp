@@ -13,7 +13,18 @@ class PaymentHistoryService {
   static List<Map<String, dynamic>>? _rawCache;
   static DateTime? _cachedAt;
   static Future<List<InvoiceSummaryModel>>? _inFlight;
-  static const _cacheTtl = Duration(seconds: 12);
+  static const _cacheTtl = Duration(seconds: 8);
+  /// Totals computed on-device (Dis% + expense). Prefer these over Odoo list
+  /// amounts when the API still returns MRP-only. Survives [clearCache];
+  /// cleared only via [clearTrustedTotals] (logout).
+  static final Map<
+          int,
+          ({double total, double balance, double? subtotal, DateTime at})>
+      _trustedTotals = {};
+  static const _trustedTtl = Duration(days: 7);
+  /// Bumped on trusted upsert so a stale in-flight full fetch cannot wipe
+  /// corrected head rows without re-applying overrides.
+  static int _trustedEpoch = 0;
 
   static bool get hasFreshCache =>
       _invoiceCache != null &&
@@ -67,6 +78,7 @@ class PaymentHistoryService {
   /// Drop a deleted draft/invoice so live refresh cannot resurrect it.
   static void removeInvoice(int invoiceId) {
     if (invoiceId <= 0) return;
+    _trustedTotals.remove(invoiceId);
     final list = _invoiceCache;
     if (list != null) {
       _invoiceCache = list.where((i) => i.id != invoiceId).toList(growable: false);
@@ -83,20 +95,119 @@ class PaymentHistoryService {
     }
   }
 
+  /// Patch / insert one invoice so list screens update without a full refetch.
+  static void upsertInvoice(InvoiceSummaryModel invoice) {
+    final id = invoice.id;
+    if (id == null || id <= 0) return;
+    if (invoice.total != null) {
+      _trustedEpoch++;
+      _trustedTotals[id] = (
+        total: invoice.total!,
+        balance: invoice.balance ?? invoice.total!,
+        subtotal: invoice.subtotal,
+        at: DateTime.now(),
+      );
+    }
+    final list = List<InvoiceSummaryModel>.from(_invoiceCache ?? const []);
+    final idx = list.indexWhere((i) => i.id == id);
+    if (idx >= 0) {
+      list[idx] = _applyTrustedTotals(list[idx].mergedWith(invoice));
+    } else {
+      list.insert(0, _applyTrustedTotals(invoice));
+    }
+    list.sort((a, b) {
+      final da = a.invoiceDate ?? '';
+      final db = b.invoiceDate ?? '';
+      final byDate = db.compareTo(da);
+      if (byDate != 0) return byDate;
+      return (b.id ?? 0).compareTo(a.id ?? 0);
+    });
+    _invoiceCache = list;
+    _cachedAt = DateTime.now();
+  }
+
+  static InvoiceSummaryModel withTrustedTotals(InvoiceSummaryModel inv) =>
+      _applyTrustedTotals(inv);
+
+  static List<InvoiceSummaryModel> applyTrustedToList(
+    List<InvoiceSummaryModel> invoices,
+  ) {
+    if (_trustedTotals.isEmpty || invoices.isEmpty) return invoices;
+    return invoices.map(_applyTrustedTotals).toList(growable: false);
+  }
+
+  static InvoiceSummaryModel _applyTrustedTotals(InvoiceSummaryModel inv) {
+    final id = inv.id;
+    if (id == null) return inv;
+    final trusted = _trustedTotals[id];
+    if (trusted == null) return inv;
+    if (DateTime.now().difference(trusted.at) > _trustedTtl) {
+      _trustedTotals.remove(id);
+      return inv;
+    }
+    // Keep override even when server momentarily matches — next list fetch
+    // often flips back to MRP-only totals.
+    final bal = trusted.balance;
+    if (inv.total != null &&
+        (inv.total! - trusted.total).abs() < 0.05 &&
+        (inv.balance == null || (inv.balance! - bal).abs() < 0.05) &&
+        (trusted.subtotal == null ||
+            inv.subtotal == null ||
+            (inv.subtotal! - trusted.subtotal!).abs() < 0.05)) {
+      return inv;
+    }
+    return inv.mergedWith(
+      InvoiceSummaryModel(
+        id: id,
+        total: trusted.total,
+        balance: bal,
+        subtotal: trusted.subtotal,
+      ),
+    );
+  }
+
   static Future<List<InvoiceSummaryModel>> _fetchFromApi({
     required String sessionId,
   }) async {
+    final epochAtStart = _trustedEpoch;
     final result = await InvoiceListPager.fetchAll(
       endpointPath: EndPoint.paymentHistory.path,
       sessionId: sessionId,
     );
     if (result.error != null && result.invoices.isEmpty) {
-      return _invoiceCache ?? const [];
+      return applyTrustedToList(_invoiceCache ?? const []);
     }
-    _invoiceCache = result.invoices;
-    _rawCache = result.raw;
+    // Stale full-fetch finished after a newer trusted upsert / refreshHead —
+    // merge into existing cache instead of wiping corrected head rows.
+    if (epochAtStart != _trustedEpoch && _invoiceCache != null) {
+      final byId = <int, InvoiceSummaryModel>{};
+      for (final inv in result.invoices) {
+        final id = inv.id;
+        if (id != null) byId[id] = inv;
+      }
+      final merged = <InvoiceSummaryModel>[];
+      final seen = <int>{};
+      for (final inv in _invoiceCache!) {
+        final id = inv.id;
+        if (id == null) {
+          merged.add(inv);
+          continue;
+        }
+        seen.add(id);
+        merged.add(byId[id] ?? inv);
+      }
+      for (final inv in result.invoices) {
+        final id = inv.id;
+        if (id == null || seen.contains(id)) continue;
+        merged.add(inv);
+      }
+      _invoiceCache = applyTrustedToList(merged);
+    } else {
+      _invoiceCache = applyTrustedToList(result.invoices);
+      _rawCache = result.raw;
+    }
     _cachedAt = DateTime.now();
-    return result.invoices;
+    return _invoiceCache!;
   }
 
   /// Fast live update: reload newest page and merge into cache.
@@ -121,9 +232,9 @@ class PaymentHistoryService {
       for (final inv in page.invoices) {
         final id = inv.id;
         if (id == null) {
-          withoutId.add(inv);
+          withoutId.add(_applyTrustedTotals(inv));
         } else {
-          byId[id] = inv;
+          byId[id] = _applyTrustedTotals(inv);
           headIds.add(id);
         }
       }
@@ -162,13 +273,14 @@ class PaymentHistoryService {
         rawByKey.putIfAbsent(key, () => row);
       }
 
-      _invoiceCache = merged;
+      final trustedMerged = applyTrustedToList(merged);
+      _invoiceCache = trustedMerged;
       _rawCache = rawByKey.values.toList(growable: false);
       _cachedAt = DateTime.now();
-      return merged;
+      return trustedMerged;
     } catch (e, s) {
       if (kDebugMode) debugPrint('PaymentHistoryService.refreshHead: $e\n$s');
-      return _invoiceCache ?? const [];
+      return applyTrustedToList(_invoiceCache ?? const []);
     }
   }
 
@@ -209,5 +321,12 @@ class PaymentHistoryService {
     _rawCache = null;
     _cachedAt = null;
     _inFlight = null;
+    // Keep [_trustedTotals] so pull-to-refresh / draft discard cannot snap
+    // Customer Invoice section amounts back to Odoo MRP totals.
+  }
+
+  static void clearTrustedTotals() {
+    _trustedTotals.clear();
+    _trustedEpoch++;
   }
 }

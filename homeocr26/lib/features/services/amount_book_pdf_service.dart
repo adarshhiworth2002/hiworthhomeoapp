@@ -117,6 +117,16 @@ class AmountBookPdfService {
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
+                    if (entry.displayTime.isNotEmpty) ...[
+                      pw.Text(
+                        entry.displayTime,
+                        style: const pw.TextStyle(
+                          fontSize: 10,
+                          color: PdfColors.grey700,
+                        ),
+                      ),
+                      pw.SizedBox(height: 1),
+                    ],
                     pw.Text(
                       entry.displayDate,
                       style: pw.TextStyle(
@@ -124,6 +134,19 @@ class AmountBookPdfService {
                         fontWeight: pw.FontWeight.bold,
                       ),
                     ),
+                    if (!entry.isYouGave)
+                      for (final line in entry.invoices)
+                        pw.Padding(
+                          padding: const pw.EdgeInsets.only(top: 2),
+                          child: pw.Text(
+                            '${line.number}'
+                            '${line.youGotAmount != null ? '  ${AmountBookViewModel.formatAmountPlain(line.youGotAmount)}' : ''}',
+                            style: const pw.TextStyle(
+                              fontSize: 10,
+                              color: PdfColors.grey700,
+                            ),
+                          ),
+                        ),
                     pw.SizedBox(height: 2),
                     pw.Text(
                       'Bal. ₹ ${AmountBookViewModel.formatAmountPlain(entry.balance)}',

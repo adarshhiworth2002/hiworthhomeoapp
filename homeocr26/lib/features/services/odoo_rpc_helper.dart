@@ -76,6 +76,42 @@ class CustomerCreditLimitInfo {
   }
 }
 
+/// One Group Discount row under a Price Category (Company/Group/Potency/Pack → %).
+class PriceCategoryGroupDiscountRule {
+  const PriceCategoryGroupDiscountRule({
+    this.company,
+    this.group,
+    this.potency,
+    this.packing,
+    required this.discountPercent,
+  });
+
+  final String? company;
+  final String? group;
+  final String? potency;
+  final String? packing;
+  final double discountPercent;
+}
+
+/// Customer's Price Category (A/B/…) plus its Group Discount matrix.
+class CustomerPriceCategoryInfo {
+  const CustomerPriceCategoryInfo({
+    required this.categoryId,
+    required this.categoryName,
+    this.discountType = 'percentage',
+    this.headerPercentage,
+    this.groupRules = const [],
+  });
+
+  final int categoryId;
+  final String categoryName;
+  final String discountType;
+  final double? headerPercentage;
+  final List<PriceCategoryGroupDiscountRule> groupRules;
+
+  bool get hasGroupRules => groupRules.isNotEmpty;
+}
+
 class OdooWebAuth {
   const OdooWebAuth({
     required this.sessionId,
@@ -145,10 +181,16 @@ class OdooRpcHelper {
     _cachedWebSessionAt = null;
     _fieldsCache.clear();
     _fieldsMetaCache.clear();
+    _cachedPartnerPaymentLinePayField = null;
     _missingModels.clear();
     _potencyDefaultsCache.clear();
     _cachedPotencyRows = null;
     _cachedPotencyModel = null;
+    _customerPriceCategoryField = null;
+    _cusDiscountLinesField = null;
+    _cusDiscountLineModel = null;
+    _cusDiscountLineFieldMap = null;
+    _cusDiscountLineFieldMaps.clear();
   }
 
   /// Drop web session and field cache so line field lists stay fresh.
@@ -158,6 +200,7 @@ class OdooRpcHelper {
     _cachedWebSessionAt = null;
     _fieldsCache.clear();
     _fieldsMetaCache.clear();
+    _cachedPartnerPaymentLinePayField = null;
     _potencyDefaultsCache.clear();
   }
 
@@ -1125,8 +1168,6 @@ class OdooRpcHelper {
 
       await putNamed('medicine_id', const [
         'pharmacy.medicine',
-        'product.product',
-        'product.template',
       ], name);
       await putNamed('potency_id', const ['pharmacy.potency'], potency);
       await putNamed('packing_id', const [
@@ -1141,12 +1182,9 @@ class OdooRpcHelper {
       ], pack);
       await putNamed('pharmacy_company_id', const [
         'pharmacy.company',
-        'pharmacy.medicine.company',
       ], company);
       await putNamed('pharmacy_group_id', const [
         'pharmacy.group',
-        'pharmacy.medicine.group',
-        'product.group',
       ], group);
       await putNamed('rack_id', const [
         'pharmacy.rack',
@@ -1190,15 +1228,6 @@ class OdooRpcHelper {
           : (available.contains('qty') ? 'qty' : null);
       if (qtyField != null) vals[qtyField] = quantity;
 
-      if (priceUnit != null && priceUnit > 0) {
-        if (available.contains('price_unit')) vals['price_unit'] = priceUnit;
-        if (available.contains('u_price')) vals['u_price'] = priceUnit;
-        if (available.contains('mrp')) vals['mrp'] = priceUnit;
-      }
-      if (discount != null && discount > 0 && available.contains('discount')) {
-        vals['discount'] = discount;
-      }
-
       final tax = InvoiceCalcHelper.normalizeCustomerTaxPercent(taxPercent);
       for (final key in const [
         'tax_percent',
@@ -1207,6 +1236,16 @@ class OdooRpcHelper {
         'tax',
       ]) {
         if (available.contains(key)) vals[key] = tax;
+      }
+      if (priceUnit != null && priceUnit > 0) {
+        _putPharmacyCustomerLinePrices(
+          vals,
+          available,
+          mrp: priceUnit,
+          discount: discount,
+          taxPercent: tax,
+          quantity: quantity,
+        );
       }
 
       // Prefer medicine_id; fall back to name-only if master create failed.
@@ -1306,17 +1345,6 @@ class OdooRpcHelper {
           : (available.contains('qty') ? 'qty' : null);
       if (qtyField != null) vals[qtyField] = quantity;
 
-      final unit = priceUnit ??
-          (stockRow['mrp'] is num ? (stockRow['mrp'] as num).toDouble() : null);
-      if (unit != null) {
-        if (available.contains('price_unit')) vals['price_unit'] = unit;
-        if (available.contains('u_price')) vals['u_price'] = unit;
-        if (available.contains('mrp')) vals['mrp'] = unit;
-      }
-      if (discount != null && discount > 0 && available.contains('discount')) {
-        vals['discount'] = discount;
-      }
-
       // Customer lines: server requires 5 / 12 / 18 only.
       final taxRaw = taxPercent ??
           (stockRow['gst'] is num
@@ -1334,6 +1362,19 @@ class OdooRpcHelper {
         'tax',
       ]) {
         if (available.contains(key)) vals[key] = tax;
+      }
+
+      final unit = priceUnit ??
+          (stockRow['mrp'] is num ? (stockRow['mrp'] as num).toDouble() : null);
+      if (unit != null && unit > 0) {
+        _putPharmacyCustomerLinePrices(
+          vals,
+          available,
+          mrp: unit,
+          discount: discount,
+          taxPercent: tax,
+          quantity: quantity,
+        );
       }
 
       if (!vals.containsKey('stock_entry_id') &&
@@ -1386,6 +1427,704 @@ class OdooRpcHelper {
     }
   }
 
+  /// Persist website-style line prices + Dis% on pharmacy customer lines.
+  ///
+  /// This pharmacy Odoo build keeps `amount_total` on MRP + expense and does
+  /// **not** recompute from `discount` / `dis2_percent` on RPC write (those
+  /// only update after website onchange). So we must write the discounted
+  /// Unit TP into `price_unit` ourselves while still storing Dis% for the
+  /// DIS column and keeping list MRP on `mrp`.
+  static void _putPharmacyCustomerLinePrices(
+    Map<String, dynamic> vals,
+    Set<String> available, {
+    required double mrp,
+    double? discount,
+    double? taxPercent,
+    double? quantity,
+  }) {
+    if (mrp <= 0) return;
+
+    void put(String key, dynamic value) {
+      if (!available.contains(key)) return;
+      vals[key] = value;
+    }
+
+    final disc = (discount != null && discount > 0) ? discount : 0.0;
+    final unitTp = disc > 0 ? mrp * (1.0 - disc / 100.0) : mrp;
+    final tax = (taxPercent != null && taxPercent > 0) ? taxPercent : 0.0;
+    final unitP =
+        tax > 0 ? unitTp * 100.0 / (100.0 + tax) : unitTp;
+    final qty = (quantity != null && quantity > 0) ? quantity : 1.0;
+
+    put('mrp', mrp);
+    // Tax-inclusive Unit TP — drives amount_total on this server (Dis% alone
+    // does not). Website DIS still comes from dis2_percent / discount below.
+    put('price_unit', unitTp);
+    put('unit_tp', unitTp);
+    put('u_price', unitP);
+    put('unit_p', unitP);
+    put('price_subtotal', unitP * qty);
+    put('price_total', unitTp * qty);
+    put('total', unitTp * qty);
+
+    if (discount == null) return;
+
+    const pharmacyDiscKeys = [
+      'dis',
+      'dis_percent',
+      'discount_percent',
+      'dis2_percent',
+    ];
+    for (final key in pharmacyDiscKeys) {
+      if (!available.contains(key)) continue;
+      vals[key] = disc;
+    }
+    // Website DIS column — store Dis% even though amount uses price_unit.
+    if (available.contains('discount')) {
+      vals['discount'] = disc;
+    }
+  }
+
+  /// Push app-computed bill total onto the move so Payment Book / website
+  /// amount match Dis% + expense (server compute often ignores line Dis%).
+  static Future<bool> writePharmacyInvoiceTotals(
+    String sessionId, {
+    required int invoiceId,
+    required double total,
+    double? balance,
+    double? untaxed,
+    double? taxAmount,
+    double? discountTotal,
+  }) async {
+    if (invoiceId <= 0 || total < 0) return false;
+    try {
+      final available = await _modelFields(sessionId, 'account.move');
+      if (available.isEmpty) return false;
+      final vals = <String, dynamic>{};
+      void put(String key, double? value) {
+        if (value == null || !available.contains(key)) return;
+        vals[key] = value;
+      }
+
+      // Prefer pharmacy `total` (website TOTAL) then standard amount fields.
+      put('total', total);
+      put('amount_total', total);
+      put('amount_total_signed', total);
+      put('balance', balance ?? total);
+      put('amount_residual', balance ?? total);
+      put('amount_residual_signed', balance ?? total);
+      put('amount_untaxed', untaxed);
+      put('amount_untaxed_signed', untaxed);
+      put('subtotal', untaxed);
+      put('amount_tax', taxAmount);
+      put('tax_amount', taxAmount);
+      put('discount_total', discountTotal);
+      put('amount_discount', discountTotal);
+      // Custom pharmacy totals seen on some builds.
+      put('bill_amount', total);
+      put('invoice_total', total);
+      put('pharmacy_total', total);
+      put('grand_total', total);
+      put('balance_due', balance ?? total);
+      put('amount_due', balance ?? total);
+
+      if (vals.isEmpty) return false;
+
+      await callKw(
+        sessionId: sessionId,
+        model: 'account.move',
+        method: 'write',
+        args: [
+          [invoiceId],
+          vals,
+        ],
+        kwargs: {
+          'context': {
+            'check_move_validity': false,
+            'skip_invoice_sync': true,
+            'tracking_disable': true,
+          },
+        },
+      );
+      if (kDebugMode) {
+        debugPrint(
+          'writePharmacyInvoiceTotals #$invoiceId → $vals',
+        );
+      }
+      return true;
+    } catch (e) {
+      if (kDebugMode) debugPrint('writePharmacyInvoiceTotals failed: $e');
+      return false;
+    }
+  }
+
+  /// Run website-style `onchange` for Dis% so pharmacy Python recomputes
+  /// Unit TP / line Total / move TOTAL (RPC `write` alone often skips it).
+  static Future<bool> applyPharmacyLineDiscountOnchange(
+    String sessionId, {
+    required int lineId,
+    required double mrp,
+    required double discount,
+    double? quantity,
+    double? taxPercent,
+  }) async {
+    if (lineId <= 0 || mrp <= 0) return false;
+    final disc = discount < 0 ? 0.0 : discount;
+    try {
+      final fieldOnchange = await _lineFormFieldOnchange(sessionId);
+      final changedFields = <String>[];
+      for (final key in const [
+        'dis2_percent',
+        'discount',
+        'dis',
+        'dis_percent',
+        'discount_percent',
+        'mrp',
+      ]) {
+        if (fieldOnchange.containsKey(key)) changedFields.add(key);
+      }
+      if (changedFields.isEmpty) {
+        changedFields.addAll(['dis2_percent', 'mrp']);
+      }
+
+      final available = await _modelFields(sessionId, 'account.move.line');
+      final values = <String, dynamic>{};
+      void putVal(String key, dynamic value) {
+        if (!available.contains(key)) return;
+        values[key] = value;
+      }
+
+      putVal('mrp', mrp);
+      putVal('dis2_percent', disc);
+      putVal('discount', disc);
+      putVal('dis', disc);
+      putVal('dis_percent', disc);
+      putVal('discount_percent', disc);
+      if (quantity != null && quantity > 0) {
+        putVal('quantity', quantity);
+      }
+      if (values.isEmpty) {
+        values['mrp'] = mrp;
+        values['dis2_percent'] = disc;
+      }
+
+      final result = await callKw(
+        sessionId: sessionId,
+        model: 'account.move.line',
+        method: 'onchange',
+        args: [
+          [lineId],
+          values,
+          changedFields.where(values.containsKey).toList(growable: false),
+          fieldOnchange,
+        ],
+        kwargs: {
+          'context': {
+            'check_move_validity': false,
+          },
+        },
+      );
+
+      if (result is! Map) return false;
+      final rawValue = result['value'];
+      final writeVals = <String, dynamic>{};
+      if (rawValue is Map) {
+        for (final e in rawValue.entries) {
+          final key = e.key.toString();
+          final v = e.value;
+          // Skip x2many commands / nested records from onchange.
+          if (v is List || v is Map) continue;
+          if (v == false &&
+              (key.endsWith('_id') || key.endsWith('_ids'))) {
+            continue;
+          }
+          writeVals[key] = v;
+        }
+      }
+
+      // Guarantee Dis% + Unit TP even when onchange returns a sparse value.
+      _putPharmacyCustomerLinePrices(
+        writeVals,
+        available,
+        mrp: mrp,
+        discount: disc,
+        taxPercent: taxPercent,
+        quantity: quantity,
+      );
+
+      if (writeVals.isEmpty) return false;
+
+      await callKw(
+        sessionId: sessionId,
+        model: 'account.move.line',
+        method: 'write',
+        args: [
+          [lineId],
+          writeVals,
+        ],
+        kwargs: {
+          'context': {
+            'check_move_validity': false,
+          },
+        },
+      );
+      if (kDebugMode) {
+        debugPrint(
+          'applyPharmacyLineDiscountOnchange #$lineId → $writeVals',
+        );
+      }
+      return true;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('applyPharmacyLineDiscountOnchange failed: $e');
+      }
+      return false;
+    }
+  }
+
+  static final Map<String, Map<String, String>> _lineOnchangeCache = {};
+
+  static Future<Map<String, String>> _lineFormFieldOnchange(
+    String sessionId,
+  ) async {
+    final cached = _lineOnchangeCache['account.move.line'];
+    if (cached != null) return cached;
+    final out = <String, String>{};
+    try {
+      final view = await callKw(
+        sessionId: sessionId,
+        model: 'account.move.line',
+        method: 'fields_view_get',
+        args: const [],
+        kwargs: const {
+          'view_type': 'form',
+          'toolbar': false,
+        },
+      );
+      if (view is Map && view['fields'] is Map) {
+        for (final e in (view['fields'] as Map).entries) {
+          final meta = e.value;
+          if (meta is! Map) continue;
+          final onchange = meta['onchange'];
+          if (onchange == null) continue;
+          final text = onchange.toString().trim();
+          if (text.isEmpty || text == 'false') continue;
+          out[e.key.toString()] = text;
+        }
+      }
+      if (kDebugMode && view is Map) {
+        final arch = view['arch']?.toString() ?? '';
+        final clip = arch.length > 1200 ? '${arch.substring(0, 1200)}…' : arch;
+        debugPrint('account.move.line form arch (clip): $clip');
+        debugPrint(
+          'account.move.line onchange fields: ${out.keys.take(40).join(',')}',
+        );
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('fields_view_get move.line: $e');
+    }
+    // Always include pharmacy discount keys so onchange still runs.
+    for (final key in const [
+      'dis2_percent',
+      'discount',
+      'dis_percent',
+      'discount_percent',
+      'mrp',
+      'price_unit',
+      'quantity',
+      'unit_tp',
+      'u_price',
+    ]) {
+      out.putIfAbsent(key, () => '1');
+    }
+    _lineOnchangeCache['account.move.line'] = out;
+    return out;
+  }
+
+  /// One product line's Dis% / MRP from the app (not from a stale Odoo read).
+  static Map<String, dynamic> pharmacyLineDiscountSpec({
+    required int lineId,
+    required double mrp,
+    required double discount,
+    double? quantity,
+    double? taxPercent,
+  }) =>
+      {
+        'lineId': lineId,
+        'mrp': mrp,
+        'discount': discount,
+        if (quantity != null) 'quantity': quantity,
+        if (taxPercent != null) 'taxPercent': taxPercent,
+      };
+
+  /// After line Dis% writes: trigger onchange, push move totals, verify read.
+  ///
+  /// Pass [appLines] from the bill screen — do **not** trust Odoo's current
+  /// `dis2_percent` (often still 0 until website onchange runs).
+  static Future<bool> syncPharmacyWebsiteTotals(
+    String sessionId, {
+    required int invoiceId,
+    required double total,
+    double? balance,
+    double? untaxed,
+    double? taxAmount,
+    double? discountTotal,
+    List<Map<String, dynamic>>? appLines,
+  }) async {
+    if (invoiceId <= 0) return false;
+    try {
+      final lineAvailable =
+          await _modelFields(sessionId, 'account.move.line');
+
+      // Prefer app Dis%/MRP. Fall back to reading lines only for ids.
+      final specs = <Map<String, dynamic>>[];
+      if (appLines != null && appLines.isNotEmpty) {
+        for (final raw in appLines) {
+          final lineId = _asInt(raw['lineId'] ?? raw['id']);
+          final mrp = _asDouble(raw['mrp']);
+          final disc = _asDouble(raw['discount']) ?? 0.0;
+          if (lineId == null || lineId <= 0 || mrp == null || mrp <= 0) {
+            continue;
+          }
+          specs.add({
+            'lineId': lineId,
+            'mrp': mrp,
+            'discount': disc,
+            'quantity': _asDouble(raw['quantity']),
+            'taxPercent': _asDouble(raw['taxPercent'] ?? raw['tax']),
+          });
+        }
+      }
+
+      if (specs.isEmpty) {
+        final lineFields = <String>['id', 'display_type'];
+        for (final f in const [
+          'mrp',
+          'price_unit',
+          'quantity',
+          'dis2_percent',
+          'discount',
+          'dis',
+          'tax',
+          'tax_percent',
+          'gst',
+        ]) {
+          if (lineAvailable.contains(f)) lineFields.add(f);
+        }
+        final rows = await callKw(
+          sessionId: sessionId,
+          model: 'account.move.line',
+          method: 'search_read',
+          args: [
+            [
+              ['move_id', '=', invoiceId],
+            ],
+            lineFields,
+          ],
+          kwargs: const {'limit': 80},
+        );
+        if (rows is List) {
+          for (final raw in rows.whereType<Map>()) {
+            final map = Map<String, dynamic>.from(raw);
+            final display = map['display_type']?.toString() ?? '';
+            if (display.isNotEmpty && display != 'product') continue;
+            final lineId = _asInt(map['id']);
+            var mrp = _asDouble(map['mrp']);
+            final priceUnit = _asDouble(map['price_unit']);
+            var disc = _asDouble(map['dis2_percent']) ??
+                _asDouble(map['dis']) ??
+                _asDouble(map['discount']) ??
+                0.0;
+            // Recover list MRP when price_unit is already Unit TP.
+            if (mrp != null &&
+                priceUnit != null &&
+                disc > 0.01 &&
+                (mrp - priceUnit).abs() < 0.05) {
+              final factor = 1.0 - disc / 100.0;
+              if (factor > 0.01) mrp = priceUnit / factor;
+            }
+            mrp ??= priceUnit;
+            if (lineId == null || mrp == null || mrp <= 0) continue;
+            // Infer Dis% from prices when Odoo still has DIS=0.
+            if (disc < 0.01 &&
+                priceUnit != null &&
+                priceUnit > 0 &&
+                mrp > priceUnit + 0.01) {
+              disc = (1.0 - priceUnit / mrp) * 100.0;
+            }
+            specs.add({
+              'lineId': lineId,
+              'mrp': mrp,
+              'discount': disc,
+              'quantity': _asDouble(map['quantity']),
+              'taxPercent': _asDouble(map['tax']) ??
+                  _asDouble(map['tax_percent']) ??
+                  _asDouble(map['gst']),
+            });
+          }
+        }
+      }
+
+      if (kDebugMode) {
+        debugPrint(
+          'syncPharmacyWebsiteTotals #$invoiceId '
+          'appLines=${appLines?.length ?? 0} specs=${specs.length}',
+        );
+      }
+
+      // Line Dis%/Unit TP are usually already written by
+      // updateCustomerInvoiceLine during save. Re-write via move only when
+      // callers pass appLines (ensures website DIS column sticks).
+      if (appLines != null && appLines.isNotEmpty) {
+        for (final spec in specs) {
+          final lineId = spec['lineId'] as int;
+          final mrp = (spec['mrp'] as num).toDouble();
+          final disc = (spec['discount'] as num).toDouble();
+          final qty = spec['quantity'] is num
+              ? (spec['quantity'] as num).toDouble()
+              : null;
+          final tax = spec['taxPercent'] is num
+              ? (spec['taxPercent'] as num).toDouble()
+              : null;
+          if (disc < 0.01) continue;
+
+          await _writePharmacyLineDiscountViaMove(
+            sessionId,
+            invoiceId: invoiceId,
+            lineId: lineId,
+            mrp: mrp,
+            discount: disc,
+            quantity: qty,
+            taxPercent: tax,
+            available: lineAvailable,
+          );
+        }
+
+        if (kDebugMode) {
+          await _verifyPharmacyLineDiscounts(
+            sessionId,
+            invoiceId: invoiceId,
+            available: lineAvailable,
+          );
+        }
+      }
+
+      final wrote = await writePharmacyInvoiceTotals(
+        sessionId,
+        invoiceId: invoiceId,
+        total: total,
+        balance: balance,
+        untaxed: untaxed,
+        taxAmount: taxAmount,
+        discountTotal: discountTotal,
+      );
+
+      try {
+        final moveFields = await _modelFields(sessionId, 'account.move');
+        final readFields = <String>['id'];
+        for (final f in const [
+          'amount_total',
+          'amount_untaxed',
+          'amount_residual',
+          'amount_tax',
+          'total',
+          'balance',
+          'subtotal',
+          'customer_expense_amount',
+          'expense_amount',
+        ]) {
+          if (moveFields.contains(f)) readFields.add(f);
+        }
+        final verify = await callKw(
+          sessionId: sessionId,
+          model: 'account.move',
+          method: 'read',
+          args: [
+            [invoiceId],
+            readFields,
+          ],
+        );
+        if (kDebugMode) {
+          debugPrint(
+            'syncPharmacyWebsiteTotals verify #$invoiceId '
+            'want=$total got=$verify',
+          );
+        }
+
+        if (verify is List && verify.isNotEmpty && verify.first is Map) {
+          final row = Map<String, dynamic>.from(verify.first as Map);
+          final got = _asDouble(row['total']) ?? _asDouble(row['amount_total']);
+          if (got != null && (got - total).abs() > 0.5) {
+            await writePharmacyInvoiceTotals(
+              sessionId,
+              invoiceId: invoiceId,
+              total: total,
+              balance: balance,
+              untaxed: untaxed,
+              taxAmount: taxAmount,
+              discountTotal: discountTotal,
+            );
+            if (kDebugMode) {
+              debugPrint(
+                'syncPharmacyWebsiteTotals re-wrote totals '
+                '(server had $got, want $total)',
+              );
+            }
+          }
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('syncPharmacyWebsiteTotals verify failed: $e');
+        }
+      }
+
+      return wrote;
+    } catch (e) {
+      if (kDebugMode) debugPrint('syncPharmacyWebsiteTotals failed: $e');
+      return writePharmacyInvoiceTotals(
+        sessionId,
+        invoiceId: invoiceId,
+        total: total,
+        balance: balance,
+        untaxed: untaxed,
+        taxAmount: taxAmount,
+        discountTotal: discountTotal,
+      );
+    }
+  }
+
+  /// Write Dis% onto a line through `account.move.invoice_line_ids` so pharmacy
+  /// parent computes / website DIS refresh the same way as the form UI.
+  static Future<void> _writePharmacyLineDiscountViaMove(
+    String sessionId, {
+    required int invoiceId,
+    required int lineId,
+    required double mrp,
+    required double discount,
+    double? quantity,
+    double? taxPercent,
+    required Set<String> available,
+  }) async {
+    final vals = <String, dynamic>{};
+    _putPharmacyCustomerLinePrices(
+      vals,
+      available,
+      mrp: mrp,
+      discount: discount,
+      taxPercent: taxPercent,
+      quantity: quantity,
+    );
+    if (vals.isEmpty) return;
+
+    // Command UPDATE (1, id, values) on invoice lines.
+    try {
+      await callKw(
+        sessionId: sessionId,
+        model: 'account.move',
+        method: 'write',
+        args: [
+          [invoiceId],
+          {
+            'invoice_line_ids': [
+              [1, lineId, vals],
+            ],
+          },
+        ],
+        kwargs: {
+          'context': {
+            'check_move_validity': false,
+            'skip_invoice_sync': true,
+          },
+        },
+      );
+      if (kDebugMode) {
+        debugPrint(
+          'writePharmacyLineDiscountViaMove #$invoiceId '
+          'line=$lineId → $vals',
+        );
+      }
+      return;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('writePharmacyLineDiscountViaMove parent failed: $e');
+      }
+    }
+
+    // Fallback: direct line write.
+    try {
+      await callKw(
+        sessionId: sessionId,
+        model: 'account.move.line',
+        method: 'write',
+        args: [
+          [lineId],
+          vals,
+        ],
+        kwargs: {
+          'context': {'check_move_validity': false},
+        },
+      );
+      if (kDebugMode) {
+        debugPrint(
+          'writePharmacyLineDiscountViaMove direct #$lineId → $vals',
+        );
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('writePharmacyLineDiscountViaMove direct failed: $e');
+      }
+    }
+  }
+
+  static Future<void> _verifyPharmacyLineDiscounts(
+    String sessionId, {
+    required int invoiceId,
+    required Set<String> available,
+  }) async {
+    if (!kDebugMode) return;
+    try {
+      final fields = <String>['id', 'display_type', 'name'];
+      for (final f in const [
+        'mrp',
+        'price_unit',
+        'unit_tp',
+        'dis2_percent',
+        'discount',
+        'dis',
+        'dis_percent',
+        'price_total',
+      ]) {
+        if (available.contains(f)) fields.add(f);
+      }
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'account.move.line',
+        method: 'search_read',
+        args: [
+          [
+            ['move_id', '=', invoiceId],
+          ],
+          fields,
+        ],
+        kwargs: const {'limit': 40},
+      );
+      if (rows is! List) return;
+      for (final raw in rows.whereType<Map>()) {
+        final display = raw['display_type']?.toString() ?? '';
+        if (display.isNotEmpty && display != 'product') continue;
+        debugPrint(
+          'verify line DIS #$invoiceId/'
+          '${raw['id']}: mrp=${raw['mrp']} price_unit=${raw['price_unit']} '
+          'unit_tp=${raw['unit_tp']} dis2=${raw['dis2_percent']} '
+          'discount=${raw['discount']} dis=${raw['dis']} '
+          'price_total=${raw['price_total']}',
+        );
+      }
+    } catch (e) {
+      debugPrint('verifyPharmacyLineDiscounts failed: $e');
+    }
+  }
+
   /// Update an existing pharmacy invoice line (edit bill).
   static Future<bool> updateCustomerInvoiceLine(
     String sessionId, {
@@ -1416,14 +2155,44 @@ class OdooRpcHelper {
         vals[qtyField] = quantity;
       }
 
+      double? tax;
+      if (taxPercent != null) {
+        tax = InvoiceCalcHelper.normalizeCustomerTaxPercent(taxPercent);
+        for (final key in const [
+          'tax_percent',
+          'gst',
+          'gst_percent',
+          'tax',
+        ]) {
+          put(key, tax);
+        }
+      }
+
       final unit = priceUnit;
       if (unit != null && unit > 0) {
-        put('price_unit', unit);
-        put('u_price', unit);
-        put('mrp', unit);
-      }
-      if (discount != null && discount >= 0) {
-        put('discount', discount);
+        _putPharmacyCustomerLinePrices(
+          vals,
+          available,
+          mrp: unit,
+          discount: discount,
+          taxPercent: tax,
+          quantity: quantity,
+        );
+      } else if (discount != null && discount >= 0) {
+        const pharmacyDiscKeys = [
+          'dis',
+          'dis_percent',
+          'discount_percent',
+          'dis2_percent',
+        ];
+        for (final key in pharmacyDiscKeys) {
+          if (!available.contains(key)) continue;
+          vals[key] = discount;
+        }
+        // Standard discount drives amount_total on this Odoo build.
+        if (available.contains('discount')) {
+          vals['discount'] = discount;
+        }
       }
       if (batch != null && batch.trim().isNotEmpty) {
         if (available.contains('batch_no')) {
@@ -1439,17 +2208,6 @@ class OdooRpcHelper {
       if (rack != null && rack.trim().isNotEmpty) {
         if (available.contains('rack')) vals['rack'] = rack.trim();
       }
-      if (taxPercent != null) {
-        final tax = InvoiceCalcHelper.normalizeCustomerTaxPercent(taxPercent);
-        for (final key in const [
-          'tax_percent',
-          'gst',
-          'gst_percent',
-          'tax',
-        ]) {
-          put(key, tax);
-        }
-      }
 
       if (vals.isEmpty) return true;
 
@@ -1461,10 +2219,18 @@ class OdooRpcHelper {
           [lineId],
           vals,
         ],
+        kwargs: {
+          'context': {
+            'check_move_validity': false,
+          },
+        },
       );
       if (kDebugMode) {
         debugPrint('updateCustomerInvoiceLine #$lineId → $vals');
       }
+
+      // Dis% + Unit TP are written above. Skip website onchange — this Odoo
+      // build rejects field `dis` and fields_view_get fails, wasting seconds.
       return true;
     } catch (e) {
       if (kDebugMode) debugPrint('updateCustomerInvoiceLine failed: $e');
@@ -1611,6 +2377,188 @@ class OdooRpcHelper {
     }
   }
 
+  /// Product lines on a customer invoice (for Dis% / line-id matching).
+  static Future<List<Map<String, dynamic>>> listCustomerInvoiceProductLines({
+    required String sessionId,
+    required int invoiceId,
+  }) async {
+    if (invoiceId <= 0) return const [];
+    try {
+      final available = await _modelFields(sessionId, 'account.move.line');
+      final fields = <String>['id', 'display_type', 'name', 'quantity'];
+      for (final f in const [
+        'stock_entry_id',
+        'medicine_id',
+        'batch_no',
+        'batch',
+        'mrp',
+        'price_unit',
+        'dis2_percent',
+        'discount',
+      ]) {
+        if (available.contains(f)) fields.add(f);
+      }
+      final domain = <List<dynamic>>[
+        ['move_id', '=', invoiceId],
+      ];
+      if (available.contains('display_type')) {
+        domain.add(['display_type', '=', 'product']);
+      }
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'account.move.line',
+        method: 'search_read',
+        args: [domain],
+        kwargs: {
+          'fields': fields,
+          'limit': 80,
+          'order': 'id asc',
+        },
+      );
+      if (rows is! List) return const [];
+      final out = <Map<String, dynamic>>[];
+      for (final raw in rows.whereType<Map>()) {
+        final map = Map<String, dynamic>.from(raw);
+        final display = map['display_type']?.toString() ?? '';
+        if (display.isNotEmpty && display != 'product') continue;
+        out.add(map);
+      }
+      return out;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('listCustomerInvoiceProductLines failed: $e');
+      }
+      return const [];
+    }
+  }
+
+  /// Resolve `account.move.line` id when QR/stock ids don't match Odoo's
+  /// `stock_entry_id` (common: app has display id 128027, line links 127300).
+  static Future<int?> resolveCustomerInvoiceLineId({
+    required String sessionId,
+    required int invoiceId,
+    int? stockEntryId,
+    int? stockDisplayId,
+    String? productName,
+    String? batch,
+    Set<int>? excludeLineIds,
+  }) async {
+    if (invoiceId <= 0) return null;
+    final exclude = excludeLineIds ?? const <int>{};
+
+    Future<int?> byStock(int? id) async {
+      if (id == null || id <= 0) return null;
+      final found = await findCustomerInvoiceLineIdByStockEntry(
+        sessionId: sessionId,
+        invoiceId: invoiceId,
+        stockEntryId: id,
+      );
+      if (found != null && found > 0 && !exclude.contains(found)) return found;
+      return null;
+    }
+
+    final byEntry = await byStock(stockEntryId);
+    if (byEntry != null) return byEntry;
+    if (stockDisplayId != null &&
+        stockDisplayId != stockEntryId) {
+      final byDisplay = await byStock(stockDisplayId);
+      if (byDisplay != null) return byDisplay;
+    }
+
+    final rows = await listCustomerInvoiceProductLines(
+      sessionId: sessionId,
+      invoiceId: invoiceId,
+    );
+    if (rows.isEmpty) return null;
+
+    final candidates = rows.where((r) {
+      final id = _asInt(r['id']);
+      return id != null && id > 0 && !exclude.contains(id);
+    }).toList(growable: false);
+    if (candidates.isEmpty) return null;
+
+    String norm(String? s) => (s ?? '').trim().toLowerCase();
+    final wantName = norm(productName);
+    final wantBatch = norm(batch);
+
+    String rowName(Map<String, dynamic> r) {
+      final med = r['medicine_id'];
+      if (med is List && med.length > 1) return norm(med[1]?.toString());
+      return norm(r['name']?.toString());
+    }
+
+    String rowBatch(Map<String, dynamic> r) =>
+        norm((r['batch_no'] ?? r['batch'])?.toString());
+
+    // Prefer exact product + batch.
+    if (wantName.isNotEmpty) {
+      for (final r in candidates) {
+        if (rowName(r) != wantName) continue;
+        if (wantBatch.isNotEmpty && rowBatch(r) != wantBatch) continue;
+        final id = _asInt(r['id']);
+        if (id != null && id > 0) return id;
+      }
+      for (final r in candidates) {
+        if (rowName(r) != wantName) continue;
+        final id = _asInt(r['id']);
+        if (id != null && id > 0) return id;
+      }
+    }
+
+    // Single unmatched product line on the bill.
+    if (candidates.length == 1) {
+      return _asInt(candidates.first['id']);
+    }
+
+    // Newest unmatched product line (QR add usually creates the latest id).
+    int? bestId;
+    for (final r in candidates) {
+      final id = _asInt(r['id']);
+      if (id == null) continue;
+      if (bestId == null || id > bestId) bestId = id;
+    }
+    if (kDebugMode && bestId != null) {
+      debugPrint(
+        'resolveCustomerInvoiceLineId #$invoiceId fallback newest=$bestId '
+        'product=$productName batch=$batch '
+        'entry=$stockEntryId display=$stockDisplayId',
+      );
+    }
+    return bestId;
+  }
+
+  /// Product lines on a customer invoice (for Dis% sync when stock_entry_id
+  /// from QR/scan does not match the line Odoo created).
+  static Future<List<Map<String, dynamic>>> findCustomerInvoiceProductLines({
+    required String sessionId,
+    required int invoiceId,
+  }) async {
+    // Prefer the shared listing helper (no brittle display_type domain).
+    return listCustomerInvoiceProductLines(
+      sessionId: sessionId,
+      invoiceId: invoiceId,
+    );
+  }
+
+  /// Match a bill line to an Odoo product line by name/batch/qty when
+  /// `stock_entry_id` lookup fails (common after `add_to_invoice`).
+  static Future<int?> findCustomerInvoiceLineIdByProduct({
+    required String sessionId,
+    required int invoiceId,
+    String? productName,
+    String? batch,
+    double? quantity,
+    Set<int>? excludeLineIds,
+  }) async {
+    return resolveCustomerInvoiceLineId(
+      sessionId: sessionId,
+      invoiceId: invoiceId,
+      productName: productName,
+      batch: batch,
+      excludeLineIds: excludeLineIds,
+    );
+  }
+
   /// Find or create a `pharmacy.customer` so the website many2one can show it.
   /// Returns the pharmacy.customer id (never a res.partner id).
   static Future<int?> findOrCreatePharmacyCustomer({
@@ -1623,10 +2571,9 @@ class OdooRpcHelper {
     final want = name.trim();
 
     if (existingId != null && existingId > 0) {
-      try {
-        final row = await readPharmacyCustomer(sessionId, existingId);
-        if (row != null) return existingId;
-      } catch (_) {}
+      // Trust the app's pharmacy.customer id — re-reading often times out and
+      // slows Save for no benefit when the id came from a prior successful pick.
+      return existingId;
     }
 
     if (want.isEmpty) return null;
@@ -1724,6 +2671,7 @@ class OdooRpcHelper {
     String? address,
     String? phone,
     String? doctor,
+    int? doctorId,
     int? responsiblePersonId,
     String? responsiblePersonName,
     String? paymentMode,
@@ -1734,6 +2682,7 @@ class OdooRpcHelper {
     String? discountType,
     double? discountRate,
     String? expense,
+    double? expenseAmt,
     String? remarks,
     String? verifiedBy,
   }) async {
@@ -1846,8 +2795,15 @@ class OdooRpcHelper {
       putIf('address', (address ?? '').trim().isEmpty ? null : address);
       putIf('phone_no', (phone ?? '').trim().isEmpty ? false : phone);
       putIf('phone', (phone ?? '').trim().isEmpty ? null : phone);
-      putIf('doctor', (doctor ?? '').trim().isEmpty ? false : doctor);
-      putIf('doctor_name', (doctor ?? '').trim().isEmpty ? false : doctor);
+
+      await _putCustomerInvoiceDoctorFields(
+        sessionId: sessionId,
+        available: available,
+        moveMeta: moveMeta,
+        vals: vals,
+        doctorName: (doctor ?? '').trim(),
+        doctorId: doctorId,
+      );
 
       if (responsiblePersonId != null) {
         putIf('responsible_person_id', responsiblePersonId);
@@ -1885,7 +2841,37 @@ class OdooRpcHelper {
         );
       }
       if (discountRate != null) putIf('discount_rate', discountRate);
-      putIf('expense', (expense ?? '').trim().isEmpty ? false : expense);
+
+      _putCustomerInvoiceExpenseFields(
+        available: available,
+        moveMeta: moveMeta,
+        vals: vals,
+        expense: (expense ?? '').trim(),
+        expenseAmt: expenseAmt,
+      );
+
+      if (kDebugMode) {
+        final doctorRequested = (doctor ?? '').trim().isNotEmpty || doctorId != null;
+        final expenseRequested =
+            (expense ?? '').trim().isNotEmpty || (expenseAmt != null && expenseAmt > 0);
+        if (doctorRequested &&
+            !vals.keys.any((k) => k.toString().toLowerCase().contains('doctor'))) {
+          debugPrint(
+            'updateCustomerInvoiceHeader: doctor not written '
+            '(no matching account.move field). metaDoctor='
+            '${moveMeta.keys.where((k) => k.toLowerCase().contains('doctor')).toList()}',
+          );
+        }
+        if (expenseRequested &&
+            !vals.keys.any((k) => k.toString().toLowerCase().contains('expense'))) {
+          debugPrint(
+            'updateCustomerInvoiceHeader: expense not written '
+            '(no matching account.move field). metaExpense='
+            '${moveMeta.keys.where((k) => k.toLowerCase().contains('expense')).toList()}',
+          );
+        }
+      }
+
       putIf('narration', (remarks ?? '').trim().isEmpty ? false : remarks);
       putIf('remarks', (remarks ?? '').trim().isEmpty ? false : remarks);
       putIf(
@@ -1893,7 +2879,18 @@ class OdooRpcHelper {
         (verifiedBy ?? '').trim().isEmpty ? false : verifiedBy,
       );
 
-      if (vals.isEmpty) return true;
+      if (vals.isEmpty) {
+        await _probeWriteDoctorExpenseFields(
+          sessionId: sessionId,
+          invoiceId: invoiceId,
+          doctorName: (doctor ?? '').trim(),
+          doctorId: doctorId,
+          expense: (expense ?? '').trim(),
+          expenseAmt: expenseAmt,
+          alreadyWritten: const {},
+        );
+        return true;
+      }
 
       await callKw(
         sessionId: sessionId,
@@ -1907,10 +2904,395 @@ class OdooRpcHelper {
       if (kDebugMode) {
         debugPrint('updateCustomerInvoiceHeader #$invoiceId → $vals');
       }
+
+      await _probeWriteDoctorExpenseFields(
+        sessionId: sessionId,
+        invoiceId: invoiceId,
+        doctorName: (doctor ?? '').trim(),
+        doctorId: doctorId,
+        expense: (expense ?? '').trim(),
+        expenseAmt: expenseAmt,
+        alreadyWritten: vals,
+      );
       return true;
     } catch (e) {
       if (kDebugMode) debugPrint('updateCustomerInvoiceHeader failed: $e');
       return false;
+    }
+  }
+
+  /// Match account.move fields by technical name / label keywords.
+  static List<String> _moveFieldsMatching(
+    Set<String> available,
+    Map<String, Map<String, dynamic>> moveMeta, {
+    required List<String> hints,
+    List<String>? types,
+    List<String>? excludeHints,
+  }) {
+    final scored = <({String key, int score})>[];
+    final keys = available.isNotEmpty ? available : moveMeta.keys.toSet();
+    for (final key in keys) {
+      final lower = key.toLowerCase();
+      final meta = moveMeta[key];
+      final label = (meta?['string'] ?? '').toString().toLowerCase();
+      final type = meta?['type']?.toString();
+      if (types != null &&
+          type != null &&
+          type.isNotEmpty &&
+          !types.contains(type)) {
+        continue;
+      }
+      final blob = '$lower $label';
+      if (excludeHints != null &&
+          excludeHints.any((h) => blob.contains(h))) {
+        continue;
+      }
+      var score = 0;
+      for (final hint in hints) {
+        if (lower == hint) {
+          score += 100;
+        } else if (lower.contains(hint)) {
+          score += 40;
+        }
+        if (label.contains(hint)) score += 20;
+      }
+      if (score > 0) scored.add((key: key, score: score));
+    }
+    scored.sort((a, b) => b.score.compareTo(a.score));
+    return scored.map((e) => e.key).toList(growable: false);
+  }
+
+  /// Known pharmacy invoice header aliases (website / custom modules).
+  static const List<String> _doctorFieldCandidates = [
+    'doctor_name',
+    'doctor',
+    'doctor_id',
+    'physician_id',
+    'physician',
+    'physician_name',
+    'prescriber_id',
+    'prescriber',
+    'prescriber_name',
+    'dr_name',
+    'doc_name',
+  ];
+
+  static const List<String> _expenseTextFieldCandidates = [
+    'customer_expense',
+    'expense',
+    'expense_note',
+    'expense_text',
+    'expenses',
+    'expense_description',
+    'expense_name',
+    'other_expense',
+  ];
+
+  static const List<String> _expenseAmtFieldCandidates = [
+    'customer_expense_amount',
+    'expense_amt',
+    'expense_amount',
+    'expenses_amt',
+    'expense_total',
+    'other_charge',
+    'other_charges',
+    'other_expense_amount',
+  ];
+
+  static Future<void> _putCustomerInvoiceDoctorFields({
+    required String sessionId,
+    required Set<String> available,
+    required Map<String, Map<String, dynamic>> moveMeta,
+    required Map<String, dynamic> vals,
+    required String doctorName,
+    int? doctorId,
+  }) async {
+    // Empty doctor: leave existing Odoo value alone (do not wipe on save).
+    if (doctorName.isEmpty && doctorId == null) return;
+
+    bool exists(String key) =>
+        available.contains(key) || moveMeta.containsKey(key);
+    String? typeOf(String key) => moveMeta[key]?['type']?.toString();
+
+    final keys = <String>{
+      ..._moveFieldsMatching(
+        available,
+        moveMeta,
+        hints: const [
+          'doctor',
+          'physician',
+          'prescriber',
+          'dr_name',
+          'doc_name',
+        ],
+        types: const ['many2one', 'char', 'text'],
+      ),
+      for (final key in _doctorFieldCandidates)
+        if (exists(key)) key,
+    };
+
+    final m2oKeys = <String>[];
+    final charKeys = <String>[];
+    for (final key in keys) {
+      if (!exists(key)) continue;
+      final t = typeOf(key);
+      if (t == 'many2one') {
+        m2oKeys.add(key);
+      } else if (t == 'char' || t == 'text') {
+        charKeys.add(key);
+      } else if (t == null) {
+        if (key.endsWith('_id')) {
+          m2oKeys.add(key);
+        } else {
+          charKeys.add(key);
+        }
+      }
+    }
+
+    int? resolved = doctorId;
+    if (resolved == null && doctorName.isNotEmpty && m2oKeys.isNotEmpty) {
+      final relModels = <String>[];
+      for (final key in m2oKeys) {
+        final rel = moveMeta[key]?['relation']?.toString().trim();
+        if (rel != null && rel.isNotEmpty && !relModels.contains(rel)) {
+          relModels.add(rel);
+        }
+      }
+      for (final extra in const [
+        'res.partner',
+        'pharmacy.doctor',
+        'hr.employee',
+      ]) {
+        if (!relModels.contains(extra)) relModels.add(extra);
+      }
+      resolved = await findOrCreateNamedRecord(
+        sessionId,
+        models: relModels,
+        name: doctorName,
+      );
+    }
+
+    if (resolved != null) {
+      for (final key in m2oKeys) {
+        vals[key] = resolved;
+      }
+    }
+
+    if (doctorName.isNotEmpty) {
+      for (final key in charKeys) {
+        vals[key] = doctorName;
+      }
+      // Char mirror so reopen shows a name even if Many2one resolve failed.
+      for (final key in const ['doctor_name', 'doctor', 'physician_name']) {
+        if (exists(key) &&
+            typeOf(key) != 'many2one' &&
+            !vals.containsKey(key)) {
+          vals[key] = doctorName;
+        }
+      }
+    }
+  }
+
+  static void _putCustomerInvoiceExpenseFields({
+    required Set<String> available,
+    required Map<String, Map<String, dynamic>> moveMeta,
+    required Map<String, dynamic> vals,
+    required String expense,
+    double? expenseAmt,
+  }) {
+    // Empty expense: leave existing Odoo values alone.
+    if (expense.isEmpty && (expenseAmt == null || expenseAmt == 0)) return;
+
+    bool exists(String key) =>
+        available.contains(key) || moveMeta.containsKey(key);
+    String? typeOf(String key) => moveMeta[key]?['type']?.toString();
+
+    final textTargets = <String>{
+      ..._moveFieldsMatching(
+        available,
+        moveMeta,
+        hints: const ['expense'],
+        types: const ['char', 'text'],
+        excludeHints: const ['amount', 'amt', 'total', 'percent'],
+      ),
+      for (final key in _expenseTextFieldCandidates)
+        if (exists(key)) key,
+    };
+
+    final amountTargets = <String>{
+      ..._moveFieldsMatching(
+        available,
+        moveMeta,
+        hints: const [
+          'expense_amt',
+          'expense_amount',
+          'expense amount',
+        ],
+        types: const ['float', 'monetary', 'integer'],
+      ),
+      for (final key in _expenseAmtFieldCandidates)
+        if (exists(key)) key,
+    };
+
+    for (final key in {...available, ...moveMeta.keys}) {
+      final lower = key.toLowerCase();
+      if (!lower.contains('expense') && !lower.contains('other_charge')) {
+        continue;
+      }
+      final t = typeOf(key);
+      if (t == 'float' || t == 'monetary' || t == 'integer') {
+        amountTargets.add(key);
+      } else if (t == 'char' || t == 'text') {
+        if (!lower.contains('amount') && !lower.contains('amt')) {
+          textTargets.add(key);
+        }
+      }
+    }
+
+    if (expense.isNotEmpty) {
+      for (final key in textTargets) {
+        if (!exists(key)) continue;
+        final t = typeOf(key);
+        if (t == 'float' || t == 'monetary' || t == 'integer') continue;
+        vals[key] = expense;
+      }
+    }
+
+    if (expenseAmt != null && expenseAmt != 0) {
+      for (final key in amountTargets) {
+        if (!exists(key)) continue;
+        final t = typeOf(key);
+        if (t == 'char' || t == 'text') continue;
+        if (key == 'expense' && (t == null || t == 'char' || t == 'text')) {
+          continue;
+        }
+        vals[key] = expenseAmt;
+      }
+    }
+  }
+
+  /// When fields_get misses custom pharmacy fields, try writing aliases one-by-one.
+  static Future<void> _probeWriteDoctorExpenseFields({
+    required String sessionId,
+    required int invoiceId,
+    required String doctorName,
+    int? doctorId,
+    required String expense,
+    double? expenseAmt,
+    required Map<String, dynamic> alreadyWritten,
+  }) async {
+    Future<bool> tryWrite(Map<String, dynamic> chunk) async {
+      if (chunk.isEmpty) return false;
+      try {
+        await callKw(
+          sessionId: sessionId,
+          model: 'account.move',
+          method: 'write',
+          args: [
+            [invoiceId],
+            chunk,
+          ],
+        );
+        if (kDebugMode) {
+          debugPrint(
+            'updateCustomerInvoiceHeader #$invoiceId probe ok → $chunk',
+          );
+        }
+        return true;
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint(
+            'updateCustomerInvoiceHeader #$invoiceId probe fail $chunk: $e',
+          );
+        }
+        return false;
+      }
+    }
+
+    final wroteDoctor = alreadyWritten.keys.any((k) {
+      final lower = k.toString().toLowerCase();
+      return lower.contains('doctor') ||
+          lower.contains('physician') ||
+          lower.contains('prescriber');
+    });
+    if (!wroteDoctor && (doctorName.isNotEmpty || doctorId != null)) {
+      if (doctorId != null) {
+        for (final key in const [
+          'doctor_id',
+          'doctor',
+          'physician_id',
+          'prescriber_id',
+        ]) {
+          if (await tryWrite({key: doctorId})) break;
+        }
+      }
+      if (doctorName.isNotEmpty) {
+        // Resolve once for Many2one probes.
+        final resolved = doctorId ??
+            await findOrCreateNamedRecord(
+              sessionId,
+              models: const [
+                'res.partner',
+                'pharmacy.doctor',
+                'hr.employee',
+              ],
+              name: doctorName,
+            );
+        var ok = false;
+        if (resolved != null) {
+          for (final key in const [
+            'doctor_id',
+            'doctor',
+            'physician_id',
+            'prescriber_id',
+          ]) {
+            if (await tryWrite({key: resolved})) {
+              ok = true;
+              break;
+            }
+          }
+        }
+        if (!ok) {
+          for (final key in const [
+            'doctor_name',
+            'doctor',
+            'physician_name',
+            'prescriber_name',
+            'dr_name',
+            'doc_name',
+          ]) {
+            if (await tryWrite({key: doctorName})) break;
+          }
+        }
+      }
+    }
+
+    final wroteExpenseText = alreadyWritten.keys.any((k) {
+      final lower = k.toString().toLowerCase();
+      return lower.contains('expense') &&
+          !lower.contains('amt') &&
+          !lower.contains('amount') &&
+          !lower.contains('total') &&
+          !lower.contains('charge');
+    });
+    if (!wroteExpenseText && expense.isNotEmpty) {
+      for (final key in _expenseTextFieldCandidates) {
+        if (await tryWrite({key: expense})) break;
+      }
+    }
+
+    final wroteExpenseAmt = alreadyWritten.keys.any((k) {
+      final lower = k.toString().toLowerCase();
+      return lower.contains('expense') &&
+              (lower.contains('amt') ||
+                  lower.contains('amount') ||
+                  lower.contains('total')) ||
+          lower.contains('other_charge');
+    });
+    if (!wroteExpenseAmt && expenseAmt != null && expenseAmt != 0) {
+      for (final key in _expenseAmtFieldCandidates) {
+        if (await tryWrite({key: expenseAmt})) break;
+      }
     }
   }
 
@@ -1936,16 +3318,55 @@ class OdooRpcHelper {
           }
         }
       }
+      // Fallback: first result.
       final first = result.first;
       if (first is List && first.isNotEmpty) {
         final id = first[0];
         if (id is int) return id;
         return int.tryParse(id?.toString() ?? '');
       }
+      return null;
     } catch (e) {
       if (kDebugMode) debugPrint('_findPartnerIdByName failed: $e');
+      return null;
     }
-    return null;
+  }
+
+  static Future<int?> _findRecordIdByName(
+    String sessionId,
+    String model,
+    String name,
+  ) async {
+    final want = name.trim();
+    if (want.isEmpty || model.trim().isEmpty) return null;
+    try {
+      final result = await callKw(
+        sessionId: sessionId,
+        model: model,
+        method: 'name_search',
+        args: [want, [], 'ilike', 8],
+      );
+      if (result is! List || result.isEmpty) return null;
+      for (final row in result) {
+        if (row is! List || row.length < 2) continue;
+        final label = row[1]?.toString().trim().toLowerCase() ?? '';
+        if (label == want.toLowerCase() || label.startsWith(want.toLowerCase())) {
+          final id = row[0];
+          if (id is int) return id;
+          return int.tryParse(id?.toString() ?? '');
+        }
+      }
+      final first = result.first;
+      if (first is List && first.isNotEmpty) {
+        final id = first[0];
+        if (id is int) return id;
+        return int.tryParse(id?.toString() ?? '');
+      }
+      return null;
+    } catch (e) {
+      if (kDebugMode) debugPrint('_findRecordIdByName($model) failed: $e');
+      return null;
+    }
   }
 
   /// Load partner names for Customer & Doctor dropdowns.
@@ -2800,17 +4221,41 @@ class OdooRpcHelper {
     return const {};
   }
 
-  /// Fill missing HSN from `pharmacy.group.hsn` (website stores HSN on group).
+  /// Fill missing HSN / tax from `pharmacy.group` (website stores HSN + tax on group).
+  ///
+  /// Odoo rejects the whole `search_read` if any requested field is invalid —
+  /// this server exposes `hsn` + `tax`, not `tax_percent`.
   static Future<void> _fillHsnFromPharmacyGroup(
     String sessionId,
     Map<String, String> defaults, {
     required String potencyName,
     int? potencyId,
   }) async {
-    if ((defaults['hsn'] ?? '').trim().isNotEmpty) return;
+    final needHsn = (defaults['hsn'] ?? '').trim().isEmpty;
+    final needTax = (defaults['tax'] ?? '').trim().isEmpty;
+    if (!needHsn && !needTax) return;
     final groupName = (defaults['group'] ?? '').trim();
     if (groupName.isEmpty) return;
     try {
+      final available = await _modelFields(sessionId, 'pharmacy.group');
+      if (available.isEmpty) return;
+      final fields = <String>['id', 'name'];
+      for (final f in const [
+        'display_name',
+        'hsn',
+        'tax',
+        'tax_percent',
+        'gst',
+        'gst_percent',
+        'type',
+      ]) {
+        if (available.contains(f)) fields.add(f);
+      }
+      final canHsn = fields.contains('hsn');
+      final canTax = fields.any(
+        (f) => f == 'tax' || f == 'tax_percent' || f.contains('gst'),
+      );
+      if (!(needHsn && canHsn) && !(needTax && canTax)) return;
       final found = await callKw(
         sessionId: sessionId,
         model: 'pharmacy.group',
@@ -2823,18 +4268,25 @@ class OdooRpcHelper {
           ],
         ],
         kwargs: {
-          'fields': ['id', 'name', 'hsn', 'tax_percent', 'gst', 'gst_percent', 'tax', 'type'],
+          'fields': fields,
           'limit': 3,
         },
       );
       if (found is! List || found.isEmpty) return;
       for (final row in found.whereType<Map>()) {
         final map = _normalizeOdooMap(Map<String, dynamic>.from(row));
-        final hsn = (map['hsn'] ?? '').toString().trim();
-        if (hsn.isEmpty || hsn == 'false') continue;
-        defaults['hsn'] = hsn;
-        _applyTaxFromGroupMap(defaults, map);
-        return;
+        if (needHsn && (defaults['hsn'] ?? '').trim().isEmpty) {
+          final hsn = (map['hsn'] ?? '').toString().trim();
+          if (hsn.isNotEmpty && hsn != 'false') {
+            defaults['hsn'] = hsn;
+          }
+        }
+        if (needTax) {
+          _applyTaxFromGroupMap(defaults, map);
+        }
+        final hsnOk = !needHsn || (defaults['hsn'] ?? '').trim().isNotEmpty;
+        final taxOk = !needTax || (defaults['tax'] ?? '').trim().isNotEmpty;
+        if (hsnOk && taxOk) return;
       }
     } catch (e) {
       if (kDebugMode) debugPrint('_fillHsnFromPharmacyGroup: $e');
@@ -2842,16 +4294,17 @@ class OdooRpcHelper {
   }
 
   /// Map pharmacy.group tax/gst fields into potency defaults.
+  /// Prefer `tax` (this Odoo schema) before legacy `tax_percent`.
   static void _applyTaxFromGroupMap(
     Map<String, String> defaults,
     Map<String, dynamic> map,
   ) {
     if ((defaults['tax'] ?? '').trim().isNotEmpty) return;
     for (final key in const [
+      'tax',
       'tax_percent',
       'gst_percent',
       'gst',
-      'tax',
     ]) {
       final raw = map[key];
       if (raw == null || raw == false) continue;
@@ -2877,11 +4330,26 @@ class OdooRpcHelper {
   static final Map<String, Map<String, Map<String, dynamic>>> _fieldsMetaCache =
       {};
 
+  /// True when Odoo rejects the model (`KeyError`, or Flutter wraps as
+  /// `Exception: pharmacy.medicine.company`).
+  static bool _isMissingModelError(String model, Object error) {
+    final msg = error.toString().trim();
+    final lower = msg.toLowerCase();
+    if (lower.contains('keyerror') || lower.contains('does not exist')) {
+      return true;
+    }
+    final bare = 'exception: ${model.toLowerCase()}';
+    return lower == bare || lower.startsWith('$bare\n');
+  }
+
   /// fields_get with type + relation (for one2many / many2one discovery).
   static Future<Map<String, Map<String, dynamic>>> _fieldsMeta(
     String sessionId,
     String model,
   ) async {
+    if (_missingModels.contains(model)) {
+      return const <String, Map<String, dynamic>>{};
+    }
     final cached = _fieldsMetaCache[model];
     if (cached != null) return cached;
     try {
@@ -2909,6 +4377,9 @@ class OdooRpcHelper {
       }
     } catch (e) {
       if (kDebugMode) debugPrint('fields_meta $model: $e');
+      if (_isMissingModelError(model, e)) {
+        _missingModels.add(model);
+      }
     }
     return const <String, Map<String, dynamic>>{};
   }
@@ -3183,8 +4654,6 @@ class OdooRpcHelper {
       sessionId,
       models: const [
         'pharmacy.group',
-        'pharmacy.medicine.group',
-        'product.group',
       ],
     );
   }
@@ -3194,10 +4663,113 @@ class OdooRpcHelper {
       sessionId,
       models: const [
         'pharmacy.company',
-        'pharmacy.medicine.company',
       ],
       limit: 5000,
     );
+  }
+
+  /// Discount % configured on pharmacy.company (when present).
+  static Future<double?> fetchCompanyDiscount(
+    String sessionId,
+    String companyName,
+  ) {
+    return _fetchMasterNamedDiscount(
+      sessionId,
+      name: companyName,
+      models: const ['pharmacy.company'],
+    );
+  }
+
+  /// Discount % configured on pharmacy.group (when present).
+  static Future<double?> fetchGroupDiscount(
+    String sessionId,
+    String groupName,
+  ) {
+    return _fetchMasterNamedDiscount(
+      sessionId,
+      name: groupName,
+      models: const [
+        'pharmacy.group',
+      ],
+    );
+  }
+
+  static Future<double?> _fetchMasterNamedDiscount(
+    String sessionId, {
+    required String name,
+    required List<String> models,
+  }) async {
+    final want = name.trim();
+    if (want.isEmpty) return null;
+    const discountFields = <String>[
+      'discount',
+      'discount_percent',
+      'discount_percentage',
+      'dis',
+      'dis_percent',
+      'cus_dis',
+      'percentage',
+    ];
+    for (final model in models) {
+      try {
+        final available = await _modelFields(sessionId, model);
+        if (available.isEmpty) continue;
+        final fields = <String>['id', 'name', 'display_name'];
+        for (final f in discountFields) {
+          if (available.contains(f)) fields.add(f);
+        }
+        if (fields.length <= 3) continue;
+
+        final rows = await callKw(
+          sessionId: sessionId,
+          model: model,
+          method: 'search_read',
+          args: [
+            [
+              '|',
+              ['name', '=', want],
+              ['name', 'ilike', want],
+            ],
+          ],
+          kwargs: {
+            'fields': fields,
+            'limit': 8,
+            'order': 'name asc',
+          },
+        );
+        if (rows is! List || rows.isEmpty) continue;
+
+        Map<String, dynamic>? exact;
+        Map<String, dynamic>? soft;
+        for (final raw in rows.whereType<Map>()) {
+          final map = _normalizeOdooMap(Map<String, dynamic>.from(raw));
+          final n = (map['name'] ?? map['display_name'] ?? '')
+              .toString()
+              .trim()
+              .toLowerCase();
+          if (n == want.toLowerCase()) {
+            exact = map;
+            break;
+          }
+          soft ??= map;
+        }
+        final chosen = exact ?? soft;
+        if (chosen == null) continue;
+        for (final f in discountFields) {
+          final raw = chosen[f];
+          if (raw == null || raw == false) continue;
+          final v = raw is num
+              ? raw.toDouble()
+              : double.tryParse(raw.toString().replaceAll(',', ''));
+          if (v != null && v > 0) return v;
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('_fetchMasterNamedDiscount($model "$want"): $e');
+        }
+      }
+    }
+    return null;
   }
 
   static Future<List<String>> searchPackingNames(String sessionId) {
@@ -3244,6 +4816,785 @@ class OdooRpcHelper {
       if (kDebugMode) debugPrint('searchCustomerDiscounts: $e');
       return const [];
     }
+  }
+
+  /// Cached discovery: pharmacy.customer → cus.discount many2one field name.
+  static String? _customerPriceCategoryField;
+  static String? _cusDiscountLinesField;
+  static String? _cusDiscountLineModel;
+  /// Per line-model field map (company/group/potency/packing/discount).
+  static final Map<String, Map<String, String>> _cusDiscountLineFieldMaps = {};
+  static Map<String, String>? _cusDiscountLineFieldMap;
+
+  /// Price Category (A/B/…) + Group Discount rules for a pharmacy customer.
+  ///
+  /// Matches the website form: customer has a Price Category; that category
+  /// holds Group Discount lines (Company / Group / Potency / Packing → %).
+  static Future<CustomerPriceCategoryInfo?> readCustomerPriceCategory(
+    String sessionId, {
+    int? customerId,
+    String? customerName,
+  }) async {
+    try {
+      final catField = await _discoverCustomerPriceCategoryField(sessionId);
+      if (catField == null) return null;
+
+      Map<String, dynamic>? cust;
+      if (customerId != null && customerId > 0) {
+        final available = await _modelFields(sessionId, 'pharmacy.customer');
+        final fields = <String>['id', 'name', catField];
+        if (available.contains('display_name')) fields.add('display_name');
+        final rows = await callKw(
+          sessionId: sessionId,
+          model: 'pharmacy.customer',
+          method: 'read',
+          args: [
+            [customerId],
+            fields,
+          ],
+        );
+        if (rows is List && rows.isNotEmpty && rows.first is Map) {
+          cust = _normalizeOdooMap(Map<String, dynamic>.from(rows.first as Map));
+        }
+      }
+      if (cust == null && (customerName ?? '').trim().isNotEmpty) {
+        final want = customerName!.trim();
+        final rows = await callKw(
+          sessionId: sessionId,
+          model: 'pharmacy.customer',
+          method: 'search_read',
+          args: [
+            [
+              ['name', '=', want],
+            ],
+          ],
+          kwargs: {
+            'fields': ['id', 'name', catField],
+            'limit': 1,
+          },
+        );
+        if (rows is List && rows.isNotEmpty && rows.first is Map) {
+          cust = _normalizeOdooMap(Map<String, dynamic>.from(rows.first as Map));
+        }
+      }
+      if (cust == null) return null;
+
+      final catIdRaw = cust[catField];
+      final catId = catIdRaw is int
+          ? catIdRaw
+          : int.tryParse(catIdRaw?.toString() ?? '');
+      if (catId == null || catId <= 0) return null;
+
+      final catName = (cust['${catField}_name'] ?? '').toString().trim();
+      return readPriceCategoryInfo(sessionId, catId, fallbackName: catName);
+    } catch (e) {
+      if (kDebugMode) debugPrint('readCustomerPriceCategory: $e');
+      return null;
+    }
+  }
+
+  /// Load a Price Category (`cus.discount`) and its Group Discount lines.
+  static Future<CustomerPriceCategoryInfo?> readPriceCategoryInfo(
+    String sessionId,
+    int categoryId, {
+    String? fallbackName,
+  }) async {
+    if (categoryId <= 0) return null;
+    try {
+      final available = await _modelFields(sessionId, 'cus.discount');
+      final fields = <String>['id'];
+      for (final f in const [
+        'cus_dis',
+        'name',
+        'display_name',
+        'discount_type',
+        'percentage',
+      ]) {
+        if (available.contains(f)) fields.add(f);
+      }
+      final linesField = await _discoverCusDiscountLinesField(sessionId);
+      if (linesField != null && available.contains(linesField)) {
+        fields.add(linesField);
+      }
+
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'cus.discount',
+        method: 'read',
+        args: [
+          [categoryId],
+          fields,
+        ],
+      );
+      if (rows is! List || rows.isEmpty || rows.first is! Map) return null;
+      final map = _normalizeOdooMap(Map<String, dynamic>.from(rows.first as Map));
+
+      final name = (map['cus_dis'] ??
+              map['display_name'] ??
+              map['name'] ??
+              fallbackName ??
+              '')
+          .toString()
+          .trim();
+      final type = (map['discount_type'] ?? 'percentage')
+          .toString()
+          .trim()
+          .toLowerCase();
+      final rateRaw = map['percentage'];
+      final rate = rateRaw is num
+          ? rateRaw.toDouble()
+          : double.tryParse('$rateRaw');
+
+      final rules = await _readGroupDiscountRules(
+        sessionId,
+        categoryId: categoryId,
+        categoryRow: map,
+        linesField: linesField,
+      );
+
+      return CustomerPriceCategoryInfo(
+        categoryId: categoryId,
+        categoryName: name.isEmpty ? (fallbackName ?? 'Category') : name,
+        discountType: type.contains('amount') ? 'amount' : 'percentage',
+        headerPercentage: rate,
+        groupRules: rules,
+      );
+    } catch (e) {
+      if (kDebugMode) debugPrint('readPriceCategoryInfo #$categoryId: $e');
+      return null;
+    }
+  }
+
+  static Future<String?> _discoverCustomerPriceCategoryField(
+    String sessionId,
+  ) async {
+    if (_customerPriceCategoryField != null) {
+      return _customerPriceCategoryField;
+    }
+    final meta = await _fieldsMeta(sessionId, 'pharmacy.customer');
+    if (meta.isEmpty) return null;
+
+    String? best;
+    var bestScore = -1;
+    for (final e in meta.entries) {
+      final info = e.value;
+      final type = (info['type'] ?? '').toString();
+      if (type != 'many2one') continue;
+      final rel = (info['relation'] ?? '').toString();
+      final name = e.key;
+      final label = (info['string'] ?? '').toString().toLowerCase();
+      final blob = '$name $label $rel'.toLowerCase();
+      var score = 0;
+      if (rel == 'cus.discount') score += 100;
+      if (name.contains('discount_category')) score += 50;
+      if (name.contains('price_category')) score += 50;
+      if (name.contains('cus_discount') || name.contains('cus_dis')) score += 40;
+      if (label.contains('price category') || label.contains('discount category')) {
+        score += 30;
+      }
+      if (blob.contains('discount') && blob.contains('categor')) score += 20;
+      if (score > bestScore) {
+        bestScore = score;
+        best = name;
+      }
+    }
+    if (best != null && bestScore >= 40) {
+      _customerPriceCategoryField = best;
+      if (kDebugMode) {
+        debugPrint('pharmacy.customer price category field: $best');
+      }
+      return best;
+    }
+    return null;
+  }
+
+  static Future<String?> _discoverCusDiscountLinesField(String sessionId) async {
+    if (_cusDiscountLinesField != null) return _cusDiscountLinesField;
+    final meta = await _fieldsMeta(sessionId, 'cus.discount');
+    if (meta.isEmpty) return null;
+
+    String? best;
+    var bestScore = -1;
+    for (final e in meta.entries) {
+      final info = e.value;
+      final type = (info['type'] ?? '').toString();
+      if (type != 'one2many') continue;
+      final name = e.key;
+      final label = (info['string'] ?? '').toString().toLowerCase();
+      final rel = (info['relation'] ?? '').toString();
+      final blob = '$name $label $rel'.toLowerCase();
+      var score = 0;
+      if (label.contains('group discount')) score += 100;
+      if (name.contains('group_discount')) score += 80;
+      if (blob.contains('group') && blob.contains('discount')) score += 40;
+      if (name.contains('line') && blob.contains('discount')) score += 20;
+      if (score > bestScore) {
+        bestScore = score;
+        best = name;
+        _cusDiscountLineModel = rel.isNotEmpty ? rel : _cusDiscountLineModel;
+      }
+    }
+    if (best != null && bestScore >= 20) {
+      _cusDiscountLinesField = best;
+      final rel = meta[best]?['relation']?.toString();
+      if (rel != null && rel.isNotEmpty) _cusDiscountLineModel = rel;
+      if (kDebugMode) {
+        debugPrint(
+          'cus.discount lines field=$best model=$_cusDiscountLineModel',
+        );
+      }
+      return best;
+    }
+    return null;
+  }
+
+  static Future<Map<String, String>> _discoverGroupDiscountLineFields(
+    String sessionId,
+    String lineModel,
+  ) async {
+    final perModel = _cusDiscountLineFieldMaps[lineModel];
+    if (perModel != null && perModel.isNotEmpty) return perModel;
+    final cached = _cusDiscountLineFieldMap;
+    if (cached != null &&
+        cached.isNotEmpty &&
+        _cusDiscountLineModel == lineModel) {
+      return cached;
+    }
+
+    final meta = await _fieldsMeta(sessionId, lineModel);
+    final map = <String, String>{};
+
+    String? pick({
+      required List<String> preferNames,
+      required List<String> labelHints,
+      required List<String> types,
+    }) {
+      String? best;
+      var bestScore = -1;
+      for (final e in meta.entries) {
+        final type = (e.value['type'] ?? '').toString();
+        if (!types.contains(type)) continue;
+        final name = e.key.toLowerCase();
+        final label = (e.value['string'] ?? '').toString().toLowerCase();
+        var score = 0;
+        for (final p in preferNames) {
+          if (name == p || name.endsWith('_$p') || name.contains(p)) {
+            score += 50;
+          }
+        }
+        for (final h in labelHints) {
+          if (label == h || label.contains(h)) score += 30;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          best = e.key;
+        }
+      }
+      return bestScore >= 30 ? best : null;
+    }
+
+    final company = pick(
+      preferNames: const [
+        'company_id',
+        'pharmacy_company_id',
+        'company',
+      ],
+      labelHints: const ['company'],
+      types: const ['many2one', 'char'],
+    );
+    final group = pick(
+      preferNames: const [
+        'group_id',
+        'pharmacy_group_id',
+        'group',
+      ],
+      labelHints: const ['group'],
+      types: const ['many2one', 'char'],
+    );
+    final potency = pick(
+      preferNames: const ['potency_id', 'potency'],
+      labelHints: const ['potency'],
+      types: const ['many2one', 'char'],
+    );
+    final packing = pick(
+      preferNames: const [
+        'packing_id',
+        'pack_id',
+        'packing',
+        'pack',
+      ],
+      labelHints: const ['packing', 'pack'],
+      types: const ['many2one', 'char'],
+    );
+    final discount = pick(
+      preferNames: const [
+        'discount',
+        'discount_percent',
+        'discount_percentage',
+        'percentage',
+        'dis',
+      ],
+      labelHints: const ['discount'],
+      types: const ['float', 'monetary', 'integer', 'char'],
+    );
+
+    if (company != null) map['company'] = company;
+    if (group != null) map['group'] = group;
+    if (potency != null) map['potency'] = potency;
+    if (packing != null) map['packing'] = packing;
+    if (discount != null) map['discount'] = discount;
+
+    _cusDiscountLineFieldMaps[lineModel] = map;
+    _cusDiscountLineFieldMap = map;
+    _cusDiscountLineModel ??= lineModel;
+    if (kDebugMode) debugPrint('group discount line fields ($lineModel): $map');
+    return map;
+  }
+
+  static Future<List<PriceCategoryGroupDiscountRule>> _readGroupDiscountRules(
+    String sessionId, {
+    required int categoryId,
+    required Map<String, dynamic> categoryRow,
+    required String? linesField,
+  }) async {
+    // Path 1: one2many / child lines hanging off cus.discount (older layouts).
+    final fromCus = await _readGroupDiscountRulesFromLineModel(
+      sessionId,
+      categoryId: categoryId,
+      categoryRow: categoryRow,
+      linesField: linesField,
+      lineModel: _cusDiscountLineModel,
+    );
+    if (fromCus.isNotEmpty) return fromCus;
+
+    // Path 2: website menu Inventory → Customer Group Discount
+    // (model `customer.group.discount` with Price Category = A/B/…).
+    final fromStandalone = await _readRulesFromCustomerGroupDiscount(
+      sessionId,
+      categoryId,
+    );
+    if (kDebugMode) {
+      debugPrint(
+        'price category #$categoryId group discount rules='
+        '${fromStandalone.length} (via customer.group.discount)',
+      );
+    }
+    return fromStandalone;
+  }
+
+  static Future<List<PriceCategoryGroupDiscountRule>>
+      _readGroupDiscountRulesFromLineModel(
+    String sessionId, {
+    required int categoryId,
+    required Map<String, dynamic> categoryRow,
+    required String? linesField,
+    required String? lineModel,
+  }) async {
+    if (lineModel == null || lineModel.isEmpty) return const [];
+
+    final fieldMap =
+        await _discoverGroupDiscountLineFields(sessionId, lineModel);
+    if (fieldMap.isEmpty || fieldMap['discount'] == null) return const [];
+
+    final readFields = <String>['id', ...fieldMap.values];
+    List<Map<String, dynamic>> rows = [];
+
+    if (linesField != null) {
+      final ids = _odooIds(categoryRow[linesField]);
+      if (ids.isNotEmpty) {
+        final result = await callKw(
+          sessionId: sessionId,
+          model: lineModel,
+          method: 'read',
+          args: [ids, readFields],
+        );
+        if (result is List) {
+          rows = result
+              .whereType<Map>()
+              .map((e) => _normalizeOdooMap(Map<String, dynamic>.from(e)))
+              .toList();
+        }
+      }
+    }
+
+    if (rows.isEmpty) {
+      final lineMeta = await _fieldsMeta(sessionId, lineModel);
+      String? parentField;
+      for (final e in lineMeta.entries) {
+        if ((e.value['type'] ?? '').toString() != 'many2one') continue;
+        if ((e.value['relation'] ?? '').toString() != 'cus.discount') continue;
+        parentField = e.key;
+        break;
+      }
+      parentField ??= lineMeta.keys.firstWhere(
+        (k) =>
+            k.contains('discount') &&
+            (lineMeta[k]?['type']?.toString() == 'many2one'),
+        orElse: () => '',
+      );
+      if (parentField.isNotEmpty) {
+        final result = await callKw(
+          sessionId: sessionId,
+          model: lineModel,
+          method: 'search_read',
+          args: [
+            [
+              [parentField, '=', categoryId],
+            ],
+          ],
+          kwargs: {
+            'fields': readFields,
+            'limit': 500,
+          },
+        );
+        if (result is List) {
+          rows = result
+              .whereType<Map>()
+              .map((e) => _normalizeOdooMap(Map<String, dynamic>.from(e)))
+              .toList();
+        }
+      }
+    }
+
+    return _rulesFromDiscountRows(rows, fieldMap);
+  }
+
+  /// Load Group Discount matrix from `customer.group.discount` (screenshot form).
+  ///
+  /// Layout: header has Price Category (→ `cus.discount`); tab "Group Discount"
+  /// holds Company / Group / Potency / Packing / Discount (%) lines.
+  static Future<List<PriceCategoryGroupDiscountRule>>
+      _readRulesFromCustomerGroupDiscount(
+    String sessionId,
+    int categoryId,
+  ) async {
+    const headerModel = 'customer.group.discount';
+    try {
+      final headerMeta = await _fieldsMeta(sessionId, headerModel);
+      if (headerMeta.isEmpty) return const [];
+
+      // Price Category many2one on the header.
+      String? catField;
+      var catScore = -1;
+      for (final e in headerMeta.entries) {
+        final type = (e.value['type'] ?? '').toString();
+        if (type != 'many2one') continue;
+        final rel = (e.value['relation'] ?? '').toString();
+        final label = (e.value['string'] ?? '').toString().toLowerCase();
+        final name = e.key.toLowerCase();
+        var score = 0;
+        if (rel == 'cus.discount') score += 100;
+        if (label.contains('price category') ||
+            label.contains('discount category')) {
+          score += 50;
+        }
+        if (name.contains('price_category') ||
+            name.contains('discount_category') ||
+            name.contains('cus_discount') ||
+            name.contains('cus_dis')) {
+          score += 40;
+        }
+        if (score > catScore) {
+          catScore = score;
+          catField = e.key;
+        }
+      }
+      if (catField == null || catScore < 40) return const [];
+
+      // one2many "Group Discount" lines on the header (preferred).
+      String? linesField;
+      String? lineModel;
+      var lineScore = -1;
+      for (final e in headerMeta.entries) {
+        final type = (e.value['type'] ?? '').toString();
+        if (type != 'one2many') continue;
+        final label = (e.value['string'] ?? '').toString().toLowerCase();
+        final name = e.key.toLowerCase();
+        final rel = (e.value['relation'] ?? '').toString();
+        var score = 0;
+        if (label.contains('group discount')) score += 100;
+        if (name.contains('group_discount') || name.contains('line')) {
+          score += 40;
+        }
+        if (rel.contains('group.discount') || rel.contains('discount.line')) {
+          score += 30;
+        }
+        if (score > lineScore) {
+          lineScore = score;
+          linesField = e.key;
+          lineModel = rel.isNotEmpty ? rel : null;
+        }
+      }
+
+      final headers = await callKw(
+        sessionId: sessionId,
+        model: headerModel,
+        method: 'search_read',
+        args: [
+          [
+            [catField, '=', categoryId],
+          ],
+        ],
+        kwargs: {
+          'fields': [
+            'id',
+            catField,
+            if (linesField != null) linesField,
+          ],
+          'limit': 50,
+        },
+      );
+      List headerList = headers is List ? headers : const [];
+      if (headerList.isEmpty) {
+        // Some DBs link by category name / display instead of id only.
+        final catRows = await callKw(
+          sessionId: sessionId,
+          model: 'cus.discount',
+          method: 'read',
+          args: [
+            [categoryId],
+            ['id', 'cus_dis', 'display_name', 'name'],
+          ],
+        );
+        String? catName;
+        if (catRows is List &&
+            catRows.isNotEmpty &&
+            catRows.first is Map) {
+          final m = _normalizeOdooMap(
+            Map<String, dynamic>.from(catRows.first as Map),
+          );
+          catName = (m['cus_dis'] ?? m['display_name'] ?? m['name'] ?? '')
+              .toString()
+              .trim();
+        }
+        if (catName != null && catName.isNotEmpty) {
+          final byName = await callKw(
+            sessionId: sessionId,
+            model: headerModel,
+            method: 'search_read',
+            args: [
+              [
+                [catField, 'ilike', catName],
+              ],
+            ],
+            kwargs: {
+              'fields': [
+                'id',
+                catField,
+                if (linesField != null) linesField,
+              ],
+              'limit': 50,
+            },
+          );
+          if (byName is List) headerList = byName;
+        }
+      }
+      if (headerList.isEmpty) {
+        return const [];
+      }
+
+      final headerRows = headerList
+          .whereType<Map>()
+          .map((e) => _normalizeOdooMap(Map<String, dynamic>.from(e)))
+          .toList();
+
+      // Case A: lines live on a child model via one2many.
+      if (linesField != null &&
+          lineModel != null &&
+          lineModel.isNotEmpty &&
+          lineScore >= 30) {
+        final fieldMap =
+            await _discoverGroupDiscountLineFields(sessionId, lineModel);
+        if (fieldMap['discount'] != null) {
+          final ids = <int>[];
+          for (final h in headerRows) {
+            ids.addAll(_odooIds(h[linesField]));
+          }
+          if (ids.isNotEmpty) {
+            final result = await callKw(
+              sessionId: sessionId,
+              model: lineModel,
+              method: 'read',
+              args: [
+                ids,
+                ['id', ...fieldMap.values],
+              ],
+            );
+            if (result is List) {
+              final rows = result
+                  .whereType<Map>()
+                  .map((e) => _normalizeOdooMap(Map<String, dynamic>.from(e)))
+                  .toList();
+              final rules = _rulesFromDiscountRows(rows, fieldMap);
+              if (rules.isNotEmpty) {
+                _cusDiscountLineModel ??= lineModel;
+                return rules;
+              }
+            }
+          }
+
+          // Search child by parent header ids.
+          final headerIds = headerRows
+              .map((h) => h['id'])
+              .whereType<num>()
+              .map((e) => e.toInt())
+              .where((id) => id > 0)
+              .toList();
+          final lineMeta = await _fieldsMeta(sessionId, lineModel);
+          String? parentField;
+          for (final e in lineMeta.entries) {
+            if ((e.value['type'] ?? '').toString() != 'many2one') continue;
+            if ((e.value['relation'] ?? '').toString() == headerModel) {
+              parentField = e.key;
+              break;
+            }
+          }
+          if (parentField != null && headerIds.isNotEmpty) {
+            final result = await callKw(
+              sessionId: sessionId,
+              model: lineModel,
+              method: 'search_read',
+              args: [
+                [
+                  [parentField, 'in', headerIds],
+                ],
+              ],
+              kwargs: {
+                'fields': ['id', ...fieldMap.values],
+                'limit': 500,
+              },
+            );
+            if (result is List) {
+              final rows = result
+                  .whereType<Map>()
+                  .map((e) => _normalizeOdooMap(Map<String, dynamic>.from(e)))
+                  .toList();
+              final rules = _rulesFromDiscountRows(rows, fieldMap);
+              if (rules.isNotEmpty) return rules;
+            }
+          }
+        }
+      }
+
+      // Case B: each customer.group.discount row IS a rule line
+      // (company/group/potency/packing/discount on the same model).
+      final fieldMap =
+          await _discoverGroupDiscountLineFields(sessionId, headerModel);
+      if (fieldMap['discount'] == null) return const [];
+      final result = await callKw(
+        sessionId: sessionId,
+        model: headerModel,
+        method: 'search_read',
+        args: [
+          [
+            [catField, '=', categoryId],
+          ],
+        ],
+        kwargs: {
+          'fields': ['id', ...fieldMap.values],
+          'limit': 500,
+        },
+      );
+      if (result is! List) return const [];
+      final rows = result
+          .whereType<Map>()
+          .map((e) => _normalizeOdooMap(Map<String, dynamic>.from(e)))
+          .toList();
+      return _rulesFromDiscountRows(rows, fieldMap);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('customer.group.discount rules #$categoryId: $e');
+      }
+      return const [];
+    }
+  }
+
+  static List<PriceCategoryGroupDiscountRule> _rulesFromDiscountRows(
+    List<Map<String, dynamic>> rows,
+    Map<String, String> fieldMap,
+  ) {
+    String? nameOf(Map<String, dynamic> row, String? field) {
+      if (field == null) return null;
+      final named = row['${field}_name']?.toString().trim();
+      if (named != null && named.isNotEmpty && named != 'false') return named;
+      final raw = row[field];
+      if (raw == null || raw == false) return null;
+      if (raw is num) return null;
+      final text = raw.toString().trim();
+      if (text.isEmpty || text == 'false') return null;
+      return text;
+    }
+
+    final discField = fieldMap['discount'];
+    if (discField == null) return const [];
+
+    final rules = <PriceCategoryGroupDiscountRule>[];
+    for (final row in rows) {
+      final raw = row[discField];
+      final disc = raw is num
+          ? raw.toDouble()
+          : double.tryParse(raw?.toString().replaceAll(',', '') ?? '');
+      if (disc == null || disc <= 0) continue;
+      rules.add(
+        PriceCategoryGroupDiscountRule(
+          company: nameOf(row, fieldMap['company']),
+          group: nameOf(row, fieldMap['group']),
+          potency: nameOf(row, fieldMap['potency']),
+          packing: nameOf(row, fieldMap['packing']),
+          discountPercent: disc,
+        ),
+      );
+    }
+    return rules;
+  }
+
+  /// Best matching Group Discount % for a bill line under a price category.
+  /// Empty rule fields are wildcards; more specific matches win.
+  static double? matchGroupDiscountPercent({
+    required List<PriceCategoryGroupDiscountRule> rules,
+    String? company,
+    String? group,
+    String? potency,
+    String? packing,
+  }) {
+    if (rules.isEmpty) return null;
+
+    String norm(String? v) => (v ?? '')
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s+'), '');
+
+    bool matches(String? ruleVal, String? lineVal) {
+      final r = norm(ruleVal);
+      if (r.isEmpty) return true;
+      final l = norm(lineVal);
+      if (l.isEmpty) return false;
+      return r == l;
+    }
+
+    int specificity(PriceCategoryGroupDiscountRule r) {
+      var n = 0;
+      if (norm(r.company).isNotEmpty) n++;
+      if (norm(r.group).isNotEmpty) n++;
+      if (norm(r.potency).isNotEmpty) n++;
+      if (norm(r.packing).isNotEmpty) n++;
+      return n;
+    }
+
+    PriceCategoryGroupDiscountRule? best;
+    var bestScore = -1;
+    for (final r in rules) {
+      if (!matches(r.company, company)) continue;
+      if (!matches(r.group, group)) continue;
+      if (!matches(r.potency, potency)) continue;
+      if (!matches(r.packing, packing)) continue;
+      final score = specificity(r);
+      if (score > bestScore) {
+        bestScore = score;
+        best = r;
+      }
+    }
+    return best?.discountPercent;
   }
 
   static final Map<String, Set<String>> _fieldsCache = {};
@@ -3387,6 +5738,15 @@ class OdooRpcHelper {
         'responsible_person_id',
         'doctor',
         'doctor_name',
+        'doctor_id',
+        'physician',
+        'physician_id',
+        'physician_name',
+        'prescriber',
+        'prescriber_id',
+        'prescriber_name',
+        'dr_name',
+        'doc_name',
         'payment_mode',
         'gst_type',
         'expiry_medicine_bill',
@@ -3406,6 +5766,16 @@ class OdooRpcHelper {
         'amount_tax',
         'expense',
         'expense_amt',
+        'expense_amount',
+        'expense_note',
+        'expense_text',
+        'expenses',
+        'expense_description',
+        'expense_total',
+        'customer_expense',
+        'customer_expense_amount',
+        'other_charge',
+        'other_charges',
         'total',
         'amount_total',
         'balance',
@@ -3424,6 +5794,18 @@ class OdooRpcHelper {
         'delivery_date',
         'pharmacy_supplier_id',
       ]).toList();
+
+      // Include any custom doctor / expense fields fields_get discovered.
+      for (final key in available) {
+        final lower = key.toLowerCase();
+        if (lower.contains('doctor') ||
+            lower.contains('physician') ||
+            lower.contains('prescriber') ||
+            lower.contains('expense') ||
+            lower.contains('other_charge')) {
+          if (!headerFields.contains(key)) headerFields.add(key);
+        }
+      }
       if (headerFields.isEmpty) return null;
 
       // Force relation ids even if fields_get omitted them.
@@ -3530,6 +5912,32 @@ class OdooRpcHelper {
         if (header['responsible_person_id_name'] != null &&
             header['responsible_person'] == null)
           'responsible_person': header['responsible_person_id_name'],
+        // Prefer doctor Char / many2one label over raw id.
+        if (header['doctor_name'] != null)
+          'doctor_name': header['doctor_name'],
+        if (header['doctor_id_name'] != null && header['doctor_name'] == null)
+          'doctor_name': header['doctor_id_name'],
+        if (header['physician_id_name'] != null &&
+            header['doctor_name'] == null)
+          'doctor_name': header['physician_id_name'],
+        if (header['prescriber_id_name'] != null &&
+            header['doctor_name'] == null)
+          'doctor_name': header['prescriber_id_name'],
+        if (header['physician_name'] != null && header['doctor_name'] == null)
+          'doctor_name': header['physician_name'],
+        if (header['doctor'] is String)
+          'doctor_name': header['doctor'],
+        if (header['physician'] is String && header['doctor_name'] == null)
+          'doctor_name': header['physician'],
+        // Pharmacy website expense fields.
+        if (header['customer_expense'] != null &&
+            (header['expense'] == null || header['expense'] == false))
+          'expense': header['customer_expense'],
+        if (header['customer_expense_amount'] != null &&
+            (header['expense_amt'] == null || header['expense_amt'] == false) &&
+            (header['expense_amount'] == null ||
+                header['expense_amount'] == false))
+          'expense_amt': header['customer_expense_amount'],
         if (header['pharmacy_purchase_order_id_name'] != null)
           'po_number': header['pharmacy_purchase_order_id_name'],
         if (header['select_previous_invoice_id_name'] != null)
@@ -3542,6 +5950,7 @@ class OdooRpcHelper {
           'invoice_lines': lines
               .map(
                 (l) => {
+                  'id': l.id,
                   'product_name': l.productName,
                   'potency': l.potency,
                   'company': l.company,
@@ -3555,8 +5964,8 @@ class OdooRpcHelper {
                   'ordered_qty': l.orderedQty,
                   'free_qty': l.freeQty,
                   'mrp': l.mrp,
-                  'discount': l.discount,
-                  'dis2_percent': l.dis2Percent,
+                  'discount': l.discount ?? l.dis2Percent,
+                  'dis2_percent': l.dis2Percent ?? l.discount,
                   'unit': l.unit,
                   'unit_p': l.unitPrice,
                   'u_price': l.uPrice,
@@ -3565,6 +5974,7 @@ class OdooRpcHelper {
                   'total': l.total,
                   'hsn': l.hsn,
                   'rack': l.rack,
+                  'stock_entry_id': l.stockEntryId,
                 },
               )
               .toList(),
@@ -4073,8 +6483,7 @@ class OdooRpcHelper {
       }
     } catch (e) {
       if (kDebugMode) debugPrint('fields_get $model: $e');
-      final msg = e.toString().toLowerCase();
-      if (msg.contains('keyerror') || msg.contains('does not exist')) {
+      if (_isMissingModelError(model, e)) {
         _missingModels.add(model);
         return const {};
       }
@@ -4104,6 +6513,22 @@ class OdooRpcHelper {
             'customer_old_balance',
             'advance_amount',
             'old_balance',
+            'doctor',
+            'doctor_name',
+            'doctor_id',
+            'expense',
+            'expense_amt',
+            'expense_amount',
+            'customer_expense',
+            'customer_expense_amount',
+            'payment_mode',
+            'gst_type',
+            'pharmacy_customer_id',
+            'discount_category_id',
+            'discount_type',
+            'discount_rate',
+            'remarks',
+            'verified_by',
           }
         : model == 'account.move.line'
             ? {
@@ -4615,6 +7040,8 @@ class OdooRpcHelper {
     double quantity = 0,
     int? invoiceId,
     int? stockEntryId,
+    /// App stock display id (often differs from Odoo line `stock_entry_id`).
+    int? stockDisplayId,
     /// When true, bump `item_qty` before unlink (RPC add deducted it).
     /// Flutter `add_to_invoice` only touches sellable `stock`, which Odoo
     /// puts back on unlink — leave this false to avoid stock climbing.
@@ -4622,6 +7049,7 @@ class OdooRpcHelper {
     /// False when add never deducted sellable `stock` but unlink still
     /// restores it — clamp (re-deduct) after unlink so stock does not climb.
     bool sellableStockDeducted = true,
+    int? invoiceLineId,
   }) async {
     final moveId = invoiceId ??
         await findCustomerInvoiceId(sessionId, invoiceNumber);
@@ -4697,16 +7125,100 @@ class OdooRpcHelper {
 
     if (lineRows.isEmpty) return false;
 
+    // Prefer known AML id, then shared resolver (handles display id ≠ line
+    // stock_entry_id), then product+batch. Hard-requiring stock_entry_id
+    // match used to skip every line and show "Could not restore stock".
+    int? preferredLineId =
+        (invoiceLineId != null && invoiceLineId > 0) ? invoiceLineId : null;
+    if (preferredLineId == null) {
+      preferredLineId = await resolveCustomerInvoiceLineId(
+        sessionId: sessionId,
+        invoiceId: moveId,
+        stockEntryId: stockEntryId,
+        stockDisplayId: stockDisplayId,
+        productName: productName,
+        batch: batch,
+      );
+    }
+
     final wantProduct = productName.trim().toLowerCase();
     final wantBatch = (batch ?? '').trim().toLowerCase();
     final wantPotency = (potency ?? '').trim().toLowerCase();
-    final wantEntryId = stockEntryId;
+    final wantEntryIds = <int>{
+      if (stockEntryId != null && stockEntryId > 0) stockEntryId,
+      if (stockDisplayId != null && stockDisplayId > 0) stockDisplayId,
+    };
     var remaining = quantity > 0 ? quantity : double.infinity;
 
     final toUnlink = <int>[];
     final toReduce = <int, double>{};
     // entry.stock id → qty to put back
     final restoreByEntry = <int, double>{};
+
+    int? lineEntryIdOf(Map<String, dynamic> map) {
+      final raw = map['stock_entry_id'];
+      if (raw is int) return raw;
+      if (raw is List && raw.isNotEmpty) {
+        return int.tryParse('${raw.first}');
+      }
+      return int.tryParse(raw?.toString() ?? '');
+    }
+
+    bool productBatchMatch(Map<String, dynamic> map) {
+      String many2oneName(dynamic raw) {
+        if (raw is List && raw.length >= 2) {
+          return raw[1]?.toString().trim().toLowerCase() ?? '';
+        }
+        return '';
+      }
+
+      final lineProduct = (
+        map['product_name'] ??
+            map['medicine_id_name'] ??
+            map['product_id_name'] ??
+            map['name'] ??
+            ''
+      ).toString().trim().toLowerCase();
+      final medicineName = many2oneName(map['medicine_id']);
+      final productLabel =
+          lineProduct.isNotEmpty && lineProduct != 'false'
+              ? lineProduct
+              : medicineName;
+      if (wantProduct.isNotEmpty &&
+          productLabel.isNotEmpty &&
+          productLabel != wantProduct &&
+          !productLabel.contains(wantProduct) &&
+          !wantProduct.contains(productLabel)) {
+        return false;
+      }
+
+      final lineBatch = (
+        map['batch'] ??
+            map['batch_no'] ??
+            map['lot_id_name'] ??
+            ''
+      ).toString().trim().toLowerCase();
+      if (wantBatch.isNotEmpty &&
+          lineBatch.isNotEmpty &&
+          lineBatch != wantBatch) {
+        return false;
+      }
+
+      final linePotency = (
+        map['potency'] ??
+            map['potency_id_name'] ??
+            ''
+      ).toString().trim().toLowerCase();
+      final potencyLabel = linePotency.isNotEmpty && linePotency != 'false'
+          ? linePotency
+          : many2oneName(map['potency_id']);
+      if (wantPotency.isNotEmpty &&
+          potencyLabel.isNotEmpty &&
+          potencyLabel != wantPotency) {
+        return false;
+      }
+      return true;
+    }
 
     for (final raw in lineRows) {
       if (remaining <= 0) break;
@@ -4720,62 +7232,30 @@ class OdooRpcHelper {
         continue;
       }
 
-      final lineEntryId = map['stock_entry_id'] is int
-          ? map['stock_entry_id'] as int
-          : map['stock_entry_id'] is List && (map['stock_entry_id'] as List).isNotEmpty
-              ? int.tryParse('${(map['stock_entry_id'] as List).first}')
-              : int.tryParse(map['stock_entry_id']?.toString() ?? '');
-
-      if (wantEntryId != null &&
-          wantEntryId > 0 &&
-          lineEntryId != null &&
-          lineEntryId > 0) {
-        if (lineEntryId != wantEntryId) continue;
-      } else {
-      final lineProduct = (
-        map['product_name'] ??
-            map['medicine_id_name'] ??
-            map['product_id_name'] ??
-            map['name'] ??
-            ''
-      ).toString().trim().toLowerCase();
-      if (wantProduct.isNotEmpty &&
-          lineProduct.isNotEmpty &&
-          lineProduct != wantProduct &&
-          !lineProduct.contains(wantProduct) &&
-          !wantProduct.contains(lineProduct)) {
-        continue;
-      }
-
-      final lineBatch = (
-        map['batch'] ??
-            map['batch_no'] ??
-            map['lot_id_name'] ??
-            ''
-      ).toString().trim().toLowerCase();
-      if (wantBatch.isNotEmpty &&
-          lineBatch.isNotEmpty &&
-          lineBatch != wantBatch) {
-        continue;
-      }
-
-      final linePotency = (
-        map['potency'] ??
-            map['potency_id_name'] ??
-            ''
-      ).toString().trim().toLowerCase();
-      if (wantPotency.isNotEmpty &&
-          linePotency.isNotEmpty &&
-          linePotency != wantPotency) {
-        continue;
-      }
-      }
-
       final idRaw = map['id'];
       final id = idRaw is int
           ? idRaw
           : int.tryParse(idRaw?.toString() ?? '');
       if (id == null) continue;
+
+      final lineEntryId = lineEntryIdOf(map);
+
+      final matchesPreferred =
+          preferredLineId != null && preferredLineId == id;
+      final matchesEntry = wantEntryIds.isNotEmpty &&
+          lineEntryId != null &&
+          wantEntryIds.contains(lineEntryId);
+      final matchesProduct = productBatchMatch(map);
+
+      // Prefer exact AML id, then stock id, else product+batch (QR display
+      // id often differs from the line's stock_entry_id).
+      if (preferredLineId != null) {
+        if (!matchesPreferred) continue;
+      } else if (matchesEntry) {
+        // ok
+      } else if (!matchesProduct) {
+        continue;
+      }
 
       final lineQty =
           (map['quantity'] as num?)?.toDouble() ??
@@ -4783,10 +7263,7 @@ class OdooRpcHelper {
           0;
       if (lineQty <= 0) continue;
 
-      final entryId = lineEntryId ??
-          (map['stock_entry_id'] is int
-              ? map['stock_entry_id'] as int
-              : int.tryParse(map['stock_entry_id']?.toString() ?? ''));
+      final entryId = lineEntryId;
 
       double take;
       if (!remaining.isFinite || remaining >= lineQty - 1e-9) {
@@ -4808,7 +7285,8 @@ class OdooRpcHelper {
       if (kDebugMode) {
         debugPrint(
           'removeCustomerInvoiceProduct: no matching line on move $moveId '
-          'for $productName / $batch',
+          'for $productName / $batch entry=$stockEntryId '
+          'display=$stockDisplayId lineId=$preferredLineId',
         );
       }
       return false;
@@ -5027,10 +7505,10 @@ class OdooRpcHelper {
         if (id != null) writeVals[field] = id;
       }
 
+      // entry.stock.medicine_id is FK → pharmacy.medicine only.
+      // product.* ids cause entry_stock_medicine_id_fkey ValidationError.
       await putM2o('medicine_id', const [
         'pharmacy.medicine',
-        'product.product',
-        'product.template',
       ], medicine);
       await putM2o('potency_id', const ['pharmacy.potency'], potency);
       await putM2o('packing_id', const [
@@ -5040,11 +7518,9 @@ class OdooRpcHelper {
       ], packing);
       await putM2o('pharmacy_company_id', const [
         'pharmacy.company',
-        'pharmacy.medicine.company',
       ], company);
       await putM2o('pharmacy_group_id', const [
         'pharmacy.group',
-        'pharmacy.medicine.group',
       ], group);
       await putM2o('rack_id', const [
         'pharmacy.rack',
@@ -5170,8 +7646,6 @@ class OdooRpcHelper {
       sessionId,
       models: const [
         'pharmacy.medicine',
-        'product.product',
-        'product.template',
       ],
       limit: 2000,
     );
@@ -5189,8 +7663,6 @@ class OdooRpcHelper {
       sessionId,
       models: const [
         'pharmacy.medicine',
-        'product.product',
-        'product.template',
       ],
       limit: limit,
       nameContains: q,
@@ -5342,10 +7814,9 @@ class OdooRpcHelper {
         if (id != null) writeVals[field] = id;
       }
 
+      // entry.stock.medicine_id is FK → pharmacy.medicine only.
       await putM2oCreate('medicine_id', const [
         'pharmacy.medicine',
-        'product.product',
-        'product.template',
       ], medicine);
       await putM2oCreate('potency_id', const ['pharmacy.potency'], potency);
       await putM2oCreate('packing_id', const [
@@ -5355,11 +7826,9 @@ class OdooRpcHelper {
       ], packing);
       await putM2oCreate('pharmacy_company_id', const [
         'pharmacy.company',
-        'pharmacy.medicine.company',
       ], company);
       await putM2oCreate('pharmacy_group_id', const [
         'pharmacy.group',
-        'pharmacy.medicine.group',
       ], group);
       await putM2oCreate('rack_id', const [
         'pharmacy.rack',
@@ -5993,6 +8462,8 @@ class OdooRpcHelper {
     });
   }
 
+  static String? _cachedPartnerPaymentLinePayField;
+
   static Future<List<_PartnerPaymentLineRef>> _readPartnerPaymentLines(
     String sessionId,
     int paymentId,
@@ -6000,7 +8471,8 @@ class OdooRpcHelper {
     try {
       final available = await _modelFields(sessionId, 'partner.payment.line');
       if (available.isEmpty) return const [];
-      final fields = _partnerPaymentLineFields(available);
+      final payField = await _partnerPaymentLinePayFieldName(sessionId);
+      final fields = _partnerPaymentLineFields(available, payField: payField);
 
       String? parentField;
       for (final candidate in const [
@@ -6029,7 +8501,7 @@ class OdooRpcHelper {
           'order': 'id asc',
         },
       );
-      return _parsePartnerPaymentLines(rows);
+      return _parsePartnerPaymentLines(rows, payField: payField);
     } catch (e) {
       if (kDebugMode) debugPrint('_readPartnerPaymentLines: $e');
       return const [];
@@ -6044,44 +8516,156 @@ class OdooRpcHelper {
     try {
       final available = await _modelFields(sessionId, 'partner.payment.line');
       if (available.isEmpty) return const [];
-      final fields = _partnerPaymentLineFields(available);
+      final payField = await _partnerPaymentLinePayFieldName(sessionId);
+      final fields = _partnerPaymentLineFields(available, payField: payField);
       final rows = await callKw(
         sessionId: sessionId,
         model: 'partner.payment.line',
         method: 'read',
         args: [lineIds, fields],
       );
-      return _parsePartnerPaymentLines(rows);
+      return _parsePartnerPaymentLines(rows, payField: payField);
     } catch (e) {
       if (kDebugMode) debugPrint('_readPartnerPaymentLinesByIds: $e');
       return const [];
     }
   }
 
-  static List<String> _partnerPaymentLineFields(Set<String> available) {
+  static List<String> _partnerPaymentLineFields(
+    Set<String> available, {
+    String? payField,
+  }) {
     final fields = <String>['id'];
+    // Website "Pay Amount" column = amount_to_pay on partner.payment.line.
+    if (payField != null &&
+        available.contains(payField) &&
+        !fields.contains(payField)) {
+      fields.add(payField);
+    }
     for (final f in const [
       'move_id',
       'invoice_id',
       'account_move_id',
       'payment_id',
       'partner_payment_id',
+      'invoice_number',
+      'invoice_date',
+      'amount_to_pay',
       'amount',
       'pay_amount',
+      'payment_amount',
+      'paid_amount',
+      'amount_paid',
+      'pay',
+      'credit',
+      'debit',
       'amount_total',
       'total',
       'amount_residual',
       'balance',
+      'balance_due',
+      'opening_balance',
+      'balance_after',
+      'status',
       'selected',
       'is_selected',
       'select',
+      'responsible_person',
+      'responsible_person_id',
     ]) {
-      if (available.contains(f)) fields.add(f);
+      if (available.contains(f) && !fields.contains(f)) fields.add(f);
     }
     return fields;
   }
 
-  static List<_PartnerPaymentLineRef> _parsePartnerPaymentLines(dynamic rows) {
+  /// Resolve the monetary field used as website "Pay Amount".
+  /// On this server that is [amount_to_pay] ("Amount to Pay").
+  static Future<String?> _partnerPaymentLinePayFieldName(
+    String sessionId,
+  ) async {
+    if (_cachedPartnerPaymentLinePayField != null) {
+      return _cachedPartnerPaymentLinePayField;
+    }
+    try {
+      final meta = await callKw(
+        sessionId: sessionId,
+        model: 'partner.payment.line',
+        method: 'fields_get',
+        args: const [],
+        kwargs: const {
+          'attributes': ['string', 'type'],
+        },
+      );
+      if (meta is! Map) return 'amount_to_pay';
+      String? fallback;
+      for (final entry in meta.entries) {
+        if (entry.value is! Map) continue;
+        final field = Map<String, dynamic>.from(entry.value as Map);
+        if (field['type']?.toString() != 'monetary') continue;
+        final key = entry.key.toString();
+        final label = (field['string'] ?? '').toString().toLowerCase();
+        if (label.contains('amount to pay') ||
+            label.contains('pay amount') ||
+            label == 'pay' ||
+            label.contains('paid amount')) {
+          _cachedPartnerPaymentLinePayField = key;
+          return key;
+        }
+        if (fallback == null &&
+            (key == 'amount_to_pay' ||
+                key == 'amount' ||
+                key == 'pay_amount' ||
+                key == 'payment_amount')) {
+          fallback = key;
+        }
+      }
+      final resolved = fallback ?? 'amount_to_pay';
+      _cachedPartnerPaymentLinePayField = resolved;
+      return resolved;
+    } catch (e) {
+      if (kDebugMode) debugPrint('_partnerPaymentLinePayFieldName: $e');
+      return 'amount_to_pay';
+    }
+  }
+
+  static double? _linePayAmountFromMap(
+    Map<String, dynamic> map, {
+    String? payField,
+  }) {
+    if (payField != null && map.containsKey(payField)) {
+      final v = _asDouble(map[payField]);
+      if (v != null) return v;
+    }
+    // Prefer amount_to_pay — website "Pay Amount" / "Amount to Pay".
+    return _asDouble(map['amount_to_pay']) ??
+        _asDouble(map['pay_amount']) ??
+        _asDouble(map['payment_amount']) ??
+        _asDouble(map['paid_amount']) ??
+        _asDouble(map['amount_paid']) ??
+        _asDouble(map['pay']) ??
+        _asDouble(map['credit']) ??
+        _asDouble(map['amount']);
+  }
+
+  static String? _lineInvoiceLabel(Map<String, dynamic> map) {
+    final raw = map['invoice_number']?.toString() ??
+        map['invoice_id_name']?.toString() ??
+        map['move_id_name']?.toString() ??
+        map['account_move_id_name']?.toString();
+    if (raw == null || raw.trim().isEmpty || raw == 'false') return null;
+    // "R0053 - AJITH, KOLLAM - 2026-08-19" → "R0053"
+    final trimmed = raw.trim();
+    final m = RegExp(r'^(R\d+|[A-Z]?\d+[/\d-]*)', caseSensitive: false)
+        .firstMatch(trimmed);
+    if (m != null) return m.group(1);
+    final dash = trimmed.split(' - ').first.trim();
+    return dash.isNotEmpty ? dash : trimmed;
+  }
+
+  static List<_PartnerPaymentLineRef> _parsePartnerPaymentLines(
+    dynamic rows, {
+    String? payField,
+  }) {
     if (rows is! List) return const [];
     final out = <_PartnerPaymentLineRef>[];
     for (final raw in rows) {
@@ -6091,17 +8675,17 @@ class OdooRpcHelper {
           _asInt(map['invoice_id']) ??
           _asInt(map['account_move_id']);
       if (move == null) continue;
-      final pay = _asDouble(map['pay_amount']) ?? _asDouble(map['amount']);
+      final pay = _linePayAmountFromMap(map, payField: payField);
       final balance = _asDouble(map['balance']) ??
+          _asDouble(map['balance_due']) ??
           _asDouble(map['amount_residual']);
       final total = _asDouble(map['total']) ?? _asDouble(map['amount_total']);
-      final label = map['invoice_id_name']?.toString() ??
-          map['move_id_name']?.toString() ??
-          map['account_move_id_name']?.toString();
+      final label = _lineInvoiceLabel(map);
       final selectedRaw =
           map['selected'] ?? map['is_selected'] ?? map['select'];
       final selected = selectedRaw == true ||
           selectedRaw == 1 ||
+          selectedRaw == 'true' ||
           (pay != null && pay > 0);
       out.add(_PartnerPaymentLineRef(
         moveId: move,
@@ -6466,7 +9050,7 @@ class OdooRpcHelper {
     int paymentId, {
     double? defaultPayAmount,
   }) async {
-    final lines = await _readPartnerPaymentLines(sessionId, paymentId);
+    var lines = await _readPartnerPaymentLines(sessionId, paymentId);
     if (lines.isEmpty) {
       // Fallback: read embedded line ids then parse.
       final header = await _readPartnerPaymentRow(sessionId, paymentId);
@@ -6476,21 +9060,82 @@ class OdooRpcHelper {
         ..._odooIds(header['line_ids']),
       };
       if (lineIds.isEmpty) return const [];
-      final byIds =
-          await _readPartnerPaymentLinesByIds(sessionId, lineIds.toList());
-      return _linesToLinkedInvoices(byIds, defaultPayAmount: defaultPayAmount);
+      lines = await _readPartnerPaymentLinesByIds(sessionId, lineIds.toList());
     }
+    if (lines.isEmpty) return const [];
+
+    final allocated = _allocatePartnerPaymentLinePays(
+      lines,
+      defaultPayAmount: defaultPayAmount,
+    );
+    final payByMove = <int, double?>{};
+    final balanceByMove = <int, double?>{};
+    final totalByMove = <int, double?>{};
+    final selectedByMove = <int, bool>{};
+    final moveIds = <int>[];
+    for (final line in lines) {
+      moveIds.add(line.moveId);
+      final selected = line.selected || ((line.payAmount ?? 0) > 0);
+      selectedByMove[line.moveId] = selected;
+      balanceByMove[line.moveId] = line.balance;
+      if (line.total != null) totalByMove[line.moveId] = line.total;
+      payByMove[line.moveId] = allocated[line.moveId] ?? 0;
+    }
+
+    final enriched = await _readMovesAsLinkedInvoices(
+      sessionId,
+      moveIds,
+      payAmountByMove: payByMove,
+      balanceByMove: balanceByMove,
+      totalByMove: totalByMove,
+      selectedByMove: selectedByMove,
+    );
+    if (enriched.isNotEmpty) return enriched;
     return _linesToLinkedInvoices(lines, defaultPayAmount: defaultPayAmount);
+  }
+
+  /// Use [amount_to_pay] when present; otherwise fall back for single-select.
+  static Map<int, double> _allocatePartnerPaymentLinePays(
+    List<_PartnerPaymentLineRef> lines, {
+    double? defaultPayAmount,
+  }) {
+    final out = <int, double>{};
+    var anyExplicit = false;
+    for (final line in lines) {
+      if (line.payAmount != null) {
+        anyExplicit = true;
+        out[line.moveId] = line.payAmount!;
+      }
+    }
+    if (anyExplicit) {
+      for (final line in lines) {
+        out.putIfAbsent(line.moveId, () => 0);
+      }
+      return out;
+    }
+    final selected = lines
+        .where((l) => l.selected || ((l.payAmount ?? 0) > 0))
+        .toList(growable: false);
+    if (selected.length == 1 && (defaultPayAmount ?? 0) > 0) {
+      out[selected.first.moveId] = defaultPayAmount!;
+    }
+    for (final line in lines) {
+      out.putIfAbsent(line.moveId, () => 0);
+    }
+    return out;
   }
 
   static List<ChequeLinkedInvoice> _linesToLinkedInvoices(
     List<_PartnerPaymentLineRef> lines, {
     double? defaultPayAmount,
   }) {
+    final allocated = _allocatePartnerPaymentLinePays(
+      lines,
+      defaultPayAmount: defaultPayAmount,
+    );
     return lines.map((line) {
       final selected = line.selected || ((line.payAmount ?? 0) > 0);
-      final pay = line.payAmount ??
-          (selected ? (defaultPayAmount ?? 0) : 0);
+      final pay = allocated[line.moveId] ?? 0;
       final number = (line.invoiceLabel ?? '').trim().isNotEmpty
           ? line.invoiceLabel
           : 'INV/${line.moveId}';
@@ -6598,6 +9243,314 @@ class OdooRpcHelper {
     return _readPartnerPaymentRow(sessionId, paymentId);
   }
 
+  /// Cash Book YOU GOT source: confirmed customer payments + allocated bills.
+  ///
+  /// Uses website `partner.payment` / `partner.payment.line` (never account.payment).
+  /// Cancelled payments are excluded so Cancel on the website removes them here.
+  static Future<List<Map<String, dynamic>>> fetchPartnerPaymentsForCashBook(
+    String sessionId, {
+    int limit = 400,
+  }) async {
+    try {
+      final available = await _modelFields(sessionId, 'partner.payment');
+      if (available.isEmpty) return const [];
+
+      final fields = <String>['id', 'name'];
+      for (final f in const [
+        'partner_id',
+        'amount',
+        'amount_total',
+        'payment_amount',
+        'date',
+        'payment_date',
+        'create_date',
+        'write_date',
+        'payment_mode',
+        'state',
+        'line_ids',
+        'payment_line_ids',
+        'invoice_ids',
+      ]) {
+        if (available.contains(f)) fields.add(f);
+      }
+
+      final domain = <dynamic>[];
+      if (available.contains('state')) {
+        domain.add([
+          'state',
+          'not in',
+          ['cancel', 'cancelled', 'canceled'],
+        ]);
+      }
+
+      final order = available.contains('create_date')
+          ? 'create_date desc, id desc'
+          : (available.contains('date') ? 'date desc, id desc' : 'id desc');
+
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'partner.payment',
+        method: 'search_read',
+        args: [domain],
+        kwargs: {
+          'fields': fields,
+          'limit': limit,
+          'order': order,
+        },
+      );
+      if (rows is! List || rows.isEmpty) return const [];
+
+      final payments = <Map<String, dynamic>>[];
+      final paymentIds = <int>[];
+      for (final raw in rows) {
+        if (raw is! Map) continue;
+        final map = _normalizeOdooMap(Map<String, dynamic>.from(raw));
+        final state = (map['state'] ?? '').toString().toLowerCase().trim();
+        if (state == 'cancel' ||
+            state == 'cancelled' ||
+            state == 'canceled') {
+          continue;
+        }
+        final id = _asInt(map['id']);
+        if (id != null) paymentIds.add(id);
+        payments.add(map);
+      }
+      if (payments.isEmpty) return const [];
+
+      final linesByPayment = await _readPartnerPaymentLinesByPaymentIds(
+        sessionId,
+        paymentIds,
+      );
+
+      // Collect every move id so we can resolve R0053-style pharmacy numbers
+      // and live residuals (website Balance column).
+      final allMoveIds = <int>{};
+      for (final payment in payments) {
+        final id = _asInt(payment['id']);
+        var lines = id == null
+            ? const <_PartnerPaymentLineRef>[]
+            : (linesByPayment[id] ?? const <_PartnerPaymentLineRef>[]);
+        if (lines.isEmpty && id != null) {
+          // Same fallback as Customer Payment form / cheque flow.
+          final embedded = <int>{
+            ..._odooIds(payment['payment_line_ids']),
+            ..._odooIds(payment['line_ids']),
+          };
+          if (embedded.isNotEmpty) {
+            lines = await _readPartnerPaymentLinesByIds(
+              sessionId,
+              embedded.toList(),
+            );
+            if (lines.isNotEmpty) {
+              linesByPayment[id] = lines;
+            }
+          }
+          if (lines.isEmpty) {
+            lines = await _readPartnerPaymentLines(sessionId, id);
+            if (lines.isNotEmpty) linesByPayment[id] = lines;
+          }
+        }
+        for (final line in lines) {
+          allMoveIds.add(line.moveId);
+        }
+        for (final moveId in _odooIds(payment['invoice_ids'])) {
+          allMoveIds.add(moveId);
+        }
+      }
+
+      final moveDetails = await _readMovesAsLinkedInvoices(
+        sessionId,
+        allMoveIds.toList(growable: false),
+      );
+      final moveById = <int, ChequeLinkedInvoice>{
+        for (final m in moveDetails)
+          if (m.moveId != null) m.moveId!: m,
+      };
+
+      final out = <Map<String, dynamic>>[];
+      for (final payment in payments) {
+        final id = _asInt(payment['id']);
+        final lines = id == null
+            ? const <_PartnerPaymentLineRef>[]
+            : (linesByPayment[id] ?? const <_PartnerPaymentLineRef>[]);
+
+        final paymentAmount = _asDouble(payment['payment_amount']) ??
+            _asDouble(payment['amount']) ??
+            _asDouble(payment['amount_total']) ??
+            0;
+
+        final allocated = _allocatePartnerPaymentLinePays(
+          lines,
+          defaultPayAmount: paymentAmount,
+        );
+        // Website invoices table: every payment line (incl. Pay Amount 0).
+        final invoiceMaps = <Map<String, dynamic>>[];
+        for (final line in lines) {
+          final move = moveById[line.moveId];
+          final selected = line.selected || ((line.payAmount ?? 0) > 0.0001);
+          final pay = allocated[line.moveId] ?? 0;
+          final number = (line.invoiceLabel ?? '').trim().isNotEmpty
+              ? line.invoiceLabel!.trim()
+              : (move?.number ?? 'R${line.moveId}');
+          // Prefer payment-line balance (website Balance), then live residual.
+          final balance = line.balance ?? move?.balance;
+          invoiceMaps.add({
+            'invoice_id': line.moveId,
+            'move_id': line.moveId,
+            'id': line.moveId,
+            'invoice_number': number,
+            'name': number,
+            'invoice_date': move?.invoiceDate,
+            'allocated_amount': pay,
+            'pay_amount': pay,
+            'amount_to_pay': pay,
+            'total': line.total ?? move?.total,
+            'balance': balance,
+            'status': move?.status ??
+                (selected
+                    ? ((line.balance ?? move?.balance ?? 0) <= 0.0001
+                        ? 'Paid'
+                        : 'Partially Paid')
+                    : 'Partially Paid'),
+            'responsible_person': move?.responsiblePerson,
+            'selected': selected,
+          });
+        }
+
+        // If line model is empty, still attach account.move rows from invoice_ids.
+        if (invoiceMaps.isEmpty) {
+          for (final moveId in _odooIds(payment['invoice_ids'])) {
+            final move = moveById[moveId];
+            if (move == null) continue;
+            invoiceMaps.add({
+              'invoice_id': moveId,
+              'move_id': moveId,
+              'id': moveId,
+              'invoice_number': move.number,
+              'name': move.number,
+              'invoice_date': move.invoiceDate,
+              'allocated_amount': move.payAmount ?? 0,
+              'pay_amount': move.payAmount ?? 0,
+              'total': move.total,
+              'balance': move.balance,
+              'status': move.status,
+              'responsible_person': move.responsiblePerson,
+              'selected': move.selected,
+            });
+          }
+        }
+
+        final amount = paymentAmount > 0.0001
+            ? paymentAmount
+            : invoiceMaps.fold<double>(
+                0,
+                (s, m) => s + ((m['pay_amount'] as num?)?.toDouble() ?? 0),
+              );
+
+        if (amount <= 0.0001 && invoiceMaps.isEmpty) continue;
+
+        out.add({
+          'id': id,
+          'payment_id': id,
+          'partner_payment_id': id,
+          'name': payment['name'],
+          'payment_name': payment['name'],
+          'customer_name': payment['partner_id_name'],
+          'partner_name': payment['partner_id_name'],
+          'partner_id': payment['partner_id'],
+          'amount': amount,
+          'payment_amount': amount,
+          'payment_mode': payment['payment_mode'],
+          'state': payment['state'],
+          'create_date': payment['create_date'],
+          'write_date': payment['write_date'],
+          'date': payment['date'] ?? payment['payment_date'],
+          'payment_date': payment['payment_date'] ?? payment['date'],
+          'invoices': invoiceMaps,
+          'invoice_ids': invoiceMaps,
+        });
+      }
+      if (kDebugMode) {
+        debugPrint(
+          'cash book partner.payment loaded=${out.length} '
+          '(excluded cancelled)',
+        );
+      }
+      return out;
+    } catch (e, s) {
+      if (kDebugMode) {
+        debugPrint('fetchPartnerPaymentsForCashBook: $e\n$s');
+      }
+      return const [];
+    }
+  }
+
+  static Future<Map<int, List<_PartnerPaymentLineRef>>>
+      _readPartnerPaymentLinesByPaymentIds(
+    String sessionId,
+    List<int> paymentIds,
+  ) async {
+    final result = <int, List<_PartnerPaymentLineRef>>{};
+    if (paymentIds.isEmpty) return result;
+    try {
+      final available = await _modelFields(sessionId, 'partner.payment.line');
+      if (available.isEmpty) return result;
+      final payField = await _partnerPaymentLinePayFieldName(sessionId);
+      final fields = _partnerPaymentLineFields(available, payField: payField);
+      String? parentField;
+      for (final candidate in const [
+        'partner_payment_id',
+        'payment_id',
+      ]) {
+        if (available.contains(candidate)) {
+          parentField = candidate;
+          if (!fields.contains(candidate)) fields.add(candidate);
+          break;
+        }
+      }
+      if (parentField == null) return result;
+
+      // Chunk to avoid huge domains.
+      const chunk = 80;
+      for (var i = 0; i < paymentIds.length; i += chunk) {
+        final slice = paymentIds.sublist(
+          i,
+          i + chunk > paymentIds.length ? paymentIds.length : i + chunk,
+        );
+        final rows = await callKw(
+          sessionId: sessionId,
+          model: 'partner.payment.line',
+          method: 'search_read',
+          args: [
+            [
+              [parentField, 'in', slice],
+            ],
+          ],
+          kwargs: {
+            'fields': fields,
+            'limit': slice.length * 40,
+            'order': 'id asc',
+          },
+        );
+        if (rows is! List) continue;
+        for (final raw in rows) {
+          if (raw is! Map) continue;
+          final map = _normalizeOdooMap(Map<String, dynamic>.from(raw));
+          final parentId = _asInt(map[parentField]);
+          if (parentId == null) continue;
+          final parsed = _parsePartnerPaymentLines([map], payField: payField);
+          if (parsed.isEmpty) continue;
+          result.putIfAbsent(parentId, () => []).addAll(parsed);
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('_readPartnerPaymentLinesByPaymentIds: $e');
+      }
+    }
+    return result;
+  }
+
   /// Run website button on partner.payment (Pay Bill / Confirm / Cancel).
   static Future<bool> runPartnerPaymentAction(
     String sessionId,
@@ -6677,6 +9630,163 @@ class OdooRpcHelper {
       if (kDebugMode) debugPrint('cancelPartnerPayment unlink: $e');
       rethrow;
     }
+  }
+
+  static String? _cachedAccountMoveReportName;
+
+  /// Prefer pharmacy / tax invoice QWeb PDF (website layout with QR).
+  static Future<String?> resolveAccountMovePdfReportName(
+    String sessionId,
+  ) async {
+    if (_cachedAccountMoveReportName != null) {
+      return _cachedAccountMoveReportName;
+    }
+    try {
+      final rows = await callKw(
+        sessionId: sessionId,
+        model: 'ir.actions.report',
+        method: 'search_read',
+        args: [
+          [
+            ['model', '=', 'account.move'],
+            ['report_type', '=', 'qweb-pdf'],
+          ],
+        ],
+        kwargs: {
+          'fields': ['name', 'report_name'],
+          'limit': 80,
+        },
+      );
+      if (rows is! List || rows.isEmpty) return null;
+
+      String? best;
+      var bestScore = -1;
+      for (final raw in rows) {
+        if (raw is! Map) continue;
+        final name = '${raw['name'] ?? ''}'.toLowerCase();
+        final report = '${raw['report_name'] ?? ''}'.toLowerCase();
+        final hay = '$name $report';
+        if (report.isEmpty) continue;
+        if (hay.contains('payment') ||
+            hay.contains('credit note') ||
+            hay.contains('refund') ||
+            hay.contains('delivery')) {
+          continue;
+        }
+        var score = 0;
+        if (hay.contains('pharmacy')) score += 8;
+        if (hay.contains('homeo')) score += 6;
+        if (hay.contains('tax')) score += 5;
+        if (hay.contains('qr')) score += 5;
+        if (hay.contains('cash') || hay.contains('credit')) score += 3;
+        if (hay.contains('invoice')) score += 2;
+        if (report.contains('account.report_invoice')) score += 1;
+        if (score > bestScore) {
+          bestScore = score;
+          best = raw['report_name']?.toString();
+        }
+      }
+      best ??= (rows.first as Map)['report_name']?.toString();
+      if (best != null && best.isNotEmpty) {
+        _cachedAccountMoveReportName = best;
+      }
+      return _cachedAccountMoveReportName;
+    } catch (e) {
+      if (kDebugMode) debugPrint('resolveAccountMovePdfReportName: $e');
+      return null;
+    }
+  }
+
+  /// Server PDF for a customer invoice (same website report layout / QR).
+  static Future<Uint8List?> fetchAccountMovePdfBytes(
+    String sessionId,
+    int invoiceId,
+  ) async {
+    if (invoiceId <= 0) return null;
+
+    final reportName = await resolveAccountMovePdfReportName(sessionId);
+    if (reportName == null || reportName.isEmpty) return null;
+
+    // 1) HTTP report route used by the website Print button.
+    try {
+      final uri = Uri.parse(
+        '${AppConfig.baseAppUrl}report/pdf/$reportName/$invoiceId',
+      );
+      final response = await http
+          .get(
+            uri,
+            headers: {
+              'Accept': 'application/pdf,*/*',
+              'Cookie': SessionHelper.cookie(sessionId),
+              'User-Agent': SessionHelper.jsonUserAgent,
+            },
+          )
+          .timeout(const Duration(seconds: 60));
+      if (response.statusCode >= 200 &&
+          response.statusCode < 300 &&
+          _looksLikePdf(response.bodyBytes)) {
+        return response.bodyBytes;
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('fetchAccountMovePdfBytes http: $e');
+    }
+
+    // 2) RPC render (Odoo 14+).
+    try {
+      final result = await callKw(
+        sessionId: sessionId,
+        model: 'ir.actions.report',
+        method: '_render_qweb_pdf',
+        args: [
+          reportName,
+          [invoiceId],
+        ],
+      );
+      final bytes = _pdfBytesFromRpc(result);
+      if (bytes != null) return bytes;
+    } catch (e) {
+      if (kDebugMode) debugPrint('fetchAccountMovePdfBytes rpc: $e');
+    }
+
+    return null;
+  }
+
+  static bool _looksLikePdf(Uint8List bytes) {
+    if (bytes.length < 5) return false;
+    return bytes[0] == 0x25 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x44 &&
+        bytes[3] == 0x46;
+  }
+
+  static Uint8List? _pdfBytesFromRpc(dynamic result) {
+    if (result == null) return null;
+    if (result is Uint8List) {
+      return _looksLikePdf(result) ? result : null;
+    }
+    if (result is List && result.isNotEmpty) {
+      final first = result.first;
+      if (first is Uint8List && _looksLikePdf(first)) return first;
+      if (first is String) {
+        try {
+          final decoded = base64Decode(first);
+          if (_looksLikePdf(decoded)) return decoded;
+        } catch (_) {}
+      }
+      if (first is List) {
+        try {
+          final bytes = Uint8List.fromList(first.cast<int>());
+          if (_looksLikePdf(bytes)) return bytes;
+        } catch (_) {}
+      }
+    }
+    if (result is String) {
+      try {
+        final decoded = base64Decode(result);
+        if (_looksLikePdf(decoded)) return decoded;
+      } catch (_) {}
+    }
+    return null;
   }
 
   static double? _asDouble(dynamic value) {

@@ -13,10 +13,12 @@ class InvoiceStockRestoreHelper {
     required String invoiceNumber,
     required double quantity,
     int? invoiceId,
+    int? invoiceLineId,
     String? productName,
     String? batch,
     String? potency,
     int? stockEntryId,
+    int? stockDisplayId,
     /// Only true when the line was added via RPC that deducted `item_qty`.
     /// Flutter `add_to_invoice` leaves `item_qty` alone — restoring it
     /// double-counts sellable stock on discard.
@@ -48,11 +50,13 @@ class InvoiceStockRestoreHelper {
         sessionId: sid,
         invoiceNumber: inv,
         invoiceId: invoiceId,
+        invoiceLineId: invoiceLineId,
         productName: (productName ?? '').trim(),
         batch: batch,
         potency: potency,
         quantity: qty,
         stockEntryId: stockEntryId,
+        stockDisplayId: stockDisplayId,
         restoreItemQty: restoreItemQty,
         sellableStockDeducted: sellableStockDeducted,
       );

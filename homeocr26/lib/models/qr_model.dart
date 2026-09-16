@@ -203,6 +203,8 @@ class QrData {
     );
   }
 
+  Object? get itemQty => null;
+
   static int? _asInt(dynamic value) {
     if (value == null || value == false) return null;
     if (value is int) return value;

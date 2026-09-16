@@ -281,7 +281,10 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
 
   @override
   Widget build(BuildContext context) {
-    final status = _invoice.displayStatus;
+    final rawStatus = _invoice.displayStatus;
+    final status = widget.supplierLayout && _invoice.sectionKey == 'draft'
+        ? 'Pending'
+        : rawStatus;
     final canScan = widget.allowScan && _invoice.sectionKey != 'paid';
     final canEdit = !widget.supplierLayout;
     final totals = _visibleTotals();
@@ -329,17 +332,16 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
         children: [
           Row(
             children: [
-              _StatusChip(label: 'Draft', selected: status.toLowerCase() == 'draft'),
-              const SizedBox(width: 8),
-              _StatusChip(
-                label: 'Open',
-                selected: status.toLowerCase() == 'open',
-              ),
-              const SizedBox(width: 8),
-              _StatusChip(
-                label: 'Paid',
-                selected: status.toLowerCase() == 'paid',
-              ),
+              if (widget.supplierLayout) ...[
+                _StatusChip(label: 'Pending', selected: status.toLowerCase() == 'pending'),
+                const SizedBox(width: 8),
+              ] else ...[
+                _StatusChip(label: 'Draft', selected: status.toLowerCase() == 'draft'),
+                const SizedBox(width: 8),
+                _StatusChip(label: 'Open', selected: status.toLowerCase() == 'open'),
+                const SizedBox(width: 8),
+              ],
+              _StatusChip(label: 'Paid', selected: status.toLowerCase() == 'paid'),
             ],
           ),
           const SizedBox(height: 14),
@@ -440,6 +442,10 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
                 _ReadField('Status', status),
                 _ReadField('Verified By', _invoice.verifiedBy),
                 _ReadField('Expense', _invoice.expense),
+                _ReadField(
+                  'Expense Amt',
+                  InvoiceSummaryModel.formatMoney(_invoice.expenseAmt),
+                ),
               ],
             ),
           ),
@@ -688,15 +694,15 @@ class _LineTile extends StatelessWidget {
             ),
           _LineRow(
             left: _Field('Mrp', _money(line.mrp)),
-            right: _Field('Dis', _num(line.discount)),
+            right: _Field('Dis', _num(line.discount ?? line.dis2Percent)),
           ),
           _LineRow(
-            left: _Field('Unit P', _money(line.unitPrice)),
+            left: _Field('Unit P', _money(_displayUnitP(line))),
             right: _Field('Tax', _num(line.tax)),
           ),
           _LineRow(
-            left: _Field('Tax Amt', _money(line.taxAmount)),
-            right: _Field('Total', _money(line.total), emphasize: true),
+            left: _Field('Tax Amt', _money(_displayTaxAmt(line))),
+            right: _Field('Total', _money(_displayLineTotal(line)), emphasize: true),
           ),
           _LineRow(
             left: _Field('Hsn', line.hsn),
@@ -712,6 +718,32 @@ class _LineTile extends StatelessWidget {
       v == null ? '—' : v.toStringAsFixed(v == v.roundToDouble() ? 0 : 2);
   static String _qty(double? v) =>
       v == null ? '—' : v.toStringAsFixed(2);
+
+  /// Tax-inclusive Unit TP after line Dis% (website Unit P when GST MINUS).
+  static double? _displayUnitP(InvoiceLineModel line) {
+    final mrp = line.mrp;
+    if (mrp == null || mrp <= 0) {
+      return line.uPrice ?? line.unitPrice;
+    }
+    final disc = line.discount ?? line.dis2Percent ?? 0;
+    if (disc <= 0) return line.uPrice ?? line.unitPrice ?? mrp;
+    return mrp * (1.0 - disc / 100.0);
+  }
+
+  static double? _displayLineTotal(InvoiceLineModel line) {
+    final qty = line.qty ?? 0;
+    final unit = _displayUnitP(line);
+    if (unit == null) return line.total;
+    if (qty <= 0) return unit;
+    return qty * unit;
+  }
+
+  static double? _displayTaxAmt(InvoiceLineModel line) {
+    final total = _displayLineTotal(line);
+    final tax = line.tax ?? 0;
+    if (total == null || tax <= 0) return line.taxAmount;
+    return total * tax / (100.0 + tax);
+  }
 }
 
 class _LineRow extends StatelessWidget {

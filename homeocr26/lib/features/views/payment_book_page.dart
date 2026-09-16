@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../models/payment_book_model.dart';
 import '../../viewModels/payment_book_viewmodel.dart';
+import '../services/payment_history_service.dart';
 import '../theme.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/payment_book_style.dart';
@@ -32,16 +33,24 @@ class _PaymentBookPageState extends State<PaymentBookPage>
     _viewModel = PaymentBookViewModel();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      unawaited(
-        _viewModel.fetch(
+      unawaited(() async {
+        // Paint cache first (or show loader), then force a fast server refresh.
+        await _viewModel.fetch(
           context,
           applyFilter: PaymentBookFilter.today(),
-        ),
-      );
+        );
+        if (!mounted) return;
+        await _viewModel.fetch(
+          context,
+          forceRefresh: true,
+          silent: true,
+        );
+      }());
     });
     startLiveRefresh(
       () => _viewModel.fetch(context, forceRefresh: true, silent: true),
       immediate: false,
+      interval: const Duration(seconds: 8),
     );
   }
 
@@ -314,6 +323,7 @@ class _PaymentBookCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final invoice = PaymentHistoryService.withTrustedTotals(this.invoice);
     final style = invoice.paymentBookRowStyle;
     final color = PaymentBookStyleColors.of(style);
     final weight = PaymentBookStyleColors.weightOf(style);
@@ -324,82 +334,83 @@ class _PaymentBookCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
           decoration: BoxDecoration(
             color: sectionCard,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: sectionCardBorder),
           ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+          child: Column(
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          flex: 3,
-                          child: Text(
-                            invoice.displayNumber,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: color,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          flex: 4,
-                          child: Text(
-                            invoice.displayPaymentBookName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: color,
-                              fontSize: 14,
-                              fontWeight: weight,
-                            ),
-                          ),
-                        ),
-                        InvoiceBillStatusBadge(status: invoice.displayStatus),
-                      ],
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      invoice.displayNumber,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.left,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _Meta(
-                            'Balance',
-                            InvoiceSummaryModel.formatMoney(invoice.balance),
-                            color: color,
-                            weight: weight,
-                          ),
-                        ),
-                        Expanded(
-                          child: _Meta(
-                            'Total',
-                            InvoiceSummaryModel.formatMoney(invoice.total),
-                            color: color,
-                            weight: FontWeight.w800,
-                          ),
-                        ),
-                        Expanded(
-                          child: _Meta(
-                            'Date',
-                            invoice.displayPaymentBookDate,
-                            color: color,
-                            weight: weight,
-                            alignEnd: true,
-                          ),
-                        ),
-                      ],
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Text(
+                      invoice.displayPaymentBookName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 14,
+                        fontWeight: weight,
+                      ),
                     ),
-                  ],
-                ),
+                  ),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: InvoiceBillStatusBadge(
+                        status: invoice.displayStatus,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: _Meta(
+                      'Balance',
+                      InvoiceSummaryModel.formatMoney(invoice.balance),
+                      color: color,
+                      weight: weight,
+                    ),
+                  ),
+                  Expanded(
+                    child: _Meta(
+                      'Total',
+                      InvoiceSummaryModel.formatMoney(invoice.total),
+                      color: color,
+                      weight: FontWeight.w800,
+                      alignCenter: true,
+                    ),
+                  ),
+                  Expanded(
+                    child: _Meta(
+                      'Date',
+                      invoice.displayPaymentBookDate,
+                      color: color,
+                      weight: weight,
+                      alignEnd: true,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -416,6 +427,7 @@ class _Meta extends StatelessWidget {
     required this.color,
     required this.weight,
     this.alignEnd = false,
+    this.alignCenter = false,
   });
 
   final String label;
@@ -423,12 +435,17 @@ class _Meta extends StatelessWidget {
   final Color color;
   final FontWeight weight;
   final bool alignEnd;
+  final bool alignCenter;
 
   @override
   Widget build(BuildContext context) {
+    final cross = alignEnd
+        ? CrossAxisAlignment.end
+        : alignCenter
+            ? CrossAxisAlignment.center
+            : CrossAxisAlignment.start;
     return Column(
-      crossAxisAlignment:
-          alignEnd ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      crossAxisAlignment: cross,
       children: [
         Text(
           label,
@@ -443,6 +460,11 @@ class _Meta extends StatelessWidget {
           value,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
+          textAlign: alignEnd
+              ? TextAlign.right
+              : alignCenter
+                  ? TextAlign.center
+                  : TextAlign.left,
           style: TextStyle(
             color: color,
             fontSize: 14,

@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -13,21 +13,18 @@ import 'package:homeocr26/features/views/net_amount_page.dart';
 import 'package:homeocr26/features/views/payment_book_page.dart';
 import 'package:homeocr26/features/views/payment_history_page.dart';
 import 'package:homeocr26/features/views/stock_list_page.dart';
-import 'package:homeocr26/features/widgets/app_backdrop.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/payment_book_model.dart';
 import '../../viewModels/cheque_clearance_viewmodel.dart';
 import '../../viewModels/login_viewmodel.dart';
 import '../../viewModels/net_amount_viewmodel.dart';
 import '../../viewModels/payment_book_viewmodel.dart';
-import '../../models/payment_book_model.dart';
 import '../services/cheque_clearance_service.dart';
 import '../services/cheque_notification_service.dart';
 import '../services/home_prefetch_service.dart';
 import '../services/live_data_sync.dart';
-import '../theme.dart';
 import '../widgets/app_responsive.dart';
-import '../widgets/system_safe.dart';
 
 class SelectionScreen extends StatefulWidget {
   const SelectionScreen({super.key});
@@ -40,52 +37,85 @@ class _SelectionScreenState extends State<SelectionScreen> {
   late final NetAmountViewModel _netAmountViewModel;
   late final PaymentBookViewModel _paymentBookViewModel;
 
+  static const Color _primaryOrange = Color(0xFFF57C00);
+
+  static const Color _pageBackground = Color(0xFFFFFBF7);
+
+  static const Color _textPrimary = Color(0xFF29231F);
+
+  static const Color _textSecondary = Color(0xFF746A63);
+
   @override
   void initState() {
     super.initState();
+
     _netAmountViewModel = NetAmountViewModel();
     _paymentBookViewModel = PaymentBookViewModel();
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Cheque alert as soon as home is visible — do not wait for warmAll.
       unawaited(_notifyChequeClearance());
-      unawaited(() async {
-        await HomePrefetchService.warmAll(
-          context,
-          netAmountViewModel: _netAmountViewModel,
-        );
-        if (!mounted) return;
-        await _paymentBookViewModel.fetch(
-          context,
-          silent: true,
-          applyFilter: PaymentBookFilter.today(),
-        );
-        if (!mounted) return;
-        LiveDataSync.start(onSync: _liveSync);
-      }());
+
+      unawaited(
+            () async {
+          await HomePrefetchService.warmAll(
+            context,
+            netAmountViewModel: _netAmountViewModel,
+          );
+
+          if (!mounted) return;
+
+          await _paymentBookViewModel.fetch(
+            context,
+            silent: true,
+            applyFilter: PaymentBookFilter.today(),
+          );
+
+          if (!mounted) return;
+
+          LiveDataSync.start(
+            onSync: _liveSync,
+          );
+        }(),
+      );
     });
   }
 
+  // ==========================================================
+  // CHEQUE NOTIFICATION
+  // ==========================================================
+
   Future<void> _notifyChequeClearance() async {
     if (!mounted) return;
-    // Prefer any already-cached cheque list so the banner is instant.
-    var count = ChequeClearanceService.cachedItems?.length ?? 0;
+
+    var count =
+        ChequeClearanceService.cachedItems?.length ?? 0;
+
     if (count <= 0) {
-      final items = await ChequeClearanceViewModel.prefetch(context);
+      final items =
+      await ChequeClearanceViewModel.prefetch(context);
+
       count = items.length;
     }
+
     if (!mounted || count <= 0) return;
+
     await ChequeNotificationService.notifyIfNeeded(
       context: context,
       count: count,
       onOpen: () {
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) => const ChequeClearancePage(),
+            builder: (_) =>
+            const ChequeClearancePage(),
           ),
         );
       },
     );
   }
+
+  // ==========================================================
+  // OPEN CHEQUE CLEARANCE
+  // ==========================================================
 
   void _openChequeClearance() {
     Navigator.of(context).push(
@@ -95,14 +125,23 @@ class _SelectionScreenState extends State<SelectionScreen> {
     );
   }
 
+  // ==========================================================
+  // LIVE SYNC
+  // ==========================================================
+
   Future<void> _liveSync() async {
     if (!mounted) return;
+
+    // Soft warm other sections; always force payment book so it tracks the
+    // website within a few seconds (cache TTL is short).
     await HomePrefetchService.warmAll(
       context,
       netAmountViewModel: _netAmountViewModel,
-      forceRefresh: true,
+      forceRefresh: false,
     );
+
     if (!mounted) return;
+
     await _paymentBookViewModel.fetch(
       context,
       silent: true,
@@ -111,21 +150,37 @@ class _SelectionScreenState extends State<SelectionScreen> {
     );
   }
 
+  // ==========================================================
+  // DISPOSE
+  // ==========================================================
+
   @override
   void dispose() {
     LiveDataSync.stop();
+
     _netAmountViewModel.dispose();
     _paymentBookViewModel.dispose();
+
     super.dispose();
   }
+
+  // ==========================================================
+  // OPEN NET AMOUNT
+  // ==========================================================
 
   Future<void> _openNetAmount() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => NetAmountPage(viewModel: _netAmountViewModel),
+        builder: (_) {
+          return NetAmountPage(
+            viewModel: _netAmountViewModel,
+          );
+        },
       ),
     );
+
     if (!mounted) return;
+
     await _netAmountViewModel.fetchBoth(
       context,
       silent: true,
@@ -133,39 +188,104 @@ class _SelectionScreenState extends State<SelectionScreen> {
     );
   }
 
+  // ==========================================================
+  // LOGOUT
+  // ==========================================================
+
   Future<void> _showLogoutDialog() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Logout'),
-          content: const Text('Are you sure you want to log out ?'),
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.logout_rounded,
+                color: _primaryOrange,
+              ),
+              SizedBox(width: 10),
+              Text(
+                'Logout',
+                style: TextStyle(
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'Are you sure you want to log out?',
+            style: TextStyle(
+              color: _textSecondary,
+            ),
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(
+            20,
+            0,
+            20,
+            18,
+          ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel', style: TextStyle(color: appMuted)),
+              onPressed: () {
+                Navigator.pop(dialogContext, false);
+              },
+              child: const Text(
+                'Cancel',
+                style: TextStyle(
+                  color: _textSecondary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
             FilledButton(
-              style: const ButtonStyle(
-                backgroundColor: WidgetStatePropertyAll(appOrange),
-                foregroundColor: WidgetStatePropertyAll(Colors.white),
+              style: FilledButton.styleFrom(
+                backgroundColor: _primaryOrange,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(11),
+                ),
               ),
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Logout'),
+              onPressed: () {
+                Navigator.pop(dialogContext, true);
+              },
+              child: const Text(
+                'Logout',
+              ),
             ),
           ],
         );
       },
     );
+
     if (confirmed != true || !mounted) return;
+
     await context.read<LoginViewmodel>().logout();
+
     if (!mounted) return;
+
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) =>
-            const LoginPage(),
-        transitionDuration: const Duration(milliseconds: 500),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+        pageBuilder: (
+            context,
+            animation,
+            secondaryAnimation,
+            ) {
+          return const LoginPage();
+        },
+        transitionDuration:
+        const Duration(milliseconds: 400),
+        transitionsBuilder: (
+            context,
+            animation,
+            secondaryAnimation,
+            child,
+            ) {
           return FadeTransition(
             opacity: animation,
             child: child,
@@ -175,235 +295,399 @@ class _SelectionScreenState extends State<SelectionScreen> {
     );
   }
 
+  // ==========================================================
+  // MOVE APP TO BACKGROUND
+  // ==========================================================
+
   Future<void> _moveToBackground() async {
     if (Platform.isAndroid) {
       try {
-        await const MethodChannel('com.example.homeocr26/lifecycle')
-            .invokeMethod('moveToBackground');
+        await const MethodChannel(
+          'com.example.homeocr26/lifecycle',
+        ).invokeMethod('moveToBackground');
+
         return;
       } catch (_) {}
     }
+
     await SystemNavigator.pop();
   }
 
+  // ==========================================================
+  // BUILD
+  // ==========================================================
+
   @override
   Widget build(BuildContext context) {
-    return PopScope(
+    final media = MediaQuery.of(context);
+    final tablet = AppResponsive.of(context).isTablet;
+    final page = PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
+
         unawaited(_moveToBackground());
       },
       child: MultiProvider(
         providers: [
-          ChangeNotifierProvider.value(value: _netAmountViewModel),
-          ChangeNotifierProvider.value(value: _paymentBookViewModel),
+          ChangeNotifierProvider.value(
+            value: _netAmountViewModel,
+          ),
+          ChangeNotifierProvider.value(
+            value: _paymentBookViewModel,
+          ),
         ],
         child: Scaffold(
-        backgroundColor: Colors.transparent,
-        extendBodyBehindAppBar: true,
-        appBar: AppBar(
-          title: const Text(
-            'HOMEO ATHURASRAMAM',
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-              fontSize: 17,
-              letterSpacing: 0.4,
-            ),
-          ),
-          backgroundColor: appOrange.withValues(alpha: 0.92),
-          elevation: 0,
-          actions: [
-            IconButton(
-              onPressed: _showLogoutDialog,
-              icon: const Icon(Icons.logout),
-              color: Colors.white,
-            ),
-          ],
-        ),
-        body: AppBackdrop(
-          alignment: const Alignment(0, -0.05),
-          scrim: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.black.withValues(alpha: 0.38),
-              Colors.black.withValues(alpha: 0.18),
-              Colors.black.withValues(alpha: 0.28),
-              Colors.black.withValues(alpha: 0.55),
-            ],
-            stops: const [0.0, 0.28, 0.65, 1.0],
-          ),
-          child: SafeArea(
-            top: false,
-            child: ResponsiveBody(
-              maxWidth: AppResponsive.of(context).homeMaxWidth,
-              child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                AppResponsive.of(context).pagePadding,
-                12,
-                AppResponsive.of(context).pagePadding,
-                SystemSafe.actionBarBottomPadding(context),
+          backgroundColor: _pageBackground,
+          body: DecoratedBox(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color(0xFFFFE4CC),
+                  Color(0xFFFFF6EC),
+                  Color(0xFFFFFBF7),
+                ],
+                stops: [0.0, 0.22, 0.55],
               ),
+            ),
+            child: SafeArea(
+              child: ResponsiveBody(
+              maxWidth:
+              AppResponsive.of(context).homeMaxWidth,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SizedBox(height: 8),
-                  // const Text(
-                  //   'Home',
-                  //   style: TextStyle(
-                  //     color: Colors.white,
-                  //     fontSize: 30,
-                  //     fontWeight: FontWeight.w800,
-                  //     letterSpacing: 0.2,
-                  //   ),
-                  // ),
-                  // const SizedBox(height: 4),
-                  // Text(
-                  //   'Choose a section to continue',
-                  //   style: TextStyle(
-                  //     color: Colors.white.withValues(alpha: 0.82),
-                  //     fontSize: 15,
-                  //     fontWeight: FontWeight.w500,
-                  //   ),
-                  // ),
-                  // const SizedBox(height: 18),
+                  _buildTopBar(context),
+
+                  // ==================================================
+                  // DASHBOARD
+                  // ==================================================
+
                   Expanded(
-                    child: Consumer2<NetAmountViewModel, PaymentBookViewModel>(
-                      builder: (context, netModel, _, _) {
+                    child: Consumer2<
+                        NetAmountViewModel,
+                        PaymentBookViewModel>(
+                      builder: (
+                          context,
+                          netModel,
+                          paymentModel,
+                          _,
+                          ) {
                         return RefreshIndicator(
-                          color: const Color(0xFFE07A2F),
+                          color: _primaryOrange,
+                          backgroundColor: Colors.white,
                           onRefresh: () async {
-                            await HomePrefetchService.refreshHome(
+                            await HomePrefetchService
+                                .refreshHome(
                               context,
-                              netAmountViewModel: _netAmountViewModel,
+                              netAmountViewModel:
+                              _netAmountViewModel,
                             );
+
                             if (!context.mounted) return;
+
                             await _paymentBookViewModel.fetch(
                               context,
                               forceRefresh: true,
                               silent: true,
-                              applyFilter: PaymentBookFilter.today(),
+                              applyFilter:
+                              PaymentBookFilter.today(),
                             );
                           },
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              final r = AppResponsive.of(context);
-                              return GridView.count(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          crossAxisCount: r.homeCrossAxisCount,
-                          mainAxisSpacing: 10,
-                          crossAxisSpacing: 10,
-                          childAspectRatio: r.homeTileAspect,
-                          children: [
-                            
-                            _HomeTile(
-                              title: 'Net Amount\n(Yesterday)',
-                              icon: Icons.currency_rupee_outlined,
-                              accent: const Color(0xFFE07A2F),
-                              subtitle: netModel.homeLoading
-                                  ? '...'
-                                  : NetAmountViewModel.formatAmount(
-                                      netModel.displayYouGotPaid,
-                                    ),
-                              onTap: _openNetAmount,
-                            ),
-                            _HomeTile(
-                              title: 'Cash\nBook',
-                              icon: Icons.menu_book_outlined,
-                              accent: const Color(0xFFD4A017),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const AmountBookPage(),
+                          child: CustomScrollView(
+                            physics:
+                            const AlwaysScrollableScrollPhysics(),
+                            slivers: [
+                              SliverPadding(
+                                padding: EdgeInsets.fromLTRB(
+                                  AppResponsive.of(context)
+                                      .pagePadding,
+                                  12,
+                                  AppResponsive.of(context)
+                                      .pagePadding,
+                                  20,
+                                ),
+                                sliver: SliverGrid(
+                                  delegate:
+                                  SliverChildListDelegate(
+                                    [
+                                      // ==================================================
+                                      // 1. NET AMOUNT
+                                      // ==================================================
+
+                                      _DashboardCard(
+                                        title: 'Net Amount',
+                                        subtitle: '(Yesterday)',
+                                        value: netModel.homeLoading
+                                            ? '...'
+                                            : NetAmountViewModel
+                                            .formatAmount(
+                                          netModel
+                                              .displayYouGotPaid,
+                                        ),
+                                        icon: Icons
+                                            .currency_rupee_rounded,
+                                        imageAsset:
+                                        'assets/images/net_amount.png',
+                                        accent:
+                                        const Color(
+                                          0xFFF57C00,
+                                        ),
+                                        background:
+                                        const Color(
+                                          0xFFFFF3E8,
+                                        ),
+                                        onTap:
+                                        _openNetAmount,
+                                      ),
+
+                                      // ==================================================
+                                      // 2. CASH BOOK
+                                      // ==================================================
+
+                                      _DashboardCard(
+                                        title: 'Cash Book',
+                                        icon: Icons
+                                            .menu_book_rounded,
+                                        imageAsset:
+                                        'assets/images/cashbook.png',
+                                        accent:
+                                        const Color(
+                                          0xFFFF9800,
+                                        ),
+                                        background:
+                                        const Color(
+                                          0xFFFFF8E8,
+                                        ),
+                                        onTap: () {
+                                          Navigator.of(
+                                            context,
+                                          ).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                              const AmountBookPage(),
+                                            ),
+                                          );
+                                        },
+                                      ),
+
+                                      // ==================================================
+                                      // 3. TODAY CHEQUE CLEARANCE
+                                      // ==================================================
+
+                                      _DashboardCard(
+                                        title:
+                                        'Today Cheque\nClearance',
+
+                                        icon: Icons
+                                            .price_check_rounded,
+                                        imageAsset:
+                                        'assets/images/cheque.png',
+                                        accent:
+                                        const Color(
+                                          0xFF20A63A,
+                                        ),
+                                        background:
+                                        const Color(
+                                          0xFFF0FAF0,
+                                        ),
+                                        onTap:
+                                        _openChequeClearance,
+                                      ),
+
+                                      // ==================================================
+                                      // 4. PAYMENT HISTORY
+                                      // ==================================================
+
+                                      _DashboardCard(
+                                        title:
+                                        'Payment\nHistory',
+                                        icon:
+                                        Icons.history_rounded,
+                                        imageAsset:
+                                        'assets/images/payment_history.png',
+                                        accent:
+                                        const Color(
+                                          0xFF7C3AED,
+                                        ),
+                                        background:
+                                        const Color(
+                                          0xFFF4EFFF,
+                                        ),
+                                        onTap: () {
+                                          Navigator.of(
+                                            context,
+                                          ).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                              const PaymentHistoryPage(),
+                                            ),
+                                          );
+                                        },
+                                      ),
+
+                                      // ==================================================
+                                      // 5. CUSTOMER INVOICE
+                                      // ==================================================
+
+                                      _DashboardCard(
+                                        title:
+                                        'Customer\nInvoice',
+                                        icon: Icons
+                                            .receipt_long_rounded,
+                                        imageAsset:
+                                        'assets/images/customer_invoice.png',
+                                        accent:
+                                        const Color(
+                                          0xFF2563EB,
+                                        ),
+                                        background:
+                                        const Color(
+                                          0xFFF0F5FF,
+                                        ),
+                                        onTap: () {
+                                          Navigator.of(
+                                            context,
+                                          ).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                              const CustomerInvoiceListPage(),
+                                            ),
+                                          );
+                                        },
+                                      ),
+
+                                      // ==================================================
+                                      // 6. PAYMENT BOOK
+                                      // ==================================================
+
+                                      _DashboardCard(
+                                        title: 'Payment\nBook',
+                                        icon: Icons
+                                            .account_balance_wallet_rounded,
+                                        imageAsset:
+                                        'assets/images/payment_book.png',
+                                        accent:
+                                        const Color(
+                                          0xFFF43F5E,
+                                        ),
+                                        background:
+                                        const Color(
+                                          0xFFFFF0F3,
+                                        ),
+                                        onTap: () {
+                                          Navigator.of(
+                                            context,
+                                          ).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                              const PaymentBookPage(),
+                                            ),
+                                          );
+                                        },
+                                      ),
+
+                                      // ==================================================
+                                      // 7. CUSTOMER WEB VIEW
+                                      // ==================================================
+
+                                      _DashboardCard(
+                                        title:
+                                        'Customer \nWeb View',
+                                        icon:
+                                        Icons.language_rounded,
+                                        imageAsset:
+                                        'assets/images/customer_webview.png',
+                                        accent:
+                                        const Color(
+                                          0xFF0891B2,
+                                        ),
+                                        background:
+                                        const Color(
+                                          0xFFECFAFC,
+                                        ),
+                                        onTap: () {
+                                          Navigator.of(
+                                            context,
+                                          ).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                              const CustomerWebViewPage(),
+                                            ),
+                                          );
+                                        },
+                                      ),
+
+                                      // ==================================================
+                                      // 8. STOCK
+                                      // ==================================================
+
+                                      _DashboardCard(
+                                        title: 'Stock',
+                                        icon: Icons
+                                            .inventory_2_rounded,
+                                        imageAsset:
+                                        'assets/images/stock.png',
+                                        accent:
+                                        const Color(
+                                          0xFFEA580C,
+                                        ),
+                                        background:
+                                        const Color(
+                                          0xFFFFF3EC,
+                                        ),
+                                        onTap: () {
+                                          Navigator.of(
+                                            context,
+                                          ).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                              const StockListPage(),
+                                            ),
+                                          );
+                                        },
+                                      ),
+
+                                      // ==================================================
+                                      // 9. EMPLOYEE PERFORMANCE
+                                      // ==================================================
+
+                                      _DashboardCard(
+                                        title:
+                                        'Employee \nPerformance',
+                                        icon:
+                                        Icons.insights_rounded,
+                                        imageAsset:
+                                        'assets/images/employee_performance.png',
+                                        accent:
+                                        const Color(
+                                          0xFF9333EA,
+                                        ),
+                                        background:
+                                        const Color(
+                                          0xFFF7F0FF,
+                                        ),
+                                        onTap: () {
+                                          Navigator.of(
+                                            context,
+                                          ).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                              const EmployeePerformancePage(),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ],
                                   ),
-                                );
-                              },
-                            ),
-                            _HomeTile(
-                              title: 'Today Cheque\nClearance',
-                              icon: Icons.price_check_outlined,
-                              accent: const Color(0xFF4CAF50),
-                              onTap: _openChequeClearance,
-                            ),
-                            _HomeTile(
-                              title: 'Payment\nHistory',
-                              icon: Icons.history_outlined,
-                              accent: const Color(0xFF7B5EA7),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const PaymentHistoryPage(),
+                                  gridDelegate:
+                                  _buildGridDelegate(
+                                    context,
                                   ),
-                                );
-                              },
-                            ),
-                            _HomeTile(
-                              title: 'Customer\nInvoice',
-                              icon: Icons.receipt_long_outlined,
-                              accent: const Color(0xFF4A90D9),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        const CustomerInvoiceListPage(),
-                                  ),
-                                );
-                              },
-                            ),
-                            _HomeTile(
-                              title: 'Payment\nBook',
-                              icon: Icons.payments_outlined,
-                              accent: const Color(0xFFE07A9A),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const PaymentBookPage(),
-                                  ),
-                                );
-                              },
-                            ),
-                            _HomeTile(
-                              title: 'Customer\nWeb View',
-                              icon: Icons.language_outlined,
-                              accent: const Color(0xFF2A9D8F),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const CustomerWebViewPage(),
-                                  ),
-                                );
-                              },
-                            ),
-                            _HomeTile(
-                              title: 'Stock',
-                              icon: Icons.inventory_2_outlined,
-                              accent: const Color(0xFFC17F3A),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const StockListPage(),
-                                  ),
-                                );
-                              },
-                            ),
-                            _HomeTile(
-                              title: 'Employee\nPerformance',
-                              icon: Icons.insights_outlined,
-                              accent: const Color(0xFF5B4B8A),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        const EmployeePerformancePage(),
-                                  ),
-                                );
-                              },
-                            ),
-                          ],
-                              );
-                            },
+                                ),
+                              ),
+                            ],
                           ),
                         );
                       },
@@ -414,125 +698,425 @@ class _SelectionScreenState extends State<SelectionScreen> {
             ),
           ),
         ),
+      ),
+      ),
+    );
+
+    if (!tablet) return page;
+    return MediaQuery(
+      data: media.copyWith(
+        textScaler: TextScaler.linear(
+          media.textScaler.scale(1) / AppResponsive.tabletTextScale,
         ),
       ),
+      child: page,
+    );
+  }
+
+  SliverGridDelegate _buildGridDelegate(
+      BuildContext context,
+      ) {
+    final r = AppResponsive.of(context);
+    final width = MediaQuery.of(context).size.width;
+
+    double aspectRatio;
+    if (width < 360) {
+      aspectRatio = 1.10;
+    } else if (width < 600) {
+      aspectRatio = 1.18;
+    } else if (width < 900) {
+      aspectRatio = 1.28;
+    } else {
+      aspectRatio = 1.40;
+    }
+
+    return SliverGridDelegateWithFixedCrossAxisCount(
+      crossAxisCount: r.homeCrossAxisCount,
+      crossAxisSpacing: 12,
+      mainAxisSpacing: 12,
+      childAspectRatio: aspectRatio,
+    );
+  }
+
+  _DayGreeting _greetingForNow(String? userName) {
+    final hour = DateTime.now().hour;
+    final first = (userName ?? '').trim().split(RegExp(r'\s+')).first;
+    final name = first;
+
+    if (hour >= 5 && hour < 12) {
+      return _DayGreeting(
+        title: name.isEmpty ? 'Good Morning' : 'Good Morning',
+        emoji: '☀️',
+        subtitle: 'Have a productive day',
+      );
+    }
+    if (hour >= 12 && hour < 17) {
+      return _DayGreeting(
+        title: name.isEmpty ? 'Good Afternoon' : 'Good Afternoon',
+        emoji: '🌤️',
+        subtitle: "Here's what's happening today",
+      );
+    }
+    return _DayGreeting(
+      title: name.isEmpty ? 'Good Evening' : 'Good Evening',
+      emoji: '🌙',
+      subtitle: 'Hope your day went well',
+    );
+  }
+
+  Widget _buildTopBar(BuildContext context) {
+    final userName = context.watch<LoginViewmodel>().userName;
+    final greeting = _greetingForNow(userName);
+    final tablet = AppResponsive.of(context).isTablet;
+    final emojiBox = tablet ? 58.0 : 44.0;
+    final logoutBox = tablet ? 62.0 : 48.0;
+
+    return Padding(
+      padding: tablet
+          ? const EdgeInsets.fromLTRB(20, 14, 20, 12)
+          : const EdgeInsets.fromLTRB(16, 10, 16, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              padding: tablet
+                  ? const EdgeInsets.fromLTRB(16, 16, 18, 16)
+                  : const EdgeInsets.fromLTRB(12, 12, 14, 12),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.94),
+                borderRadius: BorderRadius.circular(tablet ? 22 : 18),
+                border: Border.all(color: const Color(0xFFFFDFC6)),
+                boxShadow: [
+                  BoxShadow(
+                    color: _primaryOrange.withValues(alpha: 0.10),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: emojiBox,
+                    height: emojiBox,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Color(0xFFFFF3E0),
+                          Color(0xFFFFE0B2),
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(tablet ? 18 : 14),
+                    ),
+                    child: Text(
+                      greeting.emoji,
+                      style: TextStyle(
+                        fontSize: tablet ? 32 : 24,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: tablet ? 16 : 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          greeting.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _textPrimary,
+                            fontSize: tablet ? 22 : 16,
+                            fontWeight: FontWeight.w800,
+                            height: 1.15,
+                          ),
+                        ),
+                        SizedBox(height: tablet ? 4 : 2),
+                        Text(
+                          greeting.subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontSize: tablet ? 16 : 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(width: tablet ? 14 : 10),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _showLogoutDialog,
+              borderRadius: BorderRadius.circular(tablet ? 18 : 15),
+              child: Ink(
+                width: logoutBox,
+                height: logoutBox,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(tablet ? 18 : 15),
+                  border: Border.all(color: const Color(0xFFFFDFC6)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _primaryOrange.withValues(alpha: 0.08),
+                      blurRadius: 14,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Icon(
+                  Icons.logout_rounded,
+                  color: _primaryOrange,
+                  size: tablet ? 28 : 22,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _HomeTile extends StatelessWidget {
-  const _HomeTile({
+
+class _DayGreeting {
+  const _DayGreeting({
     required this.title,
-    required this.icon,
-    required this.onTap,
-    required this.accent,
-    this.subtitle,
+    required this.emoji,
+    required this.subtitle,
   });
 
   final String title;
-  final IconData icon;
-  final VoidCallback onTap;
-  final Color accent;
-  final String? subtitle;
+  final String emoji;
+  final String subtitle;
+}
 
-  static const _ink = Color(0xFF1C1A17);
+class _DashboardCard extends StatelessWidget {
+  const _DashboardCard({
+    required this.title,
+    required this.icon,
+    required this.imageAsset,
+    required this.accent,
+    required this.background,
+    required this.onTap,
+    this.subtitle,
+    this.value,
+  });
+
+  final String title;
+  final String? subtitle;
+  final IconData icon;
+  final String imageAsset;
+  final Color accent;
+  final Color background;
+  final VoidCallback onTap;
+  final String? value;
+
+  static const Color _textPrimary = Color(0xFF29231F);
 
   @override
   Widget build(BuildContext context) {
+    final tablet = AppResponsive.of(context).isTablet;
+    final iconBox = tablet ? 56.0 : 38.0;
+    final iconSize = tablet ? 30.0 : 20.0;
+    final imageSize = tablet ? 168.0 : 102.0;
+    final titleSize = tablet ? 22.0 : 16.0;
+    final subtitleSize = tablet ? 14.0 : 11.0;
+    final valueSize = tablet ? 26.0 : 18.0;
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(18),
         onTap: onTap,
+        borderRadius: BorderRadius.circular(22),
+        splashColor: accent.withValues(alpha: 0.08),
+        highlightColor: accent.withValues(alpha: 0.04),
         child: Ink(
           decoration: BoxDecoration(
-            color: Color.alphaBlend(
-              accent.withValues(alpha: 0.16),
-              Colors.white.withValues(alpha: 0.92),
-            ),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: accent.withValues(alpha: 0.22)),
+            color: background,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: accent.withValues(alpha: 0.16)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.16),
+                color: accent.withValues(alpha: 0.10),
                 blurRadius: 14,
                 offset: const Offset(0, 6),
               ),
             ],
           ),
-          child: Stack(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 30, 8),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Text(
-                      title,
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        height: 1.15,
-                        color: _ink,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Container(
-                      width: 34,
-                      height: 34,
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(icon, color: accent, size: 20),
-                    ),
-                    if (subtitle != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle!,
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: accent,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              Positioned(
-                right: 6,
-                top: 0,
-                bottom: 0,
-                child: IgnorePointer(
-                  child: Center(
-                    child: Container(
-                      width: 22,
-                      height: 22,
-                      decoration: BoxDecoration(
-                        color: accent,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.chevron_right_rounded,
-                        color: Colors.white,
-                        size: 16,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(22),
+            child: Stack(
+              children: [
+                _buildDecorations(),
+                Positioned(
+                  right: tablet ? -4 : -6,
+                  bottom: tablet ? -8 : -10,
+                  child: IgnorePointer(
+                    child: Opacity(
+                      opacity: 0.42,
+                      child: Image.asset(
+                        imageAsset,
+                        width: imageSize,
+                        height: imageSize,
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
                       ),
                     ),
                   ),
                 ),
-              ),
-            ],
+                Padding(
+                  padding: tablet
+                      ? const EdgeInsets.fromLTRB(20, 20, 24, 18)
+                      : const EdgeInsets.fromLTRB(14, 14, 40, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: iconBox,
+                        height: iconBox,
+                        decoration: BoxDecoration(
+                          color: accent,
+                          borderRadius: BorderRadius.circular(tablet ? 16 : 12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: accent.withValues(alpha: 0.28),
+                              blurRadius: 8,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Icon(icon, color: Colors.white, size: iconSize),
+                      ),
+                      const Spacer(),
+                      Text(
+                        title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _textPrimary,
+                          fontSize: titleSize,
+                          height: 1.25,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _textPrimary.withValues(alpha: 0.45),
+                            fontSize: subtitleSize,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      if (value != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          value!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: accent,
+                            fontSize: valueSize,
+                            fontWeight: FontWeight.w800,
+                            height: 1.1,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+
+  Widget _buildDecorations() {
+    return IgnorePointer(
+      child: Stack(
+        children: [
+          Positioned(
+            right: -24,
+            top: -18,
+            child: Container(
+              width: 86,
+              height: 86,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: accent.withValues(alpha: 0.06),
+              ),
+            ),
+          ),
+          Positioned(
+            left: -20,
+            bottom: -28,
+            child: Container(
+              width: 70,
+              height: 70,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: accent.withValues(alpha: 0.05),
+              ),
+            ),
+          ),
+          Positioned(
+            right: -10,
+            bottom: -18,
+            child: Transform.rotate(
+              angle: -0.18,
+              child: Container(
+                width: 110,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 38,
+            top: 12,
+            child: SizedBox(
+              width: 28,
+              height: 28,
+              child: Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: List.generate(9, (index) {
+                  return Container(
+                    width: 3,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      color: accent.withValues(
+                        alpha: index % 2 == 0 ? 0.22 : 0.10,
+                      ),
+                      shape: BoxShape.circle,
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

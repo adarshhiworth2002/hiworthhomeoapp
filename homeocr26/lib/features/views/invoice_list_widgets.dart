@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/invoice_summary_model.dart';
 import '../../models/payment_book_model.dart';
+import '../services/payment_history_service.dart';
 import '../theme.dart';
 import '../widgets/compact_field_rows.dart';
 import '../widgets/payment_book_style.dart';
@@ -24,6 +25,8 @@ class InvoiceListCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Prefer on-device totals (Dis% + expense) when the list API still has MRP.
+    final invoice = PaymentHistoryService.withTrustedTotals(this.invoice);
     final style = invoice.paymentBookRowStyle;
     final color = PaymentBookStyleColors.of(style);
     final weight = PaymentBookStyleColors.weightOf(style);
@@ -133,12 +136,12 @@ class _LineCell extends StatelessWidget {
   }
 }
 
-void openInvoiceDetail(
+Future<void> openInvoiceDetail(
   BuildContext context,
   InvoiceSummaryModel invoice, {
   String title = 'Customer Invoice',
 }) {
-  Navigator.of(context).push(
+  return Navigator.of(context).push<void>(
     MaterialPageRoute(
       builder: (_) => CustomerInvoiceDetailPage(
         invoice: invoice,

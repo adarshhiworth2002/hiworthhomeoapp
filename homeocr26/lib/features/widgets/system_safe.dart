@@ -26,13 +26,24 @@ class SystemSafe {
   }
 
   /// Wraps every route so system bars never overlap app content.
+  /// Tablets also get a larger text scale so inner screens stay readable.
   static Widget wrapApp(BuildContext context, Widget? child) {
     if (child == null) return const SizedBox.shrink();
+    final media = MediaQuery.of(context);
+    final tablet = media.size.shortestSide >= AppBreakpoints.compact;
+    final userScale = media.textScaler.scale(1);
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: _overlayStyle,
-      child: SafeArea(
-        top: false,
-        child: child,
+      child: MediaQuery(
+        data: media.copyWith(
+          textScaler: TextScaler.linear(
+            userScale * (tablet ? AppResponsive.tabletTextScale : 1.0),
+          ),
+        ),
+        child: SafeArea(
+          top: false,
+          child: child,
+        ),
       ),
     );
   }

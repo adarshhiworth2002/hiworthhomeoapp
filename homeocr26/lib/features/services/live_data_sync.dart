@@ -9,7 +9,7 @@ class LiveDataSync {
   LiveDataSync._();
 
   /// How often to pull fresh data while the app is in the foreground.
-  static const Duration pollInterval = Duration(seconds: 4);
+  static const Duration pollInterval = Duration(seconds: 8);
 
   static Timer? _timer;
   static AppLifecycleListener? _lifecycle;
@@ -40,7 +40,7 @@ class LiveDataSync {
     });
 
     // First sync shortly after start so website edits show up quickly.
-    unawaited(Future<void>.delayed(const Duration(seconds: 1), syncNow));
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 400), syncNow));
   }
 
   static void stop() {

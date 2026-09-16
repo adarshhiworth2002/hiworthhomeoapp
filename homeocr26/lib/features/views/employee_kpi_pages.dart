@@ -1165,22 +1165,55 @@ class _EmployeePerformanceGraphPageState
                 ),
                 const SizedBox(height: 16),
                 SizedBox(
-                  height: 220,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      for (var i = 0; i < _employees.length; i++) ...[
-                        if (i > 0) const SizedBox(width: 10),
-                        Expanded(
-                          child: _BarColumn(
-                            label: _employees[i].employeeName,
-                            value: values[i],
-                            maxValue: chartMax,
-                            onTap: () => _openEmployee(_employees[i]),
+                  height: 230,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      const minBarWidth = 64.0;
+                      const gap = 10.0;
+                      final count = _employees.length;
+                      if (count == 0) {
+                        return Center(
+                          child: Text(
+                            'No employees',
+                            style: TextStyle(color: sectionTextMuted),
                           ),
+                        );
+                      }
+                      final needed =
+                          count * minBarWidth + (count - 1) * gap;
+                      final useScroll = needed > constraints.maxWidth + 0.5;
+                      final barWidth = useScroll
+                          ? minBarWidth
+                          : (constraints.maxWidth - (count - 1) * gap) /
+                              count;
+
+                      final row = Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          for (var i = 0; i < count; i++) ...[
+                            if (i > 0) const SizedBox(width: gap),
+                            SizedBox(
+                              width: barWidth,
+                              child: _BarColumn(
+                                label: _employees[i].employeeName,
+                                value: values[i],
+                                maxValue: chartMax,
+                                onTap: () => _openEmployee(_employees[i]),
+                              ),
+                            ),
+                          ],
+                        ],
+                      );
+
+                      if (!useScroll) return row;
+                      return SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: SizedBox(
+                          height: 230,
+                          child: row,
                         ),
-                      ],
-                    ],
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -1264,32 +1297,51 @@ class _BarColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final h = maxValue <= 0 ? 0.0 : (value / maxValue) * 160;
+    final h = maxValue <= 0 ? 0.0 : (value / maxValue) * 150;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(6),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.end,
+        mainAxisSize: MainAxisSize.max,
         children: [
-          Text(
-            _fmtNum(value),
-            style: const TextStyle(color: sectionTextMuted, fontSize: 12),
+          SizedBox(
+            height: 18,
+            width: double.infinity,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                _fmtNum(value),
+                maxLines: 1,
+                softWrap: false,
+                style: const TextStyle(color: sectionTextMuted, fontSize: 12),
+              ),
+            ),
           ),
           const SizedBox(height: 4),
           Container(
-            height: h.clamp(2, 160),
+            height: h.clamp(2, 150),
+            width: double.infinity,
             decoration: BoxDecoration(
               color: const Color(0xFF42A5F5),
               borderRadius: BorderRadius.circular(4),
             ),
           ),
           const SizedBox(height: 6),
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: sectionTextMuted, fontSize: 12),
+          SizedBox(
+            height: 32,
+            width: double.infinity,
+            child: Text(
+              label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: sectionTextMuted,
+                fontSize: 11,
+                height: 1.15,
+              ),
+            ),
           ),
         ],
       ),

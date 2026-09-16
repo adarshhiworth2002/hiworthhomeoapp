@@ -89,6 +89,83 @@ class CalendarDate {
     return DateTime(local.year, local.month, local.day);
   }
 
+  /// Parse API datetime strings while keeping the clock time.
+  ///
+  /// Use this for ledger timestamps. [parse] always returns midnight so it
+  /// can never drive a visible time-of-day.
+  static DateTime? parseDateTime(String? raw) {
+    final s = (raw ?? '').trim();
+    if (s.isEmpty || s == 'false') return null;
+
+    final dateOnly = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$');
+    final dm = dateOnly.firstMatch(s);
+    if (dm != null) {
+      return DateTime(
+        int.parse(dm.group(1)!),
+        int.parse(dm.group(2)!),
+        int.parse(dm.group(3)!),
+      );
+    }
+
+    final prefixed = RegExp(
+      r'^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?',
+    );
+    final pm = prefixed.firstMatch(s);
+    if (pm != null) {
+      final y = int.parse(pm.group(1)!);
+      final mo = int.parse(pm.group(2)!);
+      final d = int.parse(pm.group(3)!);
+      final hour = int.parse(pm.group(4)!);
+      final minute = int.parse(pm.group(5)!);
+      final second = int.tryParse(pm.group(6) ?? '') ?? 0;
+      final hasZone = s.endsWith('Z') ||
+          RegExp(r'[+-]\d{2}:?\d{2}$').hasMatch(s);
+
+      if (!hasZone && hour == 0 && minute == 0 && second == 0) {
+        return DateTime(y, mo, d);
+      }
+      if (!hasZone) {
+        return DateTime.utc(y, mo, d, hour, minute, second).toLocal();
+      }
+    }
+
+    final slash = RegExp(
+      r'^(\d{1,2})/(\d{1,2})/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?',
+    );
+    final sm = slash.firstMatch(s);
+    if (sm != null) {
+      final a = int.parse(sm.group(1)!);
+      final b = int.parse(sm.group(2)!);
+      final y = int.parse(sm.group(3)!);
+      final hour = int.tryParse(sm.group(4) ?? '') ?? 0;
+      final minute = int.tryParse(sm.group(5) ?? '') ?? 0;
+      final second = int.tryParse(sm.group(6) ?? '') ?? 0;
+      final day = a > 12 ? a : (b > 12 ? b : a);
+      final month = a > 12 ? b : (b > 12 ? a : b);
+      return DateTime(y, month, day, hour, minute, second);
+    }
+
+    final parsed = DateTime.tryParse(s.replaceFirst(' ', 'T'));
+    return parsed?.toLocal();
+  }
+
+  static bool hasClockTime(DateTime? date) {
+    if (date == null) return false;
+    return date.hour != 0 ||
+        date.minute != 0 ||
+        date.second != 0 ||
+        date.millisecond != 0;
+  }
+
+  static String formatTime(DateTime? date) {
+    if (!hasClockTime(date)) return '';
+    final h = date!.hour;
+    final m = date.minute.toString().padLeft(2, '0');
+    final period = h >= 12 ? 'PM' : 'AM';
+    final hour12 = h % 12 == 0 ? 12 : h % 12;
+    return '$hour12:$m $period';
+  }
+
   static int _hour(String s) {
     final m = RegExp(r'[T ](\d{2}):').firstMatch(s);
     return m == null ? 0 : int.tryParse(m.group(1)!) ?? 0;

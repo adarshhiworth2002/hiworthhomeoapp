@@ -351,9 +351,20 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage>
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                 child: PaymentBookColorLegend(
-                  hideStyles: const {PaymentBookRowStyle.cancel},
+                  // Supplier bills use only two states: paid (red) and
+                  // pending (grey). Customer/cash categories do not apply.
+                  hideStyles: isGave
+                      ? const {
+                          PaymentBookRowStyle.creditOpen,
+                          PaymentBookRowStyle.creditPaid,
+                          PaymentBookRowStyle.cancel,
+                        }
+                      : const {PaymentBookRowStyle.cancel},
                   labelOverrides: isGave
-                      ? const {PaymentBookRowStyle.draft: 'Pending'}
+                      ? const {
+                          PaymentBookRowStyle.walkIn: 'Paid',
+                          PaymentBookRowStyle.draft: 'Pending',
+                        }
                       : const {},
                 ),
               ),
@@ -470,11 +481,10 @@ class _NetAmountListCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final invoice = row.toInvoiceSummary(asSupplier: isGave);
     final style = invoice.paymentBookRowStyle;
-    final color = PaymentBookStyleColors.of(style);
+    final supplierPending = isGave && row.sectionKey == 'draft';
+    final color = isGave ? (supplierPending ? const Color(0xFF6B7280) : PaymentBookStyleColors.billRed) : PaymentBookStyleColors.of(style);
     final weight = PaymentBookStyleColors.weightOf(style);
-    final status = isGave && row.displayBillStatus == 'Draft'
-        ? 'Pending'
-        : row.displayBillStatus;
+    final status = supplierPending ? 'Pending' : row.displayBillStatus;
     final fields = <Widget>[
       _Cell(
         label: isGave ? 'Supplier' : 'Customer',
@@ -498,7 +508,7 @@ class _NetAmountListCard extends StatelessWidget {
       _Cell(
         label: 'Balance',
         value: NetAmountRow.money(row.balance),
-        color: const Color(0xFFD32F2F),
+        color: isGave ? color : const Color(0xFFD32F2F),
         weight: FontWeight.w700,
       ),
       _Cell(
@@ -510,7 +520,7 @@ class _NetAmountListCard extends StatelessWidget {
       _Cell(
         label: 'Paid',
         value: NetAmountRow.money(row.paidAmount),
-        color: const Color(0xFF2E7D32),
+        color: isGave ? color : const Color(0xFF2E7D32),
         weight: FontWeight.w700,
       ),
     ];
@@ -535,7 +545,10 @@ class _NetAmountListCard extends StatelessWidget {
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                InvoiceBillStatusBadge(status: status),
+                InvoiceBillStatusBadge(
+                  status: status,
+                  colorOverride: isGave ? color : null,
+                ),
                 const SizedBox(height: 8),
                 const Icon(
                   Icons.chevron_right,

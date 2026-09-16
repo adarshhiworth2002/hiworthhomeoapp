@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../features/services/invoice_b2b_index.dart';
+import '../features/services/payment_book_service.dart';
 import '../features/services/payment_history_service.dart';
 import '../models/invoice_summary_model.dart';
 import '../models/payment_book_model.dart';
@@ -54,7 +55,8 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
   static void seedFromPaymentHistory() {
     final cached = PaymentHistoryService.cachedInvoices;
     if (cached == null || cached.isEmpty) return;
-    _sharedCatalog = List<InvoiceSummaryModel>.from(cached);
+    _sharedCatalog =
+        PaymentHistoryService.applyTrustedToList(List.from(cached));
     _sharedCatalogLoadedAt = DateTime.now();
   }
 
@@ -80,7 +82,9 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
     bool forceRefresh = false,
   }) async {
     if (!forceRefresh && _sharedCatalog.isNotEmpty) {
-      return List<InvoiceSummaryModel>.from(_sharedCatalog);
+      return PaymentHistoryService.applyTrustedToList(
+        List<InvoiceSummaryModel>.from(_sharedCatalog),
+      );
     }
     final catalog = await _loadCatalogFromApi(
       sessionId: sessionId,
@@ -89,9 +93,9 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
       db: db,
       forceRefresh: forceRefresh,
     );
-    _sharedCatalog = catalog;
+    _sharedCatalog = PaymentHistoryService.applyTrustedToList(catalog);
     _sharedCatalogLoadedAt = DateTime.now();
-    return catalog;
+    return List<InvoiceSummaryModel>.from(_sharedCatalog);
   }
 
   static void clearGlobalCache() {
@@ -107,6 +111,26 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
     PaymentHistoryService.removeInvoice(invoiceId);
   }
 
+  /// Patch / insert one invoice into the shared catalog (instant list update).
+  static void upsertInvoice(InvoiceSummaryModel invoice) {
+    final id = invoice.id;
+    if (id == null || id <= 0) return;
+    PaymentHistoryService.upsertInvoice(invoice);
+    PaymentBookService.upsertInvoice(invoice);
+    final patched = PaymentHistoryService.withTrustedTotals(invoice);
+    final list = List<InvoiceSummaryModel>.from(_sharedCatalog);
+    final idx = list.indexWhere((i) => i.id == id);
+    if (idx >= 0) {
+      list[idx] = PaymentHistoryService.withTrustedTotals(
+        list[idx].mergedWith(patched),
+      );
+    } else {
+      list.insert(0, patched);
+    }
+    _sharedCatalog = list;
+    _sharedCatalogLoadedAt = DateTime.now();
+  }
+
   void removeInvoiceLocally(int invoiceId) {
     if (invoiceId <= 0) return;
     evictInvoice(invoiceId);
@@ -115,13 +139,23 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
     _notify();
   }
 
+  void upsertInvoiceLocally(InvoiceSummaryModel invoice) {
+    upsertInvoice(invoice);
+    _hydrateFromCaches();
+    _notify();
+  }
+
   bool _hydrateFromCaches() {
     if (_sharedCatalog.isEmpty) seedFromPaymentHistory();
     if (_sharedCatalog.isEmpty) {
       final history = PaymentHistoryService.cachedInvoices;
       if (history == null || history.isEmpty) return false;
-      _sharedCatalog = List<InvoiceSummaryModel>.from(history);
+      _sharedCatalog =
+          PaymentHistoryService.applyTrustedToList(List.from(history));
       _sharedCatalogLoadedAt = DateTime.now();
+    } else {
+      _sharedCatalog =
+          PaymentHistoryService.applyTrustedToList(_sharedCatalog);
     }
     _catalog = List<InvoiceSummaryModel>.from(_sharedCatalog);
     _catalogLoadedAt = _sharedCatalogLoadedAt;
@@ -168,12 +202,14 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
         return;
       }
 
-      _catalog = await _loadCatalogFromApi(
-        sessionId: loginModel.sessionId!,
-        login: loginModel.loginEmail,
-        password: loginModel.loginPassword,
-        db: LoginViewmodel.dbName,
-        forceRefresh: forceRefresh,
+      _catalog = PaymentHistoryService.applyTrustedToList(
+        await _loadCatalogFromApi(
+          sessionId: loginModel.sessionId!,
+          login: loginModel.loginEmail,
+          password: loginModel.loginPassword,
+          db: LoginViewmodel.dbName,
+          forceRefresh: forceRefresh,
+        ),
       );
       _catalogLoadedAt = DateTime.now();
       _sharedCatalog = List<InvoiceSummaryModel>.from(_catalog);
@@ -213,6 +249,15 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
     if (!forceRefresh && pending != null) return pending;
 
     final future = () async {
+      // After save/discard: refresh only the newest page instead of paging
+      // hundreds of invoices (was causing 60s+ waits on the list screen).
+      if (forceRefresh && PaymentHistoryService.hasAnyCache) {
+        final head = await PaymentHistoryService.refreshHead(
+          sessionId: sessionId,
+        );
+        seedFromPaymentHistory();
+        return head;
+      }
       final merged = await PaymentHistoryService.fetchInvoices(
         sessionId: sessionId,
         forceRefresh: forceRefresh,
@@ -232,9 +277,10 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
   }
 
   List<InvoiceSummaryModel> _filterCatalog(String state) {
+    final catalog = PaymentHistoryService.applyTrustedToList(_catalog);
     var list = state == 'all'
-        ? List<InvoiceSummaryModel>.from(_catalog)
-        : _catalog.where((inv) => inv.sectionKey == state).toList();
+        ? List<InvoiceSummaryModel>.from(catalog)
+        : catalog.where((inv) => inv.sectionKey == state).toList();
 
     list.sort((a, b) {
       final da = a.invoiceDate ?? '';

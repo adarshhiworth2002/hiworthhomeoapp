@@ -32,6 +32,9 @@ class AppResponsive {
       width >= AppBreakpoints.compact && width < AppBreakpoints.medium;
   bool get isExpanded => width >= AppBreakpoints.medium;
   bool get isTablet => shortestSide >= AppBreakpoints.compact;
+
+  /// Extra text scale applied on tablets only (phones stay 1.0).
+  static const tabletTextScale = 1.28;
   bool get isNarrowPhone => width < 360;
 
   /// Centered content width so lists/forms don't stretch on tablets.
@@ -71,8 +74,7 @@ class AppResponsive {
   }
 
   int get homeCrossAxisCount {
-    if (width >= 1000) return 4;
-    if (width >= AppBreakpoints.compact) return 3;
+    if (isTablet) return 3;
     return 2;
   }
 

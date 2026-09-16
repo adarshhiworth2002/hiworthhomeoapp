@@ -57,7 +57,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
         if (!mounted) return;
         await _reloadSettled(live: _viewModel.items);
       },
-      interval: const Duration(seconds: 30),
+      interval: const Duration(seconds: 8),
       immediate: false,
     );
   }
