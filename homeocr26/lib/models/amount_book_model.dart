@@ -228,8 +228,9 @@ class _LedgerEvent {
 class AmountBookLedgerBuilder {
   const AmountBookLedgerBuilder._();
 
-  /// Folder for nameless / walk-in customers.
-  static const String noneCustomerLabel = 'None';
+  /// Folder for nameless / walk-in customers (aligned with invoice lists).
+  static const String noneCustomerLabel =
+      InvoiceSummaryModel.walkinCustomerLabel;
 
   static bool isNoneCustomerLabel(String customerName) {
     return customerName.trim().toLowerCase() == noneCustomerLabel.toLowerCase();
@@ -238,15 +239,11 @@ class AmountBookLedgerBuilder {
   static bool isWalkInOrNamelessName(String? name) {
     final raw = (name ?? '').trim();
     if (raw.isEmpty) return true;
-    if (InvoiceSummaryModel.isPlaceholderCustomerName(raw)) return true;
     final lower = raw.toLowerCase();
-    return lower == 'none' ||
-        lower == 'walk-in' ||
-        lower == 'walk in' ||
-        lower == 'walk-in customer' ||
-        lower == 'walk in customer' ||
-        lower.startsWith('walk-in') ||
-        lower.startsWith('walk in');
+    if (lower == noneCustomerLabel.toLowerCase() || lower == 'none') {
+      return true;
+    }
+    return InvoiceSummaryModel.isWalkInCustomerName(raw);
   }
 
   static bool isNamelessCustomerRow(NetAmountRow row) {
@@ -264,7 +261,7 @@ class AmountBookLedgerBuilder {
     if (q.isEmpty) return true;
     if (customerName.toLowerCase().contains(q)) return true;
     if (isNoneCustomerLabel(customerName)) {
-      const aliases = 'walk-in customer walk in customer none';
+      const aliases = 'walkin customer walk-in customer walk in customer none';
       return aliases.contains(q);
     }
     return false;

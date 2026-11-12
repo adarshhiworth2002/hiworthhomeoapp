@@ -65,16 +65,30 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (sheetContext) => InvoiceSearchFilterSheet(
-        initialFilter: _viewModel.listFilter,
+        // Same sheet as Payment Book (today dates by default).
+        initialFilter: _viewModel.listFilter.isActive
+            ? _viewModel.listFilter
+            : PaymentBookFilter.today(),
         parentContext: context,
+        datesRequired: true,
+        clearLabel: 'Clear all',
       ),
     );
     if (!mounted || result == null) return;
     if (result.clear) {
-      _viewModel.clearListFilter();
+      setState(() {
+        _searchQuery = '';
+        _searchController.clear();
+      });
+      await _viewModel.clearListFilter(context);
       return;
     }
-    _viewModel.applyListFilter(result.filter);
+    // Avoid double-filtering against a leftover toolbar query.
+    setState(() {
+      _searchQuery = '';
+      _searchController.clear();
+    });
+    await _viewModel.applyListFilter(context, result.filter);
   }
 
   @override
@@ -145,15 +159,14 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
                     padding: SystemSafe.horizontalPadding(context, bottom: 8),
                     child: _InvoiceFilterChips(
                       filter: model.listFilter,
-                      onClear: model.clearListFilter,
+                      onClear: () => unawaited(model.clearListFilter(context)),
                     ),
                   ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                   child: InvoiceStatusFilterChips(
                     selected: model.selectedState,
-                    onSelected: (state) =>
-                        model.fetch(context, state: state),
+                    onSelected: model.setSelectedState,
                   ),
                 ),
                 const Padding(
@@ -298,6 +311,7 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
             query: _searchQuery,
             customer: item.customer,
             displayCustomer: item.displayCustomer,
+            listCustomerLabel: item.listCustomerLabel,
             displayNumber: item.displayNumber,
             invoiceNumber: item.invoiceNumber,
           ),

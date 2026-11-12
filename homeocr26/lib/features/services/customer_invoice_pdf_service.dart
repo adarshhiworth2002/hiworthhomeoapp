@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 
@@ -9,10 +10,12 @@ import '../../models/invoice_summary_model.dart';
 import '../../viewModels/login_viewmodel.dart';
 import 'WebApi/web_api_impl.dart';
 import 'api_request_helper.dart';
+import 'appConfig.dart';
+import 'auth_session_store.dart';
 import 'endPoints.dart';
-import 'odoo_rpc_helper.dart';
+import 'session_helper.dart';
 
-/// Shares the server-generated customer invoice PDF (website layout + QR).
+/// Shares the server-generated customer invoice PDF via Laravel Flutter APIs.
 class CustomerInvoicePdfService {
   const CustomerInvoicePdfService._();
 
@@ -38,26 +41,16 @@ class CustomerInvoicePdfService {
 
       final flutterSid = login.sessionId;
       if (flutterSid != null && flutterSid.isNotEmpty) {
-        bytes = await _fromFlutterApi(
+        // Laravel route: GET /api/pharmacy_mgmnt/auto_print_invoice/{moveId}
+        bytes = await _fromAutoPrintApi(
+          sessionId: flutterSid,
+          invoiceId: id,
+        );
+        bytes ??= await _fromFlutterApi(
           sessionId: flutterSid,
           invoiceId: id,
           invoiceNumber: invoice.displayNumber,
         );
-      }
-
-      if (bytes == null) {
-        final email = (login.loginEmail ?? '').trim();
-        final password = login.loginPassword ?? '';
-        if (email.isNotEmpty && password.isNotEmpty) {
-          final webSid = await OdooRpcHelper.cachedWebSessionId(
-            db: LoginViewmodel.dbName,
-            login: email,
-            password: password,
-          );
-          if (webSid != null && webSid.isNotEmpty) {
-            bytes = await OdooRpcHelper.fetchAccountMovePdfBytes(webSid, id);
-          }
-        }
       }
 
       if (!context.mounted) return;
@@ -80,6 +73,39 @@ class CustomerInvoicePdfService {
       if (!context.mounted) return;
       messenger.hideCurrentSnackBar();
       _toast(context, 'Share PDF failed.');
+    }
+  }
+
+  static Future<Uint8List?> _fromAutoPrintApi({
+    required String sessionId,
+    required int invoiceId,
+  }) async {
+    try {
+      final url =
+          '${AppConfig.baseAppUrl}${EndPoint.customerInvoiceAutoPrint.path}/$invoiceId';
+      final response = await http
+          .get(
+            Uri.parse(url),
+            headers: SessionHelper.jsonHeaders(
+              sessionId: sessionId,
+              apiToken: AuthSessionStore.currentApiToken,
+            ),
+          )
+          .timeout(const Duration(seconds: 60));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return null;
+      }
+      if (_looksLikePdf(response.bodyBytes)) return response.bodyBytes;
+      final body = response.body.trim();
+      if (body.startsWith('{')) {
+        return _pdfFromJson(jsonDecode(body));
+      }
+      return null;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('CustomerInvoicePdfService auto_print: $e');
+      }
+      return null;
     }
   }
 

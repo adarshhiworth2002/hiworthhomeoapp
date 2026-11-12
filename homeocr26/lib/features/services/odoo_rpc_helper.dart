@@ -7,6 +7,8 @@ import '../../models/cheque_clearance_model.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../models/stock_item_model.dart';
 import 'appConfig.dart';
+import 'auth_session_store.dart';
+import 'flutter_customer_invoice_web_api.dart';
 import 'invoice_calc_helper.dart';
 import 'invoice_helper.dart';
 import 'session_helper.dart';
@@ -157,6 +159,9 @@ class OdooRpcHelper {
     required String login,
     required String password,
   }) async {
+    // App features are Laravel + Flutter-local only. WebView authenticates itself.
+    if (!AppConfig.odooRpcEnabled) return null;
+
     final key = '$db|$login';
     final now = DateTime.now();
     if (_cachedWebSessionId != null &&
@@ -211,6 +216,7 @@ class OdooRpcHelper {
     required String login,
     required String password,
   }) async {
+    if (!AppConfig.odooRpcEnabled) return null;
     Object? lastError;
     for (var attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) {
@@ -242,7 +248,8 @@ class OdooRpcHelper {
     required String login,
     required String password,
   }) async {
-    final uri = Uri.parse('${AppConfig.baseAppUrl}web/session/authenticate');
+    if (!AppConfig.odooRpcEnabled) return null;
+    final uri = Uri.parse('${AppConfig.odooBaseUrl}web/session/authenticate');
     final response = await http
         .post(
           uri,
@@ -304,7 +311,8 @@ class OdooRpcHelper {
     List<dynamic> args = const [],
     Map<String, dynamic> kwargs = const {},
   }) async {
-    final uri = Uri.parse('${AppConfig.baseAppUrl}web/dataset/call_kw');
+    if (!AppConfig.odooRpcEnabled) return null;
+    final uri = Uri.parse('${AppConfig.odooBaseUrl}web/dataset/call_kw');
     final body = {
       'jsonrpc': '2.0',
       'method': 'call',
@@ -2138,6 +2146,9 @@ class OdooRpcHelper {
     double? taxPercent,
   }) async {
     if (lineId <= 0) return false;
+    // callKw no-ops when RPC is off — callers must use Laravel
+    // (add_to_invoice / website line update) so stock stays correct.
+    if (!AppConfig.odooRpcEnabled) return false;
     try {
       final available = await _modelFields(sessionId, 'account.move.line');
       final vals = <String, dynamic>{};
@@ -5600,12 +5611,43 @@ class OdooRpcHelper {
   static final Map<String, Set<String>> _fieldsCache = {};
   static final Set<String> _missingModels = {};
 
-  /// Delete a session-created draft move so Close does not leave a draft bill.
+  /// Hard-delete a session-created draft so Close does not leave a bill.
+  /// When Odoo RPC is off, hard-deletes via Laravel website forms/routes
+  /// (discard / destroy / DELETE — never cancel) and confirms the bill is gone.
   static Future<bool> deleteCustomerInvoiceDraft(
     String sessionId,
-    int invoiceId,
-  ) async {
+    int invoiceId, {
+    String? login,
+    String? password,
+  }) async {
     if (invoiceId <= 0) return false;
+    // callKw no-ops when RPC is off — use Laravel website discard instead.
+    if (!AppConfig.odooRpcEnabled) {
+      final email = (login ?? '').trim();
+      final pass = password ?? '';
+      if (email.isEmpty || pass.isEmpty) {
+        if (kDebugMode) {
+          debugPrint(
+            'deleteCustomerInvoiceDraft: Laravel discard needs login/password '
+            '#$invoiceId',
+          );
+        }
+        return false;
+      }
+      final ok = await FlutterCustomerInvoiceWebApi.discardInvoice(
+        invoiceId: invoiceId,
+        email: email,
+        password: pass,
+        sessionId: sessionId,
+        apiToken: AuthSessionStore.currentApiToken,
+      );
+      if (kDebugMode) {
+        debugPrint(
+          'deleteCustomerInvoiceDraft: Laravel discard #$invoiceId ok=$ok',
+        );
+      }
+      return ok;
+    }
     try {
       // Remove product lines first — empty drafts unlink more reliably.
       try {
@@ -9702,6 +9744,7 @@ class OdooRpcHelper {
     String sessionId,
     int invoiceId,
   ) async {
+    if (!AppConfig.odooRpcEnabled) return null;
     if (invoiceId <= 0) return null;
 
     final reportName = await resolveAccountMovePdfReportName(sessionId);
@@ -9710,7 +9753,7 @@ class OdooRpcHelper {
     // 1) HTTP report route used by the website Print button.
     try {
       final uri = Uri.parse(
-        '${AppConfig.baseAppUrl}report/pdf/$reportName/$invoiceId',
+        '${AppConfig.odooBaseUrl}report/pdf/$reportName/$invoiceId',
       );
       final response = await http
           .get(

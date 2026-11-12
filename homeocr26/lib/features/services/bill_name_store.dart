@@ -1,15 +1,18 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Persists names created in New Bill (Customer / Doctor) for next suggestions.
+/// Persists names created in New Bill (Customer / Doctor / Responsible)
+/// for next suggestions.
 /// Falls back to in-memory if the shared_preferences plugin is unavailable
 /// (e.g. hot-reload after adding the dependency — needs full app restart).
 class BillNameStore {
   static const _customersKey = 'bill_custom_customers';
   static const _doctorsKey = 'bill_custom_doctors';
+  static const _responsibleKey = 'bill_custom_responsible';
 
   static final List<String> _memoryCustomers = [];
   static final List<String> _memoryDoctors = [];
+  static final List<String> _memoryResponsible = [];
   static bool _prefsUnavailable = false;
 
   static Future<List<String>> loadCustomers() => _load(
@@ -22,6 +25,11 @@ class BillNameStore {
         _memoryDoctors,
       );
 
+  static Future<List<String>> loadResponsible() => _load(
+        _responsibleKey,
+        _memoryResponsible,
+      );
+
   static Future<void> rememberCustomer(String name) => _remember(
         _customersKey,
         _memoryCustomers,
@@ -31,6 +39,12 @@ class BillNameStore {
   static Future<void> rememberDoctor(String name) => _remember(
         _doctorsKey,
         _memoryDoctors,
+        name,
+      );
+
+  static Future<void> rememberResponsible(String name) => _remember(
+        _responsibleKey,
+        _memoryResponsible,
         name,
       );
 

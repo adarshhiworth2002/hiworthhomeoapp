@@ -92,10 +92,14 @@ class PaymentBookViewModel extends ChangeNotifier {
         forceRefresh: forceRefresh,
       );
 
-      // Prefer server dates when present; otherwise keep filter dates.
-      final apiFrom = _parseApiDate(book.dateFrom) ?? filter.dateFrom;
-      final apiTo = _parseApiDate(book.dateTo) ?? filter.dateTo;
-      filter = filter.copyWith(dateFrom: apiFrom, dateTo: apiTo);
+      // Only sync dates from the API when the user asked for a date window.
+      // Clear-all leaves dates null — do not re-impose the API's today range
+      // or the list looks "stuck" on today after Clear.
+      if (filter.hasDateRange) {
+        final apiFrom = _parseApiDate(book.dateFrom) ?? filter.dateFrom;
+        final apiTo = _parseApiDate(book.dateTo) ?? filter.dateTo;
+        filter = filter.copyWith(dateFrom: apiFrom, dateTo: apiTo);
+      }
       error = '';
     } catch (e, s) {
       if (kDebugMode) debugPrint('$e\n$s');

@@ -52,29 +52,66 @@ class EmployeePerformanceSummary {
       kpiCards.sort((a, b) => a.sequence.compareTo(b.sequence));
     }
 
-    final empRaw = data['employees'];
+    // Website / Flutter API may put people under `employees` and/or `workers`.
     final apiEmployees = <EmployeePerformanceRow>[];
-    if (empRaw is List) {
-      for (final item in empRaw) {
-        if (item is Map) {
-          apiEmployees.add(
-            EmployeePerformanceRow.fromJson(Map<String, dynamic>.from(item)),
-          );
-        }
+    final seen = <String>{};
+    void addRows(dynamic raw) {
+      if (raw is! List) return;
+      for (final item in raw) {
+        if (item is! Map) continue;
+        final row =
+            EmployeePerformanceRow.fromJson(Map<String, dynamic>.from(item));
+        final key = row.displayName.trim().toLowerCase();
+        if (key.isEmpty || key == 'unknown') continue;
+        if (!seen.add(key)) continue;
+        apiEmployees.add(row);
       }
     }
 
+    addRows(data['employees']);
+    addRows(data['workers']);
+
+    final kpiNode = data['kpi'];
+    final kpi = kpiNode is Map ? Map<String, dynamic>.from(kpiNode) : const {};
+
     return EmployeePerformanceSummary(
       reportDate: _string(data['report_date']),
-      homeCount: _int(data['home_count']) ?? apiEmployees.length,
-      billsCompletedToday: _int(data['bills_completed_today']) ?? 0,
+      homeCount: _int(data['home_count']) ??
+          _int(kpi['worker_count']) ??
+          apiEmployees.length,
+      billsCompletedToday: _int(data['bills_completed_today']) ??
+          _int(kpi['invoice_count']) ??
+          0,
       activeSessions: _int(data['active_sessions']) ?? 0,
       avgWorkTimeToday: _string(data['avg_work_time_today']),
       employeeCount: _int(data['employee_count']) ??
+          _int(kpi['worker_count']) ??
           _int(data['count']) ??
           apiEmployees.length,
       kpiCards: kpiCards,
       apiEmployees: apiEmployees,
+    );
+  }
+
+  EmployeePerformanceSummary copyWith({
+    String? reportDate,
+    int? homeCount,
+    int? billsCompletedToday,
+    int? activeSessions,
+    String? avgWorkTimeToday,
+    int? employeeCount,
+    List<EmployeeKpiCard>? kpiCards,
+    List<EmployeePerformanceRow>? apiEmployees,
+  }) {
+    return EmployeePerformanceSummary(
+      reportDate: reportDate ?? this.reportDate,
+      homeCount: homeCount ?? this.homeCount,
+      billsCompletedToday: billsCompletedToday ?? this.billsCompletedToday,
+      activeSessions: activeSessions ?? this.activeSessions,
+      avgWorkTimeToday: avgWorkTimeToday ?? this.avgWorkTimeToday,
+      employeeCount: employeeCount ?? this.employeeCount,
+      kpiCards: kpiCards ?? this.kpiCards,
+      apiEmployees: apiEmployees ?? this.apiEmployees,
     );
   }
 
@@ -241,9 +278,13 @@ class EmployeePerformanceRow {
     final workerName = EmployeePerformanceSummary._string(json['worker_name']);
     final employeeName =
         EmployeePerformanceSummary._string(json['employee_name']);
+    final name = EmployeePerformanceSummary._string(json['name']);
     return EmployeePerformanceRow(
-      id: EmployeePerformanceSummary._int(json['id']) ?? 0,
-      displayName: workerName ?? employeeName ?? 'Unknown',
+      id: EmployeePerformanceSummary._int(json['id']) ??
+          EmployeePerformanceSummary._int(json['worker_id']) ??
+          EmployeePerformanceSummary._int(json['employee_id']) ??
+          0,
+      displayName: workerName ?? employeeName ?? name ?? 'Unknown',
       employeeId: EmployeePerformanceSummary._int(json['employee_id']),
       workerId: EmployeePerformanceSummary._int(json['worker_id']),
       billsToday: EmployeePerformanceSummary._int(json['bills_today']) ?? 0,
@@ -260,6 +301,38 @@ class EmployeePerformanceRow {
       avgWorkTimeToday:
           EmployeePerformanceSummary._string(json['avg_work_time_today']),
       workMinutesTotal: _double(json['work_minutes_total']) ?? 0,
+    );
+  }
+
+  EmployeePerformanceRow copyWith({
+    int? id,
+    String? displayName,
+    int? employeeId,
+    int? workerId,
+    int? billsToday,
+    int? billsMonth,
+    int? totalBills,
+    int? activeSessions,
+    int? halfBillingMonth,
+    int? fullBillingMonth,
+    double? avgWorkMinutesToday,
+    String? avgWorkTimeToday,
+    double? workMinutesTotal,
+  }) {
+    return EmployeePerformanceRow(
+      id: id ?? this.id,
+      displayName: displayName ?? this.displayName,
+      employeeId: employeeId ?? this.employeeId,
+      workerId: workerId ?? this.workerId,
+      billsToday: billsToday ?? this.billsToday,
+      billsMonth: billsMonth ?? this.billsMonth,
+      totalBills: totalBills ?? this.totalBills,
+      activeSessions: activeSessions ?? this.activeSessions,
+      halfBillingMonth: halfBillingMonth ?? this.halfBillingMonth,
+      fullBillingMonth: fullBillingMonth ?? this.fullBillingMonth,
+      avgWorkMinutesToday: avgWorkMinutesToday ?? this.avgWorkMinutesToday,
+      avgWorkTimeToday: avgWorkTimeToday ?? this.avgWorkTimeToday,
+      workMinutesTotal: workMinutesTotal ?? this.workMinutesTotal,
     );
   }
 

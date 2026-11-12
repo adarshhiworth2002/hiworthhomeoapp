@@ -83,18 +83,10 @@ class PaymentBookFilter {
     if (hasDateRange && !_inDateRange(item.invoiceDate, dateFrom, dateTo)) {
       return false;
     }
-    if (hasCustomer &&
-        !_containsAny(
-          [item.displayCustomer, item.customer],
-          customerQuery,
-        )) {
+    if (hasCustomer && !_matchesCustomer(item, customerQuery)) {
       return false;
     }
-    if (hasInvoice &&
-        !_containsAny(
-          [item.displayNumber, item.invoiceNumber],
-          invoiceQuery,
-        )) {
+    if (hasInvoice && !_matchesInvoice(item, invoiceQuery)) {
       return false;
     }
     if (hasCustomerType) {
@@ -118,18 +110,69 @@ class PaymentBookFilter {
     if (hasPaymentMode) {
       final expected = paymentModeApiValue!;
       final raw = (item.paymentMode ?? '').toLowerCase().trim();
-      if (raw != expected && !raw.contains(expected)) return false;
+      // Many drafts omit mode; treat blank as cash (API default).
+      if (raw.isEmpty) {
+        if (expected != 'cash') return false;
+      } else if (raw != expected && !raw.contains(expected)) {
+        return false;
+      }
     }
     return true;
   }
 
-  static bool _containsAny(Iterable<String?> values, String query) {
+  static bool _matchesCustomer(InvoiceSummaryModel item, String query) {
     final q = query.trim().toLowerCase();
     if (q.isEmpty) return true;
-    for (final value in values) {
-      if ((value ?? '').toLowerCase().contains(q)) return true;
+    final compact = _normalize(query);
+    if (compact.contains('walkin') ||
+        compact == 'walk' ||
+        compact.contains('demo')) {
+      if (item.isWalkInOrNamelessCustomer) return true;
+    }
+    // Same behaviour as list PrefixSearch: case-insensitive contains.
+    for (final value in [
+      item.listCustomerLabel,
+      item.displayCustomer,
+      item.customer,
+    ]) {
+      final v = (value ?? '').trim().toLowerCase();
+      if (v.isNotEmpty && (v.contains(q) || _normalize(value).contains(compact))) {
+        return true;
+      }
     }
     return false;
+  }
+
+  static bool _matchesInvoice(InvoiceSummaryModel item, String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    final compact = _normalize(query);
+    final numbers = [item.displayNumber, item.invoiceNumber];
+    for (final value in numbers) {
+      final v = (value ?? '').trim().toLowerCase();
+      if (v.isNotEmpty &&
+          (v.contains(q) || _normalize(value).contains(compact))) {
+        return true;
+      }
+    }
+    // Digits-only: "177" / "0177" match "R0177".
+    final qDigits = compact.replaceAll(RegExp(r'\D'), '');
+    if (qDigits.isEmpty) return false;
+    for (final value in numbers) {
+      final digits = _normalize(value).replaceAll(RegExp(r'\D'), '');
+      if (digits.isNotEmpty &&
+          (digits.contains(qDigits) || qDigits.contains(digits))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static String _normalize(String? raw) {
+    return (raw ?? '')
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s_-]+'), '');
   }
 
   static bool _inDateRange(String? raw, DateTime? from, DateTime? to) {
@@ -254,18 +297,7 @@ enum PaymentBookRowStyle {
 }
 
 extension PaymentBookInvoiceStyle on InvoiceSummaryModel {
-  bool get isWalkInCustomer {
-    final raw = (customer ?? '').trim();
-    if (raw.isEmpty) return true;
-    if (InvoiceSummaryModel.isPlaceholderCustomerName(raw)) return true;
-    final lower = raw.toLowerCase();
-    return lower == 'walk-in' ||
-        lower == 'walk in' ||
-        lower == 'walk-in customer' ||
-        lower == 'walk in customer' ||
-        lower.startsWith('walk-in') ||
-        lower.startsWith('walk in');
-  }
+  bool get isWalkInCustomer => isWalkInOrNamelessCustomer;
 
   bool get isDraftInvoice {
     final move = (moveState ?? '').toLowerCase().trim();
@@ -314,17 +346,7 @@ extension PaymentBookInvoiceStyle on InvoiceSummaryModel {
     return raw.toLowerCase();
   }
 
-  String get displayPaymentBookName {
-    if (isWalkInCustomer) {
-      final raw = (customer ?? '').trim();
-      if (raw.isNotEmpty &&
-          !InvoiceSummaryModel.isPlaceholderCustomerName(raw)) {
-        return raw;
-      }
-      return 'Walk-in Customer';
-    }
-    return displayCustomer ?? '—';
-  }
+  String get displayPaymentBookName => listCustomerLabel;
 
   String get displayPaymentBookDate {
     final parsed = CalendarDate.parse(invoiceDate);

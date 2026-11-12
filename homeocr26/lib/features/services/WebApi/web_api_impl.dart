@@ -5,64 +5,88 @@ import 'package:homeocr26/features/services/WebApi/web_api.dart';
 import 'package:http/http.dart';
 
 import '../appConfig.dart';
+import '../auth_session_store.dart';
 import '../endPoints.dart';
 import '../session_helper.dart';
 
 class WebApiImpl implements WebAPI {
-
-  @override
-  Future<Response> login({required Map<String, dynamic> userDetails}) async {
-    if (kDebugMode) {
-      print('url::: ${AppConfig.baseAppUrl}${EndPoint.login.path}');
-    }
-    print(userDetails);
-    final response = await post(
-        Uri.parse('${AppConfig.baseAppUrl}${EndPoint.login.path}'),
-        headers: <String, String>{
-          'Content-Type': 'application/json'
-        },
-        body: jsonEncode(userDetails));
-    print({"----${response.body}---"});
-    return response;
-
-    // --- Login failure handling we added (timeout + browser-like headers). ---
-    // final url = '${AppConfig.baseAppUrl}${EndPoint.login.path}';
-    // if (kDebugMode) {
-    //   print('url::: $url');
-    // }
-    // final response = await post(
-    //   Uri.parse(url),
-    //   headers: SessionHelper.jsonHeaders(),
-    //   body: jsonEncode(userDetails),
-    // ).timeout(const Duration(seconds: 30));
-    // if (kDebugMode) {
-    //   print('login HTTP ${response.statusCode} (${response.bodyBytes.length} bytes)');
-    // }
-    // return response;
+  Map<String, String> _authHeaders({String? sessionId}) {
+    return SessionHelper.jsonHeaders(
+      sessionId: sessionId,
+      apiToken: AuthSessionStore.currentApiToken,
+    );
   }
 
   @override
-  Future<Response> qrFetch({required Map<String, dynamic> userDetails,required String sessionId}) async {
+  Future<Response> login({required Map<String, dynamic> userDetails}) async {
+    // Laravel login reads top-level login/email/password only.
+    final login = '${userDetails['login'] ?? userDetails['email'] ?? ''}'.trim();
+    final email = '${userDetails['email'] ?? login}'.trim();
+    final password = '${userDetails['password'] ?? ''}';
+    final nested = userDetails['params'];
+    final flat = <String, dynamic>{
+      'login': login.isNotEmpty
+          ? login
+          : (nested is Map
+              ? '${nested['login'] ?? nested['email'] ?? ''}'.trim()
+              : ''),
+      'email': email.isNotEmpty
+          ? email
+          : (nested is Map
+              ? '${nested['email'] ?? nested['login'] ?? ''}'.trim()
+              : ''),
+      'password': password.isNotEmpty
+          ? password
+          : (nested is Map ? '${nested['password'] ?? ''}' : ''),
+      if (userDetails['db'] != null) 'db': userDetails['db'],
+      if (nested is Map && nested['db'] != null) 'db': nested['db'],
+    };
+
+    if (kDebugMode) {
+      print('url::: ${AppConfig.baseAppUrl}${EndPoint.login.path}');
+    }
+    print(flat);
+    final response = await post(
+      Uri.parse('${AppConfig.baseAppUrl}${EndPoint.login.path}'),
+      headers: <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: jsonEncode(flat),
+    );
+    print({"----${response.body}---"});
+    return response;
+  }
+
+  @override
+  Future<Response> qrFetch({
+    required Map<String, dynamic> userDetails,
+    required String sessionId,
+  }) async {
     if (kDebugMode) {
       print('cccc ${AppConfig.baseAppUrl}${EndPoint.qrFetch.path}');
     }
     print(userDetails);
     final response = await post(
-        Uri.parse('${AppConfig.baseAppUrl}${EndPoint.qrFetch.path}'),
-        headers: SessionHelper.jsonHeaders(sessionId: sessionId),
-        body: jsonEncode(userDetails));
+      Uri.parse('${AppConfig.baseAppUrl}${EndPoint.qrFetch.path}'),
+      headers: _authHeaders(sessionId: sessionId),
+      body: jsonEncode(userDetails),
+    );
     return response;
   }
 
   @override
-  Future<Response> addMedicineQty(
-      {required Map<String, dynamic> userDetails,required String sessionId}) async {
+  Future<Response> addMedicineQty({
+    required Map<String, dynamic> userDetails,
+    required String sessionId,
+  }) async {
     print('${AppConfig.baseAppUrl}${EndPoint.addMedicineQty.path}');
     print(userDetails);
     final response = await post(
-        Uri.parse('${AppConfig.baseAppUrl}${EndPoint.addMedicineQty.path}'),
-        headers: SessionHelper.jsonHeaders(sessionId: sessionId),
-        body: jsonEncode(userDetails));
+      Uri.parse('${AppConfig.baseAppUrl}${EndPoint.addMedicineQty.path}'),
+      headers: _authHeaders(sessionId: sessionId),
+      body: jsonEncode(userDetails),
+    );
     return response;
   }
 
@@ -81,7 +105,7 @@ class WebApiImpl implements WebAPI {
     final response = await post(
       Uri.parse('${AppConfig.baseAppUrl}$endpointPath'),
       headers: {
-        ...SessionHelper.jsonHeaders(sessionId: sessionId),
+        ..._authHeaders(sessionId: sessionId),
         'Connection': 'keep-alive',
       },
       body: jsonEncode(userDetails),
@@ -108,16 +132,18 @@ class WebApiImpl implements WebAPI {
   }
 
   @override
-  Future<Response> addMedicineQtySupplier(
-      {required Map<String, dynamic> userDetails,required String sessionId}) async {
+  Future<Response> addMedicineQtySupplier({
+    required Map<String, dynamic> userDetails,
+    required String sessionId,
+  }) async {
     print('${AppConfig.baseAppUrl}${EndPoint.supplierAdd.path}');
     print(userDetails);
     final response = await post(
-        Uri.parse('${AppConfig.baseAppUrl}${EndPoint.supplierAdd.path}'),
-        headers: SessionHelper.jsonHeaders(sessionId: sessionId),
-        body: jsonEncode(userDetails));
+      Uri.parse('${AppConfig.baseAppUrl}${EndPoint.supplierAdd.path}'),
+      headers: _authHeaders(sessionId: sessionId),
+      body: jsonEncode(userDetails),
+    );
     print(":::::::${response.body}:::::");
     return response;
   }
-
 }

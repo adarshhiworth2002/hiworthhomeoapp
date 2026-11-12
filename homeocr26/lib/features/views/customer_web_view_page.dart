@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -13,25 +12,24 @@ import '../../models/invoice_summary_model.dart';
 import '../../viewModels/login_viewmodel.dart';
 import '../services/WebApi/web_api_impl.dart';
 import '../services/api_request_helper.dart';
+import '../services/appConfig.dart';
 import '../services/endPoints.dart';
 import 'add_to_customer.dart';
 import '../theme.dart';
 
-/// Opens Customer Invoices with a real Odoo backend web session.
+/// Opens the same Laravel pharmacy website used by the Flutter APIs.
 class CustomerWebViewPage extends StatefulWidget {
   const CustomerWebViewPage({super.key});
 
-  static const baseUrl = 'http://46.37.122.167:8069';
-  static const cookieOrigin = '$baseUrl/';
-  static const webShellUrl = '$baseUrl/web';
+  static String get baseUrl {
+    final raw = AppConfig.webViewBaseUrl.trim();
+    if (raw.endsWith('/')) return raw.substring(0, raw.length - 1);
+    return raw;
+  }
 
-  static const invoiceFormHash =
-      'id=1584&action=400&model=account.move&view_type=form&menu_id=251&cids=1';
-  static const invoiceListHash =
-      'action=400&model=account.move&view_type=list&menu_id=251&cids=1';
-
-  static const invoiceFormUrl = '$webShellUrl#$invoiceFormHash';
-  static const invoiceListUrl = '$webShellUrl#$invoiceListHash';
+  static String get cookieOrigin => '$baseUrl/';
+  static String get homeUrl => '$baseUrl/';
+  static String get loginUrl => '$baseUrl/login';
 
   @override
   State<CustomerWebViewPage> createState() => _CustomerWebViewPageState();
@@ -122,6 +120,7 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
           setState(() => _isLoading = false);
           _completePageIfWaiting(url);
           await _injectInvoiceTracker();
+          await _tryAutoLoginIfNeeded(url);
         },
         onWebResourceError: (error) {
           if (!mounted || error.isForMainFrame != true) return;
@@ -133,21 +132,15 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
         },
         onNavigationRequest: (request) {
           final url = request.url.toLowerCase();
-          // Never open website homepage or login (frontend_lazy crashes WebView).
-          final base = CustomerWebViewPage.baseUrl.toLowerCase();
-          if (url.contains('/web/login') ||
-              url.contains('/web/signup') ||
-              url.contains('/website') ||
-              url == base ||
-              url == '$base/') {
-            debugPrint('[CustomerWebView] blocked: ${request.url}');
-            if (mounted && !_signingIn) {
-              setState(() {
-                _error =
-                    'Odoo redirected away from backend UI. Session may be missing.';
-                _isLoading = false;
-              });
-            }
+          final baseHost =
+              Uri.tryParse(CustomerWebViewPage.baseUrl)?.host.toLowerCase();
+          final host = Uri.tryParse(url)?.host.toLowerCase();
+          // Stay on the pharmacy website; allow login + in-app navigation.
+          if (baseHost != null &&
+              host != null &&
+              host.isNotEmpty &&
+              host != baseHost) {
+            debugPrint('[CustomerWebView] blocked external: ${request.url}');
             return NavigationDecision.prevent;
           }
           return NavigationDecision.navigate;
@@ -645,79 +638,55 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
     }
   }
 
-  Future<void> _injectCookie(String name, String value) async {
-    final cookieUrl =
-        (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
-            ? CustomerWebViewPage.cookieOrigin
-            : '46.37.122.167';
-    await _cookieManager.setCookie(
-      WebViewCookie(name: name, value: value, domain: cookieUrl, path: '/'),
-    );
-  }
+  String? _autoLoginEmail;
+  String? _autoLoginPassword;
+  bool _autoLoginAttempted = false;
 
-  Future<String> _authenticate({
-    required String db,
-    required String login,
-    required String password,
-  }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 25);
+  Future<void> _tryAutoLoginIfNeeded(String url) async {
+    final controller = _controller;
+    final email = (_autoLoginEmail ?? '').trim();
+    final password = _autoLoginPassword ?? '';
+    if (controller == null || email.isEmpty || password.isEmpty) return;
+    if (_autoLoginAttempted) return;
+
+    final lower = url.toLowerCase();
+    final onLogin = lower.contains('/login') ||
+        lower == CustomerWebViewPage.homeUrl.toLowerCase() ||
+        lower == '${CustomerWebViewPage.baseUrl.toLowerCase()}/';
+    if (!onLogin) {
+      // Already inside the authenticated site.
+      if (mounted && _signingIn) {
+        setState(() {
+          _signingIn = false;
+          _status = 'Website ready';
+        });
+      }
+      return;
+    }
+
+    _autoLoginAttempted = true;
+    final emailJs = jsonEncode(email);
+    final passwordJs = jsonEncode(password);
     try {
-      final uri = Uri.parse(
-        '${CustomerWebViewPage.baseUrl}/web/session/authenticate',
-      );
-      final req = await client.postUrl(uri);
-      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-      req.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      req.write(
-        jsonEncode({
-          'jsonrpc': '2.0',
-          'params': {'db': db, 'login': login, 'password': password},
-        }),
-      );
-
-      final res = await req.close().timeout(const Duration(seconds: 30));
-      final body = await res.transform(utf8.decoder).join();
-      debugPrint(
-        '[CustomerWebView] auth ${res.statusCode}: '
-        '${body.length > 220 ? '${body.substring(0, 220)}…' : body}',
-      );
-
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        throw HttpException('Authenticate HTTP ${res.statusCode}', uri: uri);
+      await controller.runJavaScript('''
+(function () {
+  var email = document.querySelector('input[name="email"], #email');
+  var password = document.querySelector('input[name="password"], #password');
+  var form = document.querySelector('form.login-form, form[action*="login"]');
+  if (!email || !password || !form) return;
+  email.value = $emailJs;
+  password.value = $passwordJs;
+  email.dispatchEvent(new Event('input', { bubbles: true }));
+  password.dispatchEvent(new Event('input', { bubbles: true }));
+  form.submit();
+})();
+''');
+      if (mounted) {
+        setState(() => _status = 'Signing in to website…');
       }
-
-      final decoded = jsonDecode(body);
-      if (decoded is! Map) throw Exception('Unexpected authenticate response');
-      if (decoded['error'] != null) {
-        final err = decoded['error'];
-        final msg = err is Map
-            ? (err['data'] is Map
-                ? (err['data']['message'] ?? err['message'])
-                : err['message'])
-            : err;
-        throw Exception(msg ?? 'Authentication error');
-      }
-
-      final result = decoded['result'];
-      if (result is! Map || result['uid'] == null || result['uid'] == false) {
-        throw Exception('Authenticate returned no uid');
-      }
-
-      for (final c in res.cookies) {
-        if (c.name == 'session_id' && c.value.isNotEmpty) return c.value;
-      }
-      final headers = res.headers[HttpHeaders.setCookieHeader];
-      if (headers != null) {
-        for (final raw in headers) {
-          final m = RegExp(r'session_id=([^;]+)').firstMatch(raw);
-          if (m != null && m.group(1)!.isNotEmpty) return m.group(1)!;
-        }
-      }
-      final sid = result['session_id']?.toString();
-      if (sid != null && sid.isNotEmpty) return sid;
-      throw Exception('No session_id in authenticate response');
-    } finally {
-      client.close(force: true);
+    } catch (e) {
+      debugPrint('[CustomerWebView] auto-login inject err: $e');
+      _autoLoginAttempted = false;
     }
   }
 
@@ -730,71 +699,39 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
       _signingIn = true;
       _isLoading = true;
       _error = null;
-      _status = 'Signing in…';
+      _status = 'Opening website…';
+      _onInvoiceForm = false;
+      _currentMoveId = null;
+      _currentInvoiceNumber = null;
+      _currentBillIsPaid = false;
     });
 
     final vm = context.read<LoginViewmodel>();
     final login = (vm.loginEmail ?? '').trim();
     final password = vm.loginPassword ?? '';
-    final db = LoginViewmodel.dbName;
-
-    if (login.isEmpty || password.isEmpty) {
-      setState(() {
-        _signingIn = false;
-        _isLoading = false;
-        _error =
-            'Please log out and log in again, then reopen Customer Invoices.';
-      });
-      _busy = false;
-      return;
-    }
+    _autoLoginEmail = login;
+    _autoLoginPassword = password;
+    _autoLoginAttempted = false;
 
     try {
       await _cookieManager.clearCookies();
 
-      final sessionId = await _authenticate(
-        db: db,
-        login: login,
-        password: password,
-      );
-      debugPrint('[CustomerWebView] session_id=$sessionId');
+      // Load login first so we can auto-fill app credentials, then enter site.
+      final target = login.isNotEmpty && password.isNotEmpty
+          ? CustomerWebViewPage.loginUrl
+          : CustomerWebViewPage.homeUrl;
+      final wait = _waitForPage(CustomerWebViewPage.baseUrl);
+      await controller.loadRequest(Uri.parse(target));
+      await wait;
 
-      setState(() => _status = 'Applying session…');
-      await _injectCookie('session_id', sessionId);
-      await _injectCookie('frontend_lang', 'en_US');
-      await _injectCookie('cids', '1');
-
-      // Also stamp cookies on /web document (IP hosts).
-      setState(() => _status = 'Loading Odoo backend…');
-      final waitShell = _waitForPage('/web');
-      await controller.loadRequest(
-        Uri.parse(CustomerWebViewPage.webShellUrl),
-        headers: {
-          'Cookie': 'session_id=$sessionId; frontend_lang=en_US; cids=1',
-        },
-      );
-      await waitShell;
-
-      await controller.runJavaScript('''
-document.cookie = "session_id=$sessionId; path=/";
-document.cookie = "frontend_lang=en_US; path=/";
-document.cookie = "cids=1; path=/";
-''');
-
+      if (!mounted) return;
+      // If auto-login did not navigate away quickly, still show the page.
+      await Future<void>.delayed(const Duration(milliseconds: 800));
       if (!mounted) return;
       setState(() {
         _signingIn = false;
-        _status = 'Opening invoices…';
-        _onInvoiceForm = false;
-        _currentMoveId = null;
-        _currentInvoiceNumber = null;
-        _currentBillIsPaid = false;
+        _status = 'Website ready';
       });
-
-      // Hash routing after /web shell is ready (more reliable than first-hit #url).
-      await controller.runJavaScript(
-        "window.location.hash = '${CustomerWebViewPage.invoiceListHash}';",
-      );
       await _injectInvoiceTracker();
       unawaited(_prefetchInvoiceNumbers());
     } catch (e, st) {
@@ -835,7 +772,7 @@ document.cookie = "cids=1; path=/";
     final showScanner = onBill && !_currentBillIsPaid;
     final title = onBill && billNumber.isNotEmpty
         ? billNumber
-        : 'Customer Invoices';
+        : 'Website';
 
     return Scaffold(
       backgroundColor: const Color(0xFFF0F0F0),

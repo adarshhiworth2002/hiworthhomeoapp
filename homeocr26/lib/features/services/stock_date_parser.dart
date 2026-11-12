@@ -24,6 +24,28 @@ class StockDateParser {
       // Mixed garbage.
     }
 
+    // Laravel / ISO: yyyy-MM-dd or yyyy/MM/dd
+    if (RegExp(r'^\d{4}[/\-.]\d{1,2}[/\-.]\d{1,2}$').hasMatch(trimmed)) {
+      final parts = trimmed.split(RegExp(r'[/\-.]'));
+      final y = int.tryParse(parts[0]);
+      final m = int.tryParse(parts[1]);
+      final d = int.tryParse(parts[2]);
+      if (y == null || m == null || d == null) return null;
+      if (!_isValid(d, m, y)) return null;
+      return formatDisplay(DateTime(y, m, d));
+    }
+
+    // MM/yyyy or MM-yyyy (common pharmacy MFD/EXP)
+    if (RegExp(r'^\d{1,2}[/\-.]\d{2,4}$').hasMatch(trimmed)) {
+      final parts = trimmed.split(RegExp(r'[/\-.]'));
+      final m = int.tryParse(parts[0]);
+      var y = int.tryParse(parts[1]);
+      if (m == null || y == null) return null;
+      if (parts[1].length == 2) y = y >= 70 ? 1900 + y : 2000 + y;
+      if (!_isValid(1, m, y)) return null;
+      return formatDisplay(DateTime(y, m, 1));
+    }
+
     if (RegExp(r'^\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}$').hasMatch(trimmed)) {
       final parts = trimmed.split(RegExp(r'[/\-.]'));
       final d = int.tryParse(parts[0]);

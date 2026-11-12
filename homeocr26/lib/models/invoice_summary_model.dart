@@ -28,10 +28,15 @@ class InvoiceLineModel {
     this.hsn,
     this.rack,
     this.stockEntryId,
+    this.lineUid,
+    this.productBarcode,
   });
 
   final int? id;
   final int? stockEntryId;
+  /// QR / stock UID used by `add_to_invoice` (`line_uid` from Laravel).
+  final String? lineUid;
+  final String? productBarcode;
   final String? productName;
   final String? potency;
   final String? company;
@@ -69,11 +74,50 @@ class InvoiceLineModel {
   double? get displayUPrice => uPrice ?? unitPrice;
 
   factory InvoiceLineModel.fromJson(Map<String, dynamic> json) {
+    // Laravel sometimes nests stock dates under stock / lot objects.
+    final flat = Map<String, dynamic>.from(json);
+    for (final nestKey in const [
+      'stock',
+      'stock_entry',
+      'entry_stock',
+      'product',
+      'lot',
+    ]) {
+      final nest = json[nestKey];
+      if (nest is Map) {
+        nest.forEach((key, value) {
+          flat.putIfAbsent('$key', () => value);
+        });
+      }
+    }
+
+    final mfdRaw = _str(flat, const [
+      'mfd',
+      'mfd_date',
+      'manufacturing_date',
+      'manufacture_date',
+      'manuf_date',
+      'mf_date',
+      'mfg_date',
+      'mfg',
+      'mfdate',
+      'manuf',
+    ]);
+    final manufacturerRaw = _str(flat, const [
+      'manufacturer',
+      'manufacturer_name',
+      'manf',
+    ]);
+    // Prefer real dates for MFD; ignore non-date "manuf" brand strings.
+    final mfdResolved = _looksLikeDate(mfdRaw)
+        ? mfdRaw
+        : (_looksLikeDate(manufacturerRaw) ? manufacturerRaw : mfdRaw);
+
     return InvoiceLineModel(
-      id: json['id'] is int
-          ? json['id'] as int
-          : int.tryParse('${json['id']}'),
-      productName: _str(json, const [
+      id: flat['id'] is int
+          ? flat['id'] as int
+          : int.tryParse('${flat['id']}'),
+      productName: _str(flat, const [
         'product_name',
         'product_id_name',
         'medicine_id_name',
@@ -81,14 +125,14 @@ class InvoiceLineModel {
         'display_name',
         'name',
       ]),
-      potency: _str(json, const [
+      potency: _str(flat, const [
         'potency',
         'potency_id_name',
         'potency_name',
         'power',
         'drug_potency',
       ]),
-      company: _str(json, const [
+      company: _str(flat, const [
         'company',
         'pharmacy_company_id_name',
         'comp',
@@ -96,7 +140,7 @@ class InvoiceLineModel {
         'brand',
         'company_name',
       ]),
-      batch: _str(json, const [
+      batch: _str(flat, const [
         'batch',
         'batch_no',
         'batch_id',
@@ -104,41 +148,36 @@ class InvoiceLineModel {
         'lot_name',
         'lot_id_name',
       ]),
-      manufacturer: _str(json, const [
-        'manufacturer',
-        'manuf',
-        'manf',
-      ]),
-      mfd: _str(json, const [
-        'mfd',
-        'mfd_date',
-        'manufacturing_date',
-      ]),
-      expiry: _str(json, const [
+      manufacturer: manufacturerRaw,
+      mfd: mfdResolved,
+      expiry: _str(flat, const [
         'expiry',
         'expiry_date',
         'exp_date',
+        'exp',
         'expiration_date',
+        'expire_date',
+        'expiry_dt',
       ]),
-      packing: _str(json, const [
+      packing: _str(flat, const [
         'packing',
         'pack_id_name',
         'pack',
         'pack_size',
       ]),
-      group: _str(json, const [
+      group: _str(flat, const [
         'group',
         'pharmacy_group_id_name',
         'medicine_group',
         'product_group',
         'group_id_name',
       ]),
-      qty: _num(json, const ['qty', 'quantity', 'product_uom_qty', 'received_qty']),
-      orderedQty: _num(json, const ['ordered_qty', 'ordered_quantity']),
-      freeQty: _num(json, const ['free_qty', 'free_quantity']),
-      mrp: _num(json, const ['mrp']),
-      discount: _lineDiscountPercent(json),
-      dis2Percent: _num(json, const [
+      qty: _num(flat, const ['qty', 'quantity', 'product_uom_qty', 'received_qty']),
+      orderedQty: _num(flat, const ['ordered_qty', 'ordered_quantity']),
+      freeQty: _num(flat, const ['free_qty', 'free_quantity']),
+      mrp: _num(flat, const ['mrp']),
+      discount: _lineDiscountPercent(flat),
+      dis2Percent: _num(flat, const [
         'dis2_percent',
         'dis2',
         'discount2',
@@ -147,47 +186,77 @@ class InvoiceLineModel {
         'discount_percent',
         'discount',
       ]),
-      unit: _str(json, const [
+      unit: _str(flat, const [
         'unit',
         'uom',
         'uom_name',
         'product_uom_id_name',
       ]),
-      unitPrice: _num(json, const [
+      unitPrice: _num(flat, const [
         'unit_price',
         'price_unit',
         'unit_p',
         'unitP',
       ]),
-      uPrice: _num(json, const ['u_price', 'uprice']),
-      tax: _num(json, const ['tax', 'tax_percent', 'tax_rate', 'gst']),
-      taxAmount: _num(json, const [
+      uPrice: _num(flat, const ['u_price', 'uprice']),
+      tax: _num(flat, const ['tax', 'tax_percent', 'tax_rate', 'gst']),
+      taxAmount: _num(flat, const [
         'tax_amount',
         'amount_tax',
         'tax_amt',
         'taxAmt',
       ]),
-      total: _num(json, const [
+      total: _num(flat, const [
         'price_total',
         'total',
         'price_subtotal',
         'amount_total',
         'line_total',
       ]),
-      hsn: _str(json, const ['hsn', 'hsn_code']),
-      rack: _str(json, const [
+      hsn: _str(flat, const ['hsn', 'hsn_code']),
+      rack: _str(flat, const [
         'rack',
         'rack_id_name',
         'rack_no',
         'location',
       ]),
-      stockEntryId: json['stock_entry_id'] is int
-          ? json['stock_entry_id'] as int
-          : json['stock_entry_id'] is List &&
-                  (json['stock_entry_id'] as List).isNotEmpty
-              ? int.tryParse('${(json['stock_entry_id'] as List).first}')
-              : int.tryParse('${json['stock_entry_id']}'),
+      stockEntryId: flat['stock_entry_id'] is int
+          ? flat['stock_entry_id'] as int
+          : flat['entry_stock_id'] is int
+              ? flat['entry_stock_id'] as int
+              : flat['stock_entry_id'] is List &&
+                      (flat['stock_entry_id'] as List).isNotEmpty
+                  ? int.tryParse('${(flat['stock_entry_id'] as List).first}')
+                  : int.tryParse(
+                      '${flat['stock_entry_id'] ?? flat['entry_stock_id']}',
+                    ),
+      lineUid: _str(flat, const [
+        'line_uid',
+        'uid',
+        'qr_data',
+        'qr_data_product',
+        'product_uid',
+      ]),
+      productBarcode: _str(flat, const [
+        'product_barcode',
+        'barcode',
+        'ean',
+      ]),
     );
+  }
+
+  static bool _looksLikeDate(String? raw) {
+    final t = (raw ?? '').trim();
+    if (t.isEmpty) return false;
+    if (RegExp(r'\d').hasMatch(t) &&
+        RegExp(r'[/\-.]').hasMatch(t) &&
+        t.length >= 4) {
+      return true;
+    }
+    if (RegExp(r'^\d{4,8}$').hasMatch(t.replaceAll(RegExp(r'\D'), ''))) {
+      return true;
+    }
+    return false;
   }
 
   static String? _str(Map json, List<String> keys) {
@@ -198,6 +267,18 @@ class InvoiceLineModel {
       if (value is List && value.length >= 2) {
         final name = value[1]?.toString().trim() ?? '';
         if (name.isNotEmpty && name != 'false') return name;
+        continue;
+      }
+      if (value is Map) {
+        for (final k in const [
+          'name',
+          'display_name',
+          'date',
+          'value',
+        ]) {
+          final name = value[k]?.toString().trim();
+          if (name != null && name.isNotEmpty && name != 'false') return name;
+        }
         continue;
       }
       final text = value.toString().trim();
@@ -532,13 +613,38 @@ class InvoiceSummaryModel {
     );
   }
 
-  /// Website-aligned customer label. When no partner is set, Odoo stores
-  /// `invoice_partner_display_name` as `#Created by: Administrator` — blank.
+  /// List/card label when the bill has no real customer name.
+  static const String walkinCustomerLabel = 'Walkin Customer';
+
+  /// Website-aligned customer for forms/detail. Empty / Demo / walk-in → null
+  /// so the Customer field stays blank when the bill is opened.
   String? get displayCustomer {
     final raw = (customer ?? '').trim();
     if (raw.isEmpty) return null;
     if (isPlaceholderCustomerName(raw)) return null;
+    if (isWalkInCustomerName(raw)) return null;
     return raw;
+  }
+
+  /// Invoice / payment-book list label. Nameless bills show [walkinCustomerLabel].
+  String get listCustomerLabel {
+    final named = displayCustomer;
+    if (named != null && named.isNotEmpty) return named;
+    return walkinCustomerLabel;
+  }
+
+  bool get isWalkInOrNamelessCustomer {
+    return isWalkInCustomerName(customer) ||
+        isPlaceholderCustomerName(customer);
+  }
+
+  /// Website "Billed By". Defaults to Pharmacy Admin when the API omits it;
+  /// shows the server value whenever it is set (including overrides).
+  static const String defaultBilledBy = 'Pharmacy Admin';
+
+  String get displayBilledBy {
+    final raw = (billedBy ?? '').trim();
+    return raw.isEmpty ? defaultBilledBy : raw;
   }
 
   /// True for Odoo defaults / computed placeholders (not a real customer).
@@ -549,12 +655,27 @@ class InvoiceSummaryModel {
     n = n.replaceFirst(RegExp(r'^#\s*'), '');
     if (n.contains('created by')) return true;
     if (n.startsWith('@from:')) return true;
+    // Laravel often seeds a demo partner when no customer was chosen.
+    if (n == 'demo customer' || n == 'demo' || n == 'test customer') {
+      return true;
+    }
     return n == 'administrator' ||
         n == 'admin' ||
         n == 'false' ||
         n == 'odoobot' ||
         n == 'public user' ||
         n == 'default user';
+  }
+
+  /// Walk-in / nameless customer names (any spelling).
+  static bool isWalkInCustomerName(String? name) {
+    final raw = (name ?? '').trim();
+    if (raw.isEmpty) return true;
+    if (isPlaceholderCustomerName(raw)) return true;
+    final lower = raw.toLowerCase().replaceAll(RegExp(r'[\s_-]+'), '');
+    return lower == 'walkin' ||
+        lower == 'walkincustomer' ||
+        lower.startsWith('walkin');
   }
 
   /// Matches website filters: `draft` | `open` | `paid` | `cancel`.
@@ -698,11 +819,55 @@ class InvoiceSummaryModel {
   }
 
   factory InvoiceSummaryModel.fromJson(Map<String, dynamic> json) {
-    final linesNode = json['invoice_lines'] ??
-        json['order_lines'] ??
-        json['lines'] ??
-        json['line_ids'] ??
-        json['products'];
+    // Lift nested billed-by / user relations so _str can read a plain name.
+    final flat = Map<String, dynamic>.from(json);
+    void liftBilledByName(dynamic value) {
+      if (value == null || value == false) return;
+      if (value is Map) {
+        for (final k in const [
+          'name',
+          'display_name',
+          'full_name',
+          'user_name',
+          'username',
+        ]) {
+          final name = value[k]?.toString().trim();
+          if (name != null && name.isNotEmpty && name != 'false') {
+            flat.putIfAbsent('billed_by_name', () => name);
+            return;
+          }
+        }
+        return;
+      }
+      if (value is List && value.length >= 2) {
+        final name = value[1]?.toString().trim() ?? '';
+        if (name.isNotEmpty && name != 'false') {
+          flat.putIfAbsent('billed_by_name', () => name);
+        }
+      }
+    }
+
+    for (final key in const [
+      'billed_by',
+      'billed_by_id',
+      'billed_by_user',
+      'invoice_user',
+      'invoice_user_id',
+      'user',
+      'user_id',
+      'create_uid',
+      'created_by',
+      'salesperson_id',
+      'cashier',
+    ]) {
+      liftBilledByName(json[key]);
+    }
+
+    final linesNode = flat['invoice_lines'] ??
+        flat['order_lines'] ??
+        flat['lines'] ??
+        flat['line_ids'] ??
+        flat['products'];
     final lines = <InvoiceLineModel>[];
     if (linesNode is List) {
       for (final item in linesNode) {
@@ -712,24 +877,24 @@ class InvoiceSummaryModel {
       }
     }
 
-    final moveState = _str(json, const [
+    final moveState = _str(flat, const [
       'state',
       'invoice_state',
       'move_state',
     ]);
-    final paymentState = _str(json, const [
+    final paymentState = _str(flat, const [
       'payment_state',
       'payment_status',
     ]);
-    final isPaid = json['is_paid'] == true ||
-        json['is_paid'] == 1 ||
+    final isPaid = flat['is_paid'] == true ||
+        flat['is_paid'] == 1 ||
         paymentState?.toLowerCase().trim() == 'paid';
 
     return InvoiceSummaryModel(
-      id: _asInt(json['id'] ?? json['invoice_id']),
-      invoiceNumber: _parseInvoiceNumber(json),
+      id: _asInt(flat['id'] ?? flat['invoice_id']),
+      invoiceNumber: _parseInvoiceNumber(flat),
       customer: () {
-        final c = _str(json, const [
+        final c = _str(flat, const [
           'customer',
           'customer_name',
           'partner_name',
@@ -743,22 +908,32 @@ class InvoiceSummaryModel {
         return c;
       }(),
       pharmacyCustomerId: _asInt(
-        json['pharmacy_customer_id'] ??
-            json['customer_id'] ??
-            (json['partner_id'] is num ? json['partner_id'] : null),
+        flat['pharmacy_customer_id'] ??
+            flat['customer_id'] ??
+            (flat['partner_id'] is num ? flat['partner_id'] : null),
       ),
-      address: _str(json, const [
+      address: _str(flat, const [
         'address',
         'manual_address',
         'partner_address',
         'street',
       ]),
-      phone: _str(json, const ['phone', 'phone_no', 'mobile']),
-      responsiblePerson: _str(json, const [
+      phone: _str(flat, const ['phone', 'phone_no', 'mobile']),
+      responsiblePerson: _str(flat, const [
         'responsible_person',
+        'responsible_person_name',
+        'responsiblePerson',
+        'responsiblePersonName',
         'responsible',
+        'responsible_name',
+        // Nested Laravel relation {id, name} — _str reads Map.name.
+        'responsible_person_id',
+        'responsible_person_id_name',
+        'responsiblePersonId',
+        'responsible_id',
+        'responsible_id_name',
       ]),
-      doctor: _str(json, const [
+      doctor: _str(flat, const [
         'doctor_name',
         'doctor_id_name',
         'physician_name',
@@ -771,77 +946,92 @@ class InvoiceSummaryModel {
         'dr_name',
         'doc_name',
       ]),
-      invoiceDate: _str(json, const [
+      invoiceDate: _str(flat, const [
         'invoice_date',
         'date_invoice',
         'bill_date',
         // Never fall back to create_date (UTC datetime → wrong local day).
         'date',
       ]),
-      createdAt: _str(json, const [
+      createdAt: _str(flat, const [
         'create_date',
         'created_at',
         'create_datetime',
       ]),
-      expiryMedicineBill: json['expiry_medicine_bill'] == true ||
-          json['expiry_medicine_bill'] == 1,
-      verifyStatus: _str(json, const [
+      expiryMedicineBill: flat['expiry_medicine_bill'] == true ||
+          flat['expiry_medicine_bill'] == 1,
+      verifyStatus: _str(flat, const [
         'verify_status',
         'verification_status',
         'verified_status',
       ]),
-      billedBy: _str(json, const [
+      billedBy: _str(flat, const [
         'billed_by',
         'billed_by_name',
+        'billed_by_id_name',
+        'billed_by_id',
+        'invoice_user_id_name',
+        'invoice_user_name',
+        'invoice_user',
+        'user_id_name',
         'create_uid_name',
+        'salesperson',
+        'salesperson_id_name',
+        'sales_person',
+        'cashier',
+        'cashier_name',
         'user_name',
+        'created_by',
+        'created_by_name',
+        'billed_by_user',
+        'user',
       ]),
-      taxAmount: _num(json, const [
+      taxAmount: _num(flat, const [
         'tax_amount',
         'amount_tax',
         'tax',
       ]),
-      balance: _num(json, const [
+      balance: _num(flat, const [
         'balance',
         'amount_residual',
         'residual',
       ]),
-      subtotal: _num(json, const [
+      subtotal: _num(flat, const [
         'subtotal',
         'amount_untaxed',
         'untaxed_amount',
       ]),
-      discountTotal: _num(json, const [
+      discountTotal: _num(flat, const [
         'discount_total',
         'amount_discount',
       ]),
-      total: _num(json, const [
+      total: _num(flat, const [
         'total',
         'amount_total',
         'total_amount',
       ]),
-      supplierInvoiceNo: _str(json, const [
+      supplierInvoiceNo: _str(flat, const [
         'supplier_invoice_no',
         'supplier_invoice_number',
       ]),
-      poNumber: _str(json, const [
+      poNumber: _str(flat, const [
         'po_number',
         'pharmacy_purchase_order_id_name',
         'purchase_order',
         'purchase_id_name',
       ]),
-      supplierInvoiceAmount: _num(json, const [
+      supplierInvoiceAmount: _num(flat, const [
         'supplier_invoice_amount',
         'inv_amount',
       ]),
-      previousInvoice: _str(json, const [
+      previousInvoice: _str(flat, const [
         'previous_invoice',
         'select_previous_invoice_id_name',
       ]),
-      deliveryDate: _str(json, const ['delivery_date']),
+      deliveryDate: _str(flat, const ['delivery_date']),
       // Website Payment History "Status" column — do not fall back to Odoo
       // move `state` / `payment_state` (those are used separately below).
-      status: _str(json, const [
+      status: _str(flat, const [
         'status',
         'bill_status',
         'invoice_status',
@@ -851,29 +1041,33 @@ class InvoiceSummaryModel {
       moveState: moveState,
       paymentState: paymentState,
       isPaid: isPaid,
-      paymentMode: _str(json, const ['payment_mode', 'payment_type']),
-      advanceAmount: _num(json, const [
+      paymentMode: _str(flat, const ['payment_mode', 'payment_type']),
+      advanceAmount: _num(flat, const [
         'customer_advance_amount',
         'advance_amount',
         'advance_amt',
         'advance',
       ]),
-      oldBalance: _num(json, const [
+      oldBalance: _num(flat, const [
         'customer_old_balance',
         'old_balance',
         'previous_balance',
         'opening_balance',
       ]),
-      gstType: _str(json, const ['gst_type', 'gst_type_name']),
-      discountCategory: _str(json, const [
+      gstType: _str(flat, const ['gst_type', 'gst_type_name']),
+      discountCategory: _str(flat, const [
         'discount_category',
         'discount_category_id_name',
         'discount_cat',
       ]),
-      discountType: _str(json, const ['discount_type', 'discount_mode']),
-      discountRate: _num(json, const ['discount_rate', 'discount_percent', 'discount_percentage']),
-      verifiedBy: _str(json, const ['verified_by', 'verified_by_name']),
-      expense: _str(json, const [
+      discountType: _str(flat, const ['discount_type', 'discount_mode']),
+      discountRate: _num(flat, const [
+        'discount_rate',
+        'discount_percent',
+        'discount_percentage',
+      ]),
+      verifiedBy: _str(flat, const ['verified_by', 'verified_by_name']),
+      expense: _str(flat, const [
         'customer_expense',
         'expense',
         'expense_note',
@@ -881,7 +1075,7 @@ class InvoiceSummaryModel {
         'expenses',
         'expense_description',
       ]),
-      expenseAmt: _num(json, const [
+      expenseAmt: _num(flat, const [
         'customer_expense_amount',
         'expense_amt',
         'expense_amount',
@@ -890,29 +1084,29 @@ class InvoiceSummaryModel {
         'other_charge',
         'other_charges',
       ]),
-      remarks: _str(json, const ['remarks', 'narration', 'note']),
-      workMinutes: _str(json, const [
+      remarks: _str(flat, const ['remarks', 'narration', 'note']),
+      workMinutes: _str(flat, const [
         'work_minutes',
         'work_minute',
         'time_minutes',
       ]),
-      workHours: _str(json, const [
+      workHours: _str(flat, const [
         'work_hours',
         'work_hour',
         'time_taken',
         'time_hours',
       ]),
-      isCreditCustomer: json['is_credit_customer'] == true ||
-          json['is_credit_customer'] == 1,
-      sequencePrefix: _str(json, const [
+      isCreditCustomer: flat['is_credit_customer'] == true ||
+          flat['is_credit_customer'] == 1,
+      sequencePrefix: _str(flat, const [
         'sequence_prefix',
         'invoice_series',
         'series',
         'journal_code',
         'journal_id_name',
       ]),
-      invoiceType: InvoiceGstKindParser.labelFromJson(json),
-      b2bFlag: InvoiceSummaryModel.b2bFlagFromJson(json),
+      invoiceType: InvoiceGstKindParser.labelFromJson(flat),
+      b2bFlag: InvoiceSummaryModel.b2bFlagFromJson(flat),
       lines: lines,
     );
   }
@@ -982,10 +1176,12 @@ class InvoiceSummaryModel {
   }
 
   static List<InvoiceSummaryModel> parseList(Map<String, dynamic> response) {
+    // Laravel flat: {status, data:{invoices:[...]}} or Odoo: {result:{...}}
     final result = response['result'];
-    if (result is! Map) return [];
-
-    final root = Map<String, dynamic>.from(result);
+    final root = result is Map
+        ? Map<String, dynamic>.from(result)
+        : Map<String, dynamic>.from(response);
+    final dataNode = root['data'];
     final candidates = <dynamic>[
       root['payment_history'],
       root['payments'],
@@ -993,6 +1189,8 @@ class InvoiceSummaryModel {
       root['invoices'],
       root['records'],
       root['items'],
+      if (dataNode is List) dataNode,
+      if (dataNode is Map) dataNode,
       root['data'],
       root['results'],
     ];
@@ -1025,6 +1223,38 @@ class InvoiceSummaryModel {
     return [];
   }
 
+  /// Single invoice from Laravel `{status,data:{...}}` or list wrappers.
+  static InvoiceSummaryModel? parseOne(Map<String, dynamic> response) {
+    final list = parseList(response);
+    if (list.isNotEmpty) return list.first;
+
+    final result = response['result'];
+    final root = result is Map
+        ? Map<String, dynamic>.from(result)
+        : Map<String, dynamic>.from(response);
+    final dataNode = root['data'];
+    final candidates = <dynamic>[
+      if (dataNode is Map) dataNode,
+      root['invoice'],
+      root['customer_invoice'],
+      root['record'],
+      root,
+    ];
+    for (final candidate in candidates) {
+      if (candidate is! Map) continue;
+      final map = Map<String, dynamic>.from(candidate);
+      if (map.containsKey('id') ||
+          map.containsKey('invoice_id') ||
+          map.containsKey('invoice_number') ||
+          map.containsKey('name') ||
+          map.containsKey('lines') ||
+          map.containsKey('invoice_lines')) {
+        return InvoiceSummaryModel.fromJson(map);
+      }
+    }
+    return null;
+  }
+
   static String formatMoney(double? value) {
     if (value == null) return '0.00';
     return value.toStringAsFixed(2);
@@ -1042,8 +1272,24 @@ class InvoiceSummaryModel {
         if (name == null || name.isEmpty || name == 'false') continue;
         return name;
       }
+      // Laravel nested user/relation: {id, name}
+      if (value is Map) {
+        for (final k in const [
+          'name',
+          'display_name',
+          'full_name',
+          'user_name',
+          'username',
+        ]) {
+          final name = value[k]?.toString().trim();
+          if (name != null && name.isNotEmpty && name != 'false') return name;
+        }
+        continue;
+      }
       final text = value.toString().trim();
       if (text.isEmpty || text == 'false') continue;
+      // Skip Map.toString() leftovers like "{id: 1}"
+      if (text.startsWith('{') && text.endsWith('}')) continue;
       return text;
     }
     return null;

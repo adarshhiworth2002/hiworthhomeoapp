@@ -478,7 +478,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
 
                                       _DashboardCard(
                                         title:
-                                        'Today Cheque\nClearance',
+                                        'Today \nCheque Clearance',
 
                                         icon: Icons
                                             .price_check_rounded,

@@ -29,9 +29,24 @@ class PrefixSearch {
     String? displayCustomer,
     String? displayNumber,
     String? invoiceNumber,
+    String? listCustomerLabel,
   }) {
+    final q = query.trim().toLowerCase().replaceAll(RegExp(r'[\s_-]+'), '');
+    final nameless = (displayCustomer ?? '').trim().isEmpty &&
+        ((customer ?? '').trim().isEmpty ||
+            (listCustomerLabel ?? '').toLowerCase().contains('walkin'));
+    if (nameless &&
+        (q.contains('walkin') || q == 'walk' || q.contains('demo'))) {
+      return true;
+    }
     return matchesAny(
-      [displayCustomer, customer, displayNumber, invoiceNumber],
+      [
+        displayCustomer,
+        customer,
+        listCustomerLabel,
+        displayNumber,
+        invoiceNumber,
+      ],
       query,
     );
   }

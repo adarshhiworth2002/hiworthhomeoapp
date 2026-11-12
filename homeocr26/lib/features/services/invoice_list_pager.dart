@@ -138,11 +138,14 @@ class InvoiceListPager {
     final decoded = json.decode(response.body);
     if (decoded is! Map) return const _Page();
     final map = Map<String, dynamic>.from(decoded);
-    if (map['result'] is Map &&
-        (map['result'] as Map)['status'] == 'error') {
+    final result = map['result'];
+    final statusSource = result is Map
+        ? Map<String, dynamic>.from(result)
+        : map;
+    final status = '${statusSource['status'] ?? ''}'.trim().toLowerCase();
+    if (status == 'error' || status == 'fail' || status == 'failed') {
       return _Page.error(
-        (map['result'] as Map)['message']?.toString() ??
-            'Failed to load invoices',
+        statusSource['message']?.toString() ?? 'Failed to load invoices',
       );
     }
     return _Page(

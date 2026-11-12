@@ -44,7 +44,8 @@ class PaymentBookService {
 
   static bool _isTodayOnly(String? dateFrom, String? dateTo) {
     final today = _formatApiDate(PaymentBookFilter.todayDate());
-    if (dateFrom == null && dateTo == null) return true;
+    // No dates = show all (history fallback). Do not treat as "today".
+    if (dateFrom == null && dateTo == null) return false;
     return dateFrom == today && (dateTo == null || dateTo == today);
   }
 
@@ -231,7 +232,21 @@ class PaymentBookService {
         .map(PaymentHistoryService.withTrustedTotals)
         .toList(growable: false);
     // Keep only rows inside the requested date window (API may return extra).
+    // Hide cancelled/canceled and emptied drafts (total+balance 0) — discard
+    // may leave an empty draft when hard-delete routes are missing.
     final ranged = invoices.where((inv) {
+      final state =
+          (inv.moveState ?? inv.paymentState ?? inv.status ?? '')
+              .toLowerCase();
+      if (state.contains('cancel')) return false;
+      final total = inv.total ?? 0;
+      final balance = inv.balance ?? 0;
+      final name = (inv.customer ?? '').trim();
+      if (total.abs() < 0.0001 &&
+          balance.abs() < 0.0001 &&
+          name.isEmpty) {
+        return false;
+      }
       final day = CalendarDate.parse(inv.invoiceDate);
       if (day == null) return true;
       if (dateFrom != null) {
@@ -310,10 +325,13 @@ class PaymentBookService {
     if (customer != null && customer.trim().isNotEmpty) {
       final q = customer.trim().toLowerCase();
       list = list.where((item) {
-        final name = (item.displayCustomer ?? item.customer ?? '')
-            .toLowerCase();
+        final name = item.listCustomerLabel.toLowerCase();
+        final raw = (item.customer ?? '').toLowerCase();
         final number = (item.invoiceNumber ?? '').toLowerCase();
-        return name.contains(q) || number.contains(q);
+        return name.contains(q) ||
+            raw.contains(q) ||
+            number.contains(q) ||
+            (q.contains('walk') && item.isWalkInOrNamelessCustomer);
       }).toList(growable: false);
     }
 
@@ -338,6 +356,8 @@ class PaymentBookService {
       final mode = paymentMode.toLowerCase();
       list = list.where((item) {
         final raw = (item.paymentMode ?? '').toLowerCase().trim();
+        // Drafts often omit mode; treat blank as cash (same as PaymentBookFilter).
+        if (raw.isEmpty) return mode == 'cash';
         return raw == mode || raw.contains(mode);
       }).toList(growable: false);
     }

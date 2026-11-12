@@ -232,6 +232,7 @@ class _InvoiceSearchFilterSheetState extends State<InvoiceSearchFilterSheet> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<PaymentBookCustomerType>(
+              key: ValueKey('customerType-$_customerType'),
               initialValue: _customerType,
               dropdownColor: Colors.white,
               iconEnabledColor: Colors.black,
@@ -272,6 +273,7 @@ class _InvoiceSearchFilterSheetState extends State<InvoiceSearchFilterSheet> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<PaymentBookPaymentMode>(
+              key: ValueKey('paymentMode-$_paymentMode'),
               initialValue: _paymentMode,
               dropdownColor: Colors.white,
               iconEnabledColor: Colors.black,

@@ -410,9 +410,9 @@ class ChequeClearanceModel {
 
   static List<ChequeClearanceModel> parseList(Map<String, dynamic> response) {
     final result = response['result'];
-    if (result is! Map) return const [];
-
-    final root = Map<String, dynamic>.from(result);
+    final root = result is Map
+        ? Map<String, dynamic>.from(result)
+        : Map<String, dynamic>.from(response);
 
     // Actual API: result.data.cheques
     final data = root['data'];

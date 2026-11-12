@@ -379,7 +379,12 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
           _SectionCard(
             child: Column(
               children: [
-                _ReadField(widget.partnerLabel, _invoice.displayCustomer),
+                // Walkin / Demo / empty → blank on the opened bill (lists show Walkin).
+                _ReadField(
+                  widget.partnerLabel,
+                  _invoice.displayCustomer,
+                  blankAsEmpty: true,
+                ),
                 _ReadField('Address', _invoice.address),
                 _ReadField('Phone No', _invoice.phone),
                 _ReadField('Responsible Person', _invoice.responsiblePerson),
@@ -438,7 +443,10 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
                   'Discount Rate (%)',
                   InvoiceSummaryModel.formatMoney(_invoice.discountRate ?? 0),
                 ),
-                _ReadField('Billed By', _invoice.billedBy),
+                _ReadField(
+                  'Billed By',
+                  _invoice.displayBilledBy,
+                ),
                 _ReadField('Status', status),
                 _ReadField('Verified By', _invoice.verifiedBy),
                 _ReadField('Expense', _invoice.expense),
@@ -564,10 +572,12 @@ class _SectionCard extends StatelessWidget {
 }
 
 class _ReadField extends StatelessWidget {
-  const _ReadField(this.label, this.value);
+  const _ReadField(this.label, this.value, {this.blankAsEmpty = false});
 
   final String label;
   final String? value;
+  /// When true, missing values render as blank instead of '—'.
+  final bool blankAsEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -588,7 +598,9 @@ class _ReadField extends StatelessWidget {
           ),
           Expanded(
             child: Text(
-              (value == null || value!.trim().isEmpty) ? '—' : value!,
+              (value == null || value!.trim().isEmpty)
+                  ? (blankAsEmpty ? '' : '—')
+                  : value!,
               style: const TextStyle(color: sectionText, fontSize: 14),
             ),
           ),

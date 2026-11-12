@@ -40,14 +40,14 @@ class InvoiceListCard extends StatelessWidget {
         weight: FontWeight.w800,
       ),
       _LineCell(
-        label: 'Balance',
-        value: InvoiceSummaryModel.formatMoney(invoice.balance),
+        label: 'Customer',
+        value: invoice.listCustomerLabel,
         color: color,
         weight: weight,
       ),
       _LineCell(
-        label: 'Subtotal',
-        value: InvoiceSummaryModel.formatMoney(invoice.subtotal),
+        label: 'Balance',
+        value: InvoiceSummaryModel.formatMoney(invoice.balance),
         color: color,
         weight: weight,
       ),

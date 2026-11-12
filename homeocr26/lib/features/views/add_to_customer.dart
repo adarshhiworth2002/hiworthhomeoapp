@@ -44,6 +44,13 @@ class AddToCustomerResult {
   final bool sellableStockDeducted;
 }
 
+typedef LocalReservedQtyLookup = double Function({
+  String? product,
+  String? potency,
+  String? batch,
+  String? pack,
+});
+
 class AddToCustomerPage extends StatefulWidget {
   const AddToCustomerPage({
     super.key,
@@ -51,6 +58,8 @@ class AddToCustomerPage extends StatefulWidget {
     this.lockedInvoiceId,
     this.asPopup = false,
     this.onAdded,
+    this.deferServerCommit = false,
+    this.localReservedQty,
   });
 
   /// When set (e.g. from invoice detail), medicine is always added to this bill.
@@ -62,9 +71,16 @@ class AddToCustomerPage extends StatefulWidget {
   /// Compact chrome for dialog / bottom-sheet use.
   final bool asPopup;
 
-  /// Called after a successful add_to_invoice so the parent bill can show the line.
+  /// Called after a successful add so the parent bill can show the line.
   /// [invoiceId] is the Odoo `account.move` id (needed because draft `name` is `/`).
   final void Function(QrData data, double qty, int? invoiceId)? onAdded;
+
+  /// When true, validate + return the scanned line only — parent Save commits
+  /// via `add_to_invoice`. Discard then needs no server delete.
+  final bool deferServerCommit;
+
+  /// Qty already reserved on the open local bill for the same product/batch.
+  final LocalReservedQtyLookup? localReservedQty;
 
   /// Opens the Add-to-Customer scanner as a popup (does not replace other screens).
   static Future<AddToCustomerResult?> showPopup(
@@ -72,6 +88,8 @@ class AddToCustomerPage extends StatefulWidget {
     String? lockedInvoiceNumber,
     int? lockedInvoiceId,
     void Function(QrData data, double qty, int? invoiceId)? onAdded,
+    bool deferServerCommit = false,
+    LocalReservedQtyLookup? localReservedQty,
   }) {
     return showDialog<AddToCustomerResult?>(
       context: context,
@@ -92,6 +110,8 @@ class AddToCustomerPage extends StatefulWidget {
                 lockedInvoiceId: lockedInvoiceId,
                 asPopup: true,
                 onAdded: onAdded,
+                deferServerCommit: deferServerCommit,
+                localReservedQty: localReservedQty,
               ),
             ),
           ),
@@ -120,11 +140,75 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
       (widget.lockedInvoiceNumber ?? '').trim().isNotEmpty;
 
   @override
+  void initState() {
+    super.initState();
+
+    requiredQtyController.addListener(_onRequiredQtyChanged);
+
+    final locked = (widget.lockedInvoiceNumber ?? '').trim();
+    if (locked.isNotEmpty) {
+      invoicePrefixController.text = InvoiceHelper.prefixFromFull(locked);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      requestCamera();
+      final model = Provider.of<CustomerMedViewmodel>(context, listen: false);
+      model.resetAllScan();
+    });
+  }
+
+  void _onRequiredQtyChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   void dispose() {
+    requiredQtyController.removeListener(_onRequiredQtyChanged);
     requiredQtyController.dispose();
     invoicePrefixController.dispose();
     cameraController.dispose();
     super.dispose();
+  }
+
+  /// Warehouse sellable minus qty already on this open bill.
+  double _freeScanStock(CustomerMedViewmodel model, QrData? data) {
+    final warehouse = model.availableScanQuantity(data);
+    final reserved = widget.localReservedQty?.call(
+          product: data?.productName,
+          potency: data?.potency,
+          batch: data?.batch,
+          pack: data?.packing,
+        ) ??
+        0;
+    return (warehouse - reserved).clamp(0, double.infinity).toDouble();
+  }
+
+  /// Live Stock Quantity: free stock minus what the user is typing to add.
+  double _displayScanStock(CustomerMedViewmodel model, QrData? data) {
+    final free = _freeScanStock(model, data);
+    final typed =
+        double.tryParse(requiredQtyController.text.trim()) ?? 0.0;
+    return (free - typed).clamp(0, double.infinity).toDouble();
+  }
+
+  double _freeLabelStock(CustomerMedViewmodel model) {
+    final warehouse = model.availableLabelStockQuantity();
+    final stock = model.selectedLabelStock;
+    final reserved = widget.localReservedQty?.call(
+          product: stock?.medicineLabel ?? model.labelMedicine,
+          potency: stock?.potency ?? model.labelPotency,
+          batch: stock?.batch,
+          pack: stock?.packing ?? model.labelPacking,
+        ) ??
+        0;
+    return (warehouse - reserved).clamp(0, double.infinity).toDouble();
+  }
+
+  double _displayLabelStock(CustomerMedViewmodel model) {
+    final free = _freeLabelStock(model);
+    final typed =
+        double.tryParse(requiredQtyController.text.trim()) ?? 0.0;
+    return (free - typed).clamp(0, double.infinity).toDouble();
   }
 
   String get _fullInvoiceNumber {
@@ -139,6 +223,13 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     return InvoiceHelper.formatFull(prefix);
   }
 
+  /// Prefer the locked bill id; otherwise reuse lastAdded only when numbers match.
+  int? _attachInvoiceId(CustomerMedViewmodel model) {
+    final locked = widget.lockedInvoiceId;
+    if (locked != null && locked > 0) return locked;
+    return model.matchingLastAddedInvoiceId(_fullInvoiceNumber);
+  }
+
   Future<void> _finishSuccessfulAdd({
     required QrData data,
     required double qty,
@@ -148,11 +239,15 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     bool sellableStockDeducted = true,
   }) async {
     widget.onAdded?.call(data, qty, invoiceId);
-    unawaited(LiveDataSync.syncNow());
+    if (!widget.deferServerCommit) {
+      unawaited(LiveDataSync.syncNow());
+    }
     await StatusDialog.show(
       context: context,
       title: 'Success',
-      message: 'Medicine quantity added',
+      message: widget.deferServerCommit
+          ? 'Added to bill (save to commit)'
+          : 'Medicine quantity added',
       type: StatusType.success,
     );
     try {
@@ -169,22 +264,6 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
         sellableStockDeducted: sellableStockDeducted,
       ),
     );
-  }
-
-  @override
-  void initState() {
-    super.initState();
-
-    final locked = (widget.lockedInvoiceNumber ?? '').trim();
-    if (locked.isNotEmpty) {
-      invoicePrefixController.text = InvoiceHelper.prefixFromFull(locked);
-    }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      requestCamera();
-      final model = Provider.of<CustomerMedViewmodel>(context, listen: false);
-      model.resetAllScan();
-    });
   }
 
   Future<void> refreshScanner({bool keepInvoice = false}) async {
@@ -718,12 +797,15 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                 const Divider(color: sectionTextMuted),
                 _rowItem("Company", model.qrResponse?.result?.data?.company??"", icon: Icons.location_city),
                 const Divider(color: sectionTextMuted),
+                _rowItem("MFD", model.qrResponse?.result?.data?.mfd??"", icon: Icons.event),
+                const Divider(color: sectionTextMuted),
                 _rowItem("Expiry", model.qrResponse?.result?.data?.expiry??"", icon: Icons.calendar_today),
                 const Divider(color: sectionTextMuted),
                 _rowItem(
                   "Stock Quantity",
                   _formatQty(
-                    model.availableScanQuantity(
+                    _displayScanStock(
+                      model,
                       model.qrResponse?.result?.data,
                     ),
                   ),
@@ -748,7 +830,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
     final medicineOptions = model.labelMedicineOptions;
     final potencyOptions = model.labelPotencyOptions;
     final packingOptions = model.labelPackingOptions;
-    final stockQty = model.availableLabelStockQuantity();
+    final stockQty = _displayLabelStock(model);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -983,7 +1065,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                           }
 
                           if (_isLabelScanSuccessful(model)) {
-                            final scanQty = model.availableLabelStockQuantity();
+                            final scanQty = _freeLabelStock(model);
                             if (model.selectedLabelStock == null) {
                               StatusDialog.show(
                                 context: context,
@@ -1006,12 +1088,25 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                               return;
                             }
 
+                            if (widget.deferServerCommit) {
+                              final addedStock = model.selectedLabelStock;
+                              if (addedStock != null) {
+                                await _finishSuccessfulAdd(
+                                  data: model.qrDataFromLabelStock(addedStock),
+                                  qty: quantity,
+                                  invoiceId: widget.lockedInvoiceId,
+                                  invoiceName: invoiceNumber,
+                                  sellableStockDeducted: false,
+                                );
+                              }
+                              return;
+                            }
+
                             final result = await model.addLabelStockToInvoice(
                               qty: quantity,
                               context: context,
                               invoiceNumber: invoiceNumber,
-                              invoiceId: widget.lockedInvoiceId ??
-                                  model.lastAddedInvoiceId,
+                              invoiceId: _attachInvoiceId(model),
                             );
 
                             if (!context.mounted) return;
@@ -1042,7 +1137,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                           }
 
                           final qrData = model.qrResponse?.result?.data;
-                          final scanQty = model.availableScanQuantity(qrData);
+                          final scanQty = _freeScanStock(model, qrData);
 
                           if (model.qrResponse?.result?.data == null) {
                             StatusDialog.show(
@@ -1060,13 +1155,23 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                                   '(${_formatQty(scanQty)})',
                               type: StatusType.info,
                             );
+                          } else if (widget.deferServerCommit) {
+                            final addedData = model.qrResponse?.result?.data;
+                            if (addedData != null) {
+                              await _finishSuccessfulAdd(
+                                data: addedData,
+                                qty: quantity,
+                                invoiceId: widget.lockedInvoiceId,
+                                invoiceName: invoiceNumber,
+                                sellableStockDeducted: false,
+                              );
+                            }
                           } else {
                             final result = await model.addRequiredMedicineQty(
                               qty: quantity,
                               context: context,
                               invoiceNumber: invoiceNumber,
-                              invoiceId: widget.lockedInvoiceId ??
-                                  model.lastAddedInvoiceId,
+                              invoiceId: _attachInvoiceId(model),
                             );
 
                             if (!context.mounted) return;

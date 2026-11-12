@@ -1,13 +1,20 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/invoice_summary_model.dart';
 import '../../viewModels/customer_invoice_viewmodel.dart';
 import '../../viewModels/login_viewmodel.dart';
-import 'odoo_rpc_helper.dart';
+import 'WebApi/web_api_impl.dart';
+import 'api_request_helper.dart';
+import 'api_response_helper.dart';
+import 'endPoints.dart';
 import 'payment_history_service.dart';
 
 /// Loads a full customer invoice (header + lines) for the detail screen.
+/// Uses Laravel Flutter APIs + local Flutter merge only (no Odoo).
 class InvoiceDetailService {
   const InvoiceDetailService._();
 
@@ -25,7 +32,6 @@ class InvoiceDetailService {
     if (login.sessionId == null || login.sessionId!.isEmpty) return seed;
 
     final needsHistory = _needsPaymentHistory(seed);
-    // Always refresh lines from Odoo so supplier qty fields stay current.
     final needsLines = seed.id != null;
 
     if (!needsHistory && !needsLines) return seed;
@@ -37,25 +43,19 @@ class InvoiceDetailService {
           )
         : Future<InvoiceSummaryModel?>.value(null);
 
-    final odooFuture = needsLines
-        ? _loadOdooInvoice(
-            flutterSessionId: login.sessionId!,
-            db: LoginViewmodel.dbName,
-            login: login.loginEmail,
-            password: login.loginPassword,
+    final linesFuture = needsLines
+        ? _loadFlutterInvoice(
+            sessionId: login.sessionId!,
             invoiceId: seed.id!,
           )
         : Future<InvoiceSummaryModel?>.value(null);
 
-    final results = await Future.wait([historyFuture, odooFuture]);
+    final results = await Future.wait([historyFuture, linesFuture]);
 
-    // Seed first so list bill no. (0514/2026-27) is kept over INV/...
     var merged = seed;
     if (results[0] != null) merged = merged.mergedWith(results[0]!);
     if (results[1] != null) merged = merged.mergedWith(results[1]!);
 
-    // Bake Dis% + expense into total/balance so Customer Invoice / Payment
-    // Book list rows match the detail footer (Odoo list APIs use MRP only).
     final sectioned = merged.withComputedSectionAmounts();
     if (sectioned.id != null &&
         sectioned.lines.isNotEmpty &&
@@ -66,54 +66,114 @@ class InvoiceDetailService {
   }
 
   static bool _needsPaymentHistory(InvoiceSummaryModel seed) {
-    return seed.billedBy == null ||
+    final billed = (seed.billedBy ?? '').trim();
+    final responsible = (seed.responsiblePerson ?? '').trim();
+    return billed.isEmpty ||
+        responsible.isEmpty ||
         seed.taxAmount == null ||
         seed.subtotal == null ||
         seed.total == null;
   }
 
-  static Future<InvoiceSummaryModel?> _loadOdooInvoice({
-    required String flutterSessionId,
-    required String db,
-    String? login,
-    String? password,
+  static Future<InvoiceSummaryModel?> _loadFlutterInvoice({
+    required String sessionId,
     required int invoiceId,
   }) async {
-    // Always prefer a fresh Odoo web session for line items.
-    if (login != null &&
-        login.isNotEmpty &&
-        password != null &&
-        password.isNotEmpty) {
-      for (var attempt = 0; attempt < 2; attempt++) {
-        if (attempt > 0) {
-          OdooRpcHelper.invalidateWebSession();
-        }
-        final webSid = await OdooRpcHelper.cachedWebSessionId(
-          db: db,
-          login: login,
-          password: password,
-        );
-        if (webSid == null) continue;
+    // Try Laravel-friendly flat body first, then JSON-RPC envelope.
+    final attempts = <Map<String, dynamic>>[
+      {
+        'invoice_id': invoiceId,
+        'id': invoiceId,
+      },
+      ApiRequestHelper.jsonRpcCall({
+        'invoice_id': invoiceId,
+        'id': invoiceId,
+      }),
+    ];
 
-        final fromWeb =
-            await OdooRpcHelper.readPharmacyInvoice(webSid, invoiceId);
-        if (fromWeb != null && fromWeb.lines.isNotEmpty) return fromWeb;
-
-        // Header-only from web — still useful; try Flutter session for lines.
-        if (fromWeb != null) {
-          final fromFlutter = await OdooRpcHelper.readPharmacyInvoice(
-            flutterSessionId,
-            invoiceId,
-          );
-          if (fromFlutter != null && fromFlutter.lines.isNotEmpty) {
-            return fromWeb.mergedWith(fromFlutter);
-          }
-          return fromWeb;
-        }
-      }
+    for (final payload in attempts) {
+      final parsed = await _fetchInvoiceOnce(
+        sessionId: sessionId,
+        invoiceId: invoiceId,
+        endpointPath: EndPoint.customerInvoice.path,
+        userDetails: payload,
+      );
+      if (parsed != null) return parsed;
     }
 
-    return OdooRpcHelper.readPharmacyInvoice(flutterSessionId, invoiceId);
+    // Fallback: paged list filtered by id (some Laravel builds ignore detail id).
+    return _fetchInvoiceOnce(
+      sessionId: sessionId,
+      invoiceId: invoiceId,
+      endpointPath: EndPoint.customerInvoices.path,
+      userDetails: ApiRequestHelper.jsonRpcCall({
+        'invoice_id': invoiceId,
+        'id': invoiceId,
+        'limit': 1,
+        'offset': 0,
+      }),
+    );
+  }
+
+  static Future<InvoiceSummaryModel?> _fetchInvoiceOnce({
+    required String sessionId,
+    required int invoiceId,
+    required String endpointPath,
+    required Map<String, dynamic> userDetails,
+  }) async {
+    try {
+      final response = await WebApiImpl().fetchInvoiceList(
+        endpointPath: endpointPath,
+        sessionId: sessionId,
+        userDetails: userDetails,
+        logResponseBody: kDebugMode,
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return null;
+      }
+      final body = response.body.trim();
+      if (!body.startsWith('{')) return null;
+      final decoded = json.decode(body);
+      if (decoded is! Map) return null;
+      final map = Map<String, dynamic>.from(decoded);
+      if (!ApiResponseHelper.isSuccess(map) &&
+          ApiResponseHelper.payloadMap(map)?['status'] == 'error') {
+        return null;
+      }
+      InvoiceSummaryModel? parsed = InvoiceSummaryModel.parseOne(map);
+      if (parsed == null) {
+        final list = InvoiceSummaryModel.parseList(map);
+        for (final item in list) {
+          if (item.id == invoiceId) {
+            parsed = item;
+            break;
+          }
+        }
+        parsed ??= list.isEmpty ? null : list.first;
+      }
+      if (parsed == null) return null;
+      // Laravel sometimes ignores invoice_id and returns invoice #1 — reject.
+      final gotId = parsed.id;
+      if (gotId != null && gotId > 0 && gotId != invoiceId) {
+        if (kDebugMode) {
+          debugPrint(
+            '$endpointPath id mismatch: asked=$invoiceId got=$gotId',
+          );
+        }
+        return null;
+      }
+      if (parsed.lines.isEmpty) {
+        if (kDebugMode) {
+          debugPrint('$endpointPath id=$invoiceId returned 0 lines');
+        }
+      }
+      return parsed;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('InvoiceDetailService $endpointPath: $e');
+      }
+      return null;
+    }
   }
 
   static Future<InvoiceSummaryModel?> _enrichFromPaymentHistory({
@@ -137,6 +197,5 @@ class InvoiceDetailService {
 
   static void clearCache() {
     PaymentHistoryService.clearCache();
-    OdooRpcHelper.clearWebSessionCache();
   }
 }

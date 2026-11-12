@@ -11,12 +11,14 @@ class SavedAuth {
     required this.userName,
     required this.email,
     required this.password,
+    this.apiToken = '',
   });
 
   final String sessionId;
   final String userName;
   final String email;
   final String password;
+  final String apiToken;
 
   bool get hasCredentials =>
       sessionId.trim().isNotEmpty &&
@@ -35,8 +37,12 @@ class AuthSessionStore {
   static const _nameKey = 'auth_user_name';
   static const _emailKey = 'auth_email';
   static const _passwordKey = 'auth_password';
+  static const _tokenKey = 'auth_api_token';
 
   static SavedAuth? _memory;
+
+  /// In-memory Sanctum/API token for request headers.
+  static String get currentApiToken => (_memory?.apiToken ?? '').trim();
 
   static Future<File> _file() async {
     final dir = await getApplicationSupportDirectory();
@@ -48,12 +54,14 @@ class AuthSessionStore {
     required String? userName,
     required String? email,
     required String? password,
+    String? apiToken,
   }) async {
     final auth = SavedAuth(
       sessionId: (sessionId ?? '').trim(),
       userName: (userName ?? '').trim(),
       email: (email ?? '').trim(),
       password: password ?? '',
+      apiToken: (apiToken ?? '').trim(),
     );
     if (!auth.hasCredentials) return;
     _memory = auth;
@@ -62,6 +70,7 @@ class AuthSessionStore {
       'user_name': auth.userName,
       'email': auth.email,
       'password': auth.password,
+      'api_token': auth.apiToken,
     });
 
     try {
@@ -78,6 +87,7 @@ class AuthSessionStore {
       await prefs.setString(_nameKey, auth.userName);
       await prefs.setString(_emailKey, auth.email);
       await prefs.setString(_passwordKey, auth.password);
+      await prefs.setString(_tokenKey, auth.apiToken);
     } catch (e) {
       if (kDebugMode) debugPrint('AuthSessionStore.save prefs: $e');
     }
@@ -116,6 +126,7 @@ class AuthSessionStore {
           userName: (prefs.getString(_nameKey) ?? '').trim(),
           email: mail,
           password: pass,
+          apiToken: (prefs.getString(_tokenKey) ?? '').trim(),
         );
         _memory = parsed;
         return parsed;
@@ -141,6 +152,7 @@ class AuthSessionStore {
       await prefs.remove(_nameKey);
       await prefs.remove(_emailKey);
       await prefs.remove(_passwordKey);
+      await prefs.remove(_tokenKey);
     } catch (e) {
       if (kDebugMode) debugPrint('AuthSessionStore.clear prefs: $e');
     }
@@ -156,6 +168,7 @@ class AuthSessionStore {
         userName: '${map['user_name'] ?? ''}'.trim(),
         email: '${map['email'] ?? ''}'.trim(),
         password: '${map['password'] ?? ''}',
+        apiToken: '${map['api_token'] ?? map['token'] ?? ''}'.trim(),
       );
       return auth.hasCredentials ? auth : null;
     } catch (_) {

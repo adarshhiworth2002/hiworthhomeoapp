@@ -28,6 +28,8 @@ class LoginViewmodel extends ChangeNotifier {
   String loginError = '';
   String? sessionId;
   String? userName;
+  /// Laravel Sanctum token when login returns `data.token` / `token`.
+  String? apiToken;
 
   /// Kept in memory so Odoo `/web` can be opened with a real browser session.
   String? loginEmail;
@@ -60,55 +62,87 @@ class LoginViewmodel extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         final jsonData = json.decode(response.body);
-        Map<String, dynamic> respo = json.decode(response.body);
-        if (respo.containsKey('result')) {
-          if (respo['result']['status'] == 'error') {
-            return respo['result']['message'];
-          } else {
-            sessionId = '${respo['result']['session_id'] ?? ''}'.trim();
-            userName = '${respo['result']['name'] ?? ''}'.trim();
-            loginEmail = email;
-            loginPassword = password;
-            await AuthSessionStore.save(
-              sessionId: sessionId,
-              userName: userName,
-              email: email,
-              password: password,
-            );
-            InvoiceSearchService.clearCache();
-            InvoiceDetailService.clearCache();
-            PaymentHistoryService.clearCache();
-            PaymentHistoryService.clearTrustedTotals();
-            PaymentBookService.clearCache();
-            ChequeClearanceService.clearCache();
-            ChequeNotificationService.resetSession();
-            CustomerInvoiceViewModel.clearGlobalCache();
-            EmployeePerformanceViewModel.clearGlobalCache();
-            StockViewModel.clearGlobalCache();
-            return 'success';
-          }
+        if (jsonData is! Map) {
+          sessionId = null;
+          userName = null;
+          apiToken = null;
+          loginError = 'Failed to  User Login';
+          return loginError;
         }
+        final respo = Map<String, dynamic>.from(jsonData);
         print('object $jsonData ');
-        if (respo.containsKey('error')) {
+
+        // Odoo-wrapped: { result: { status, session_id, ... } }
+        // Laravel flat: { status, session_id, name, data: { token } }
+        final payload = respo['result'] is Map
+            ? Map<String, dynamic>.from(respo['result'] as Map)
+            : respo;
+
+        final status = '${payload['status'] ?? ''}'.trim().toLowerCase();
+        if (status == 'error' || status == 'fail' || status == 'failed') {
+          return '${payload['message'] ?? 'Failed to  User Login'}';
+        }
+        if (respo.containsKey('error') && payload['session_id'] == null) {
           sessionId = null;
           loginError = 'Failed to  User Login';
           userName = null;
-          return loginError;
-        } else {
-          sessionId = null;
-          loginError = 'Failed to  User Login';
-          userName = null;
+          apiToken = null;
           return loginError;
         }
+
+        final sid = '${payload['session_id'] ?? payload['session'] ?? ''}'.trim();
+        final dataNode = payload['data'];
+        String token = '';
+        if (dataNode is Map) {
+          token = '${dataNode['token'] ?? dataNode['api_token'] ?? ''}'.trim();
+        }
+        if (token.isEmpty) {
+          token = '${payload['token'] ?? payload['api_token'] ?? ''}'.trim();
+        }
+        // Sanctum-only login: use token as session key so the app stays logged in.
+        final effectiveSid = sid.isNotEmpty ? sid : token;
+        if (effectiveSid.isEmpty) {
+          sessionId = null;
+          userName = null;
+          apiToken = null;
+          loginError = 'Failed to  User Login';
+          return loginError;
+        }
+
+        sessionId = effectiveSid;
+        userName = _extractLoginDisplayName(payload, email);
+        apiToken = token.isNotEmpty ? token : null;
+        loginEmail = email;
+        loginPassword = password;
+        await AuthSessionStore.save(
+          sessionId: sessionId,
+          userName: userName,
+          email: email,
+          password: password,
+          apiToken: apiToken,
+        );
+        InvoiceSearchService.clearCache();
+        InvoiceDetailService.clearCache();
+        PaymentHistoryService.clearCache();
+        PaymentHistoryService.clearTrustedTotals();
+        PaymentBookService.clearCache();
+        ChequeClearanceService.clearCache();
+        ChequeNotificationService.resetSession();
+        CustomerInvoiceViewModel.clearGlobalCache();
+        EmployeePerformanceViewModel.clearGlobalCache();
+        StockViewModel.clearGlobalCache();
+        return 'success';
       } else {
         sessionId = null;
         userName = null;
+        apiToken = null;
         loginError = 'error User Login';
         return loginError;
       }
     } catch (e, s) {
       print(s);
       sessionId = null;
+      apiToken = null;
       loginError = 'Error  User Login:';
       return loginError;
     } finally {
@@ -323,6 +357,7 @@ class LoginViewmodel extends ChangeNotifier {
     userName = saved.userName;
     loginEmail = saved.email;
     loginPassword = saved.password;
+    apiToken = saved.apiToken.trim().isEmpty ? null : saved.apiToken.trim();
   }
 
   Future<void> restoreSession() async {
@@ -348,9 +383,61 @@ class LoginViewmodel extends ChangeNotifier {
     return isLoggedIn;
   }
 
+  /// Laravel often nests the display name under `data` / `user`.
+  static String _extractLoginDisplayName(
+    Map<String, dynamic> payload,
+    String email,
+  ) {
+    String? pick(dynamic value) {
+      final t = '${value ?? ''}'.trim();
+      if (t.isEmpty || t == 'null' || t == 'false') return null;
+      return t;
+    }
+
+    final dataNode = payload['data'];
+    final userNode = payload['user'] is Map
+        ? Map<String, dynamic>.from(payload['user'] as Map)
+        : (dataNode is Map && dataNode['user'] is Map
+            ? Map<String, dynamic>.from(dataNode['user'] as Map)
+            : null);
+
+    for (final value in [
+      payload['name'],
+      payload['username'],
+      payload['user_name'],
+      payload['full_name'],
+      payload['display_name'],
+      if (dataNode is Map) ...[
+        dataNode['name'],
+        dataNode['username'],
+        dataNode['user_name'],
+        dataNode['full_name'],
+        dataNode['display_name'],
+      ],
+      if (userNode != null) ...[
+        userNode['name'],
+        userNode['username'],
+        userNode['user_name'],
+        userNode['full_name'],
+        userNode['display_name'],
+      ],
+    ]) {
+      final hit = pick(value);
+      if (hit != null) return hit;
+    }
+
+    final e = email.trim();
+    if (e.contains('@')) {
+      final local = e.split('@').first.trim();
+      if (local.isNotEmpty) return local;
+    }
+    return e;
+  }
+
   Future<void> logout() async {
     sessionId = null;
     userName = null;
+    apiToken = null;
     loginEmail = null;
     loginPassword = null;
     loginError = '';

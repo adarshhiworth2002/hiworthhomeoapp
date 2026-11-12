@@ -226,8 +226,9 @@ class AmountBookViewModel extends ChangeNotifier {
 
   static void _ingestCustomerBalances(Iterable<InvoiceSummaryModel> invoices) {
     for (final inv in invoices) {
-      final name = _normName(inv.displayCustomer ?? inv.customer);
+      final name = _normName(inv.displayCustomer);
       if (name.isEmpty) continue;
+      if (InvoiceSummaryModel.isWalkInCustomerName(name)) continue;
       if (inv.advanceAmount == null && inv.oldBalance == null) continue;
       // Weak list-API merge only fills gaps — never blocks a later Odoo overwrite.
       final existing = _balancesByCustomer[name];

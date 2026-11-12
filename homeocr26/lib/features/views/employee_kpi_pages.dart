@@ -247,9 +247,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage>
                       separatorBuilder: (_, _) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
                       final inv = _results[index];
-                      final walkIn = (inv.displayCustomer ?? '')
-                          .toLowerCase()
-                          .contains('walk-in');
+                      final walkIn = inv.isWalkInOrNamelessCustomer;
                       final status = inv.displayPaymentHistoryStatus;
                       return Material(
                         color: Colors.transparent,
@@ -300,7 +298,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage>
                                       ),
                                       _Line(
                                         'Customer',
-                                        inv.displayCustomer ?? '—',
+                                        inv.listCustomerLabel,
                                         color: walkIn
                                             ? const Color(0xFFE53935)
                                             : const Color(0xFF42A5F5),
@@ -355,7 +353,6 @@ class ActiveSessionsTimerLogsPage extends StatefulWidget {
 class _ActiveSessionsTimerLogsPageState
     extends State<ActiveSessionsTimerLogsPage> with LiveRefreshMixin {
   bool _loading = true;
-  bool _refreshing = false;
   List<EmployeeTimerLog> _logs = const [];
 
   @override
@@ -380,13 +377,9 @@ class _ActiveSessionsTimerLogsPageState
       setState(() {
         _logs = instant;
         _loading = false;
-        _refreshing = true;
       });
     } else if (mounted) {
-      setState(() {
-        _loading = true;
-        _refreshing = false;
-      });
+      setState(() => _loading = true);
     }
 
     final logs = await model.fetchActiveTimerLogs(
@@ -397,7 +390,6 @@ class _ActiveSessionsTimerLogsPageState
     setState(() {
       _logs = logs;
       _loading = false;
-      _refreshing = false;
     });
   }
 

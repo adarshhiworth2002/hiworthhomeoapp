@@ -48,6 +48,42 @@ class CustomerMedViewmodel extends ChangeNotifier {
   /// From the last successful add_to_invoice (draft `name` is often `/`).
   int? lastAddedInvoiceId;
   String? lastAddedInvoiceName;
+
+  /// After Discard, next new bill must reuse this number (e.g. R0159).
+  String? reuseInvoiceNumber;
+
+  /// Drop sticky add target so a new bill number cannot reuse a discarded id.
+  void clearLastAddedInvoice() {
+    lastAddedInvoiceId = null;
+    lastAddedInvoiceName = null;
+    notifyListeners();
+  }
+
+  void rememberDiscardedInvoiceNumber(String? number) {
+    final n = (number ?? '').trim();
+    reuseInvoiceNumber = n.isEmpty ? null : n;
+    notifyListeners();
+  }
+
+  /// Consume a previously discarded number for the next new bill.
+  /// Does not notify — callers often run this from [State.initState].
+  String? takeReuseInvoiceNumber() {
+    final n = (reuseInvoiceNumber ?? '').trim();
+    reuseInvoiceNumber = null;
+    if (n.isEmpty) return null;
+    return n;
+  }
+
+  /// Reuse [lastAddedInvoiceId] only when it still matches [invoiceNumber].
+  int? matchingLastAddedInvoiceId(String invoiceNumber) {
+    final want = invoiceNumber.trim();
+    final lastName = (lastAddedInvoiceName ?? '').trim();
+    final lastId = lastAddedInvoiceId;
+    if (lastId == null || lastId <= 0) return null;
+    if (want.isEmpty || lastName.isEmpty) return null;
+    if (want.toLowerCase() != lastName.toLowerCase()) return null;
+    return lastId;
+  }
   /// True when the last successful add used RPC that deducted `item_qty`.
   bool lastAddUsedRpcStockAdjust = false;
   /// True when last add deducted sellable `stock` (Flutter/RPC). False after
@@ -364,40 +400,53 @@ class CustomerMedViewmodel extends ChangeNotifier {
     }
 
     // Already on a known move (draft name is often "/"). Never create another.
+    // Caller must only pass preferredInvoiceId when it belongs to this bill.
     if (preferredInvoiceId != null && preferredInvoiceId > 0) {
       lastAddedInvoiceId = preferredInvoiceId;
-      lastAddedInvoiceName =
-          trimmed.isNotEmpty ? trimmed : lastAddedInvoiceName;
-      return lastAddedInvoiceName ?? trimmed;
+      if (trimmed.isNotEmpty) lastAddedInvoiceName = trimmed;
+      // Prefer pharmacy number; fall back so add_to_invoice can use invoice_id.
+      final name = (lastAddedInvoiceName ?? trimmed).trim();
+      return name.isNotEmpty ? name : 'ID:$preferredInvoiceId';
     }
 
-    final odooSid = await _resolveOdooWebSession(context) ?? flutterSid;
-    final existingId =
-        await OdooRpcHelper.findCustomerInvoiceId(odooSid, trimmed);
-    if (existingId != null && existingId > 0) {
-      lastAddedInvoiceId = existingId;
+    // Optional Odoo resolve/create when RPC is enabled.
+    if (AppConfig.odooRpcEnabled) {
+      final odooSid = await _resolveOdooWebSession(context) ?? flutterSid;
+      final existingId =
+          await OdooRpcHelper.findCustomerInvoiceId(odooSid, trimmed);
+      if (existingId != null && existingId > 0) {
+        lastAddedInvoiceId = existingId;
+        lastAddedInvoiceName = trimmed;
+        return trimmed;
+      }
+
+      final draft = await InvoiceDraftHelper.createEmptyDraft(
+        sessionId: flutterSid,
+        knownNumbers: {trimmed},
+        login: loginModel.loginEmail,
+        password: loginModel.loginPassword,
+        db: LoginViewmodel.dbName,
+      );
+      if (draft != null) {
+        lastAddedInvoiceId = draft.invoiceId;
+        lastAddedInvoiceName = draft.invoiceNumber;
+        if (kDebugMode) {
+          debugPrint(
+            'label add: created draft invoice ${draft.invoiceNumber} '
+            '(id=${draft.invoiceId})',
+          );
+        }
+        return draft.invoiceNumber;
+      }
+    }
+
+    // Laravel: do not require a pre-saved Odoo draft. add_to_invoice creates
+    // (or attaches to) the bill using invoice_number / invoice_id.
+    if (trimmed.isNotEmpty) {
       lastAddedInvoiceName = trimmed;
       return trimmed;
     }
-
-    final draft = await InvoiceDraftHelper.createEmptyDraft(
-      sessionId: flutterSid,
-      knownNumbers: {trimmed},
-      login: loginModel.loginEmail,
-      password: loginModel.loginPassword,
-      db: LoginViewmodel.dbName,
-    );
-    if (draft == null) return null;
-
-    lastAddedInvoiceId = draft.invoiceId;
-    lastAddedInvoiceName = draft.invoiceNumber;
-    if (kDebugMode) {
-      debugPrint(
-        'label add: created draft invoice ${draft.invoiceNumber} '
-        '(id=${draft.invoiceId})',
-      );
-    }
-    return draft.invoiceNumber;
+    return null;
   }
 
   Future<String> addLabelStockToInvoice({
@@ -406,10 +455,14 @@ class CustomerMedViewmodel extends ChangeNotifier {
     required String invoiceNumber,
     int? invoiceId,
   }) async {
-    lastAddedInvoiceId = null;
-    lastAddedInvoiceName = null;
     lastAddUsedRpcStockAdjust = false;
     lastAddDeductedSellableStock = true;
+    final attachId =
+        (invoiceId != null && invoiceId > 0) ? invoiceId : null;
+    if (attachId == null) {
+      lastAddedInvoiceId = null;
+      lastAddedInvoiceName = null;
+    }
 
     final stock = selectedLabelStock;
     if (stock == null) {
@@ -427,20 +480,19 @@ class CustomerMedViewmodel extends ChangeNotifier {
       }
 
       final trimmedInvoice = invoiceNumber.trim();
-      if (trimmedInvoice.isEmpty &&
-          (invoiceId == null || invoiceId <= 0)) {
+      if (trimmedInvoice.isEmpty && attachId == null) {
         return 'Invoice number is required';
       }
 
       final resolvedInvoice = await _ensureCustomerInvoiceNumber(
         context,
         trimmedInvoice,
-        preferredInvoiceId: invoiceId,
+        preferredInvoiceId: attachId,
       );
       if (resolvedInvoice == null || resolvedInvoice.isEmpty) {
-        return 'Invoice not found on server. Save the bill first, then retry.';
+        return 'Invoice number is missing. Open or create a bill, then retry.';
       }
-      final moveId = lastAddedInvoiceId ?? invoiceId;
+      final moveId = attachId;
 
       final qtyValue = qty == qty.roundToDouble() ? qty.toInt() : qty;
       final webApi = WebApiImpl();
@@ -617,43 +669,45 @@ class CustomerMedViewmodel extends ChangeNotifier {
       print('medicine API Response: ${response.body}');
 
       if (response.statusCode == 200) {
-        final Map<String, dynamic> respo = json.decode(response.body);
+        final Map<String, dynamic> respo =
+            Map<String, dynamic>.from(json.decode(response.body) as Map);
         print("object $respo");
 
-        if (respo.containsKey("result")) {
-          final result = respo["result"];
-
-          if (result is Map && result["status"] == "error") {
+        if (ApiResponseHelper.isSuccess(respo)) {
+          qrResponse = QrResponseModel.fromJson(respo);
+          final data = qrResponse?.result?.data;
+          if (data == null) {
             qrFetchError = ApiResponseHelper.errorMessage(
               respo,
               fallback: 'Failed to fetch medicine details',
             );
           } else {
-            qrResponse = QrResponseModel.fromJson(respo);
-            final data = qrResponse?.result?.data;
-            final responseUid = data?.uid;
+            final responseUid = data.uid;
             if (responseUid != null && responseUid.isNotEmpty) {
               qrUid = responseUid;
             }
             _normalizeQrCustomerTax();
             if (kDebugMode) {
               debugPrint(
-                'Stock Quantity from API: available_stock=${data?.availableStock} '
-                'stock_qty=${data?.warehouseStockQty} '
-                'entry_stock_qty=${data?.entryStockQty} '
-                'invoice_quantity=${data?.quantity} (not shown) '
+                'Stock Quantity from API: available_stock=${data.availableStock} '
+                'stock_qty=${data.warehouseStockQty} '
+                'entry_stock_qty=${data.entryStockQty} '
+                'invoice_quantity=${data.quantity} (not shown) '
                 'shown=${availableScanQuantity(data)} '
-                'uid=${data?.uid} barcode=${data?.productBarcode} '
-                'tax=${qrResponse?.result?.data?.tax}',
+                'uid=${data.uid} barcode=${data.productBarcode} '
+                'product=${data.productName} mfd=${data.mfd} expiry=${data.expiry} '
+                'tax=${data.tax}',
               );
             }
             await enrichQrDataFromOdoo(context);
             _normalizeQrCustomerTax();
           }
-        } else if (respo.containsKey("error")) {
+        } else {
           qrFetchError = ApiResponseHelper.errorMessage(
             respo,
-            fallback: 'Server error',
+            fallback: respo.containsKey('error')
+                ? 'Server error'
+                : 'Failed to fetch medicine details',
           );
         }
       } else {
@@ -825,10 +879,16 @@ class CustomerMedViewmodel extends ChangeNotifier {
     required String invoiceNumber,
     int? invoiceId,
   }) async {
-    lastAddedInvoiceId = null;
-    lastAddedInvoiceName = null;
     lastAddUsedRpcStockAdjust = false;
     lastAddDeductedSellableStock = true;
+    // Only attach when caller passed an id (locked bill / matching lastAdded).
+    // Do not fall back to a sticky lastAddedInvoiceId for a different number.
+    final attachId =
+        (invoiceId != null && invoiceId > 0) ? invoiceId : null;
+    if (attachId == null) {
+      lastAddedInvoiceId = null;
+      lastAddedInvoiceName = null;
+    }
     try {
       addingLoading = true;
       notifyListeners();
@@ -840,18 +900,17 @@ class CustomerMedViewmodel extends ChangeNotifier {
       }
 
       final trimmedInvoice = invoiceNumber.trim();
-      if (trimmedInvoice.isEmpty &&
-          (invoiceId == null || invoiceId <= 0)) {
+      if (trimmedInvoice.isEmpty && attachId == null) {
         return 'Invoice number is required';
       }
 
       final resolvedInvoice = await _ensureCustomerInvoiceNumber(
         context,
         trimmedInvoice,
-        preferredInvoiceId: invoiceId,
+        preferredInvoiceId: attachId,
       );
       if (resolvedInvoice == null || resolvedInvoice.isEmpty) {
-        return 'Invoice not found on server. Save the bill first, then retry.';
+        return 'Invoice number is missing. Open or create a bill, then retry.';
       }
 
       final webApi = WebApiImpl();
@@ -863,7 +922,7 @@ class CustomerMedViewmodel extends ChangeNotifier {
       // { invoice_number, qr_data, quantity } (+ invoice_id when locked)
       // + tax_percent (5/12/18) — stock/QR can send invalid rates like 100.
       final qtyValue = qty == qty.roundToDouble() ? qty.toInt() : qty;
-      final moveId = lastAddedInvoiceId ?? invoiceId;
+      final moveId = attachId;
       final scanData = qrResponse?.result?.data;
       final rawTax = scanData?.tax;
       final taxPct = InvoiceCalcHelper.normalizeCustomerTaxPercent(rawTax);
@@ -1145,15 +1204,26 @@ class CustomerMedViewmodel extends ChangeNotifier {
   }
 
   void _captureAddInvoiceMeta(Map<String, dynamic> respo) {
-    final result = respo['result'];
-    if (result is! Map) return;
-    final idRaw = result['invoice_id'] ?? result['id'];
+    // Odoo: { result: { invoice_id, invoice_number } }
+    // Laravel: { status, data: { invoice_id, invoice_number } } or top-level keys.
+    final payload = ApiResponseHelper.payloadMap(respo) ?? respo;
+    final data = payload['data'];
+    final map = data is Map
+        ? Map<String, dynamic>.from(data)
+        : Map<String, dynamic>.from(payload);
+
+    final idRaw = map['invoice_id'] ?? map['id'] ?? payload['invoice_id'];
     if (idRaw is int) {
       lastAddedInvoiceId = idRaw;
     } else {
-      lastAddedInvoiceId = int.tryParse(idRaw?.toString() ?? '');
+      final parsed = int.tryParse(idRaw?.toString() ?? '');
+      if (parsed != null && parsed > 0) lastAddedInvoiceId = parsed;
     }
-    final name = (result['invoice_name'] ?? result['invoice_number'] ?? '')
+    final name = (map['invoice_name'] ??
+            map['invoice_number'] ??
+            payload['invoice_name'] ??
+            payload['invoice_number'] ??
+            '')
         .toString()
         .trim();
     if (name.isNotEmpty) lastAddedInvoiceName = name;

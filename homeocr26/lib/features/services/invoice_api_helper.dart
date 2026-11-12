@@ -53,6 +53,13 @@ class InvoiceApiHelper {
     );
     if (topLevel.isNotEmpty) return topLevel;
 
+    // Laravel flat body with invoice_list / invoices at root.
+    final flat = _parseSuggestionNode(
+      response,
+      defaultState: defaultState,
+    );
+    if (flat.isNotEmpty) return flat;
+
     return [];
   }
 

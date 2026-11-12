@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/cheque_clearance_model.dart';
 import '../../viewModels/login_viewmodel.dart';
+import '../services/flutter_customer_payment_api.dart';
 import '../services/odoo_rpc_helper.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
@@ -195,7 +196,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
     }
   }
 
-  /// Create partner.payment draft once (not on every screen open).
+  /// Create payment draft once (Laravel first; Odoo only if RPC enabled).
   Future<bool> _ensureDraft() async {
     if (_paymentId != null) return true;
     try {
@@ -204,6 +205,37 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
       final amount =
           double.tryParse(_amountCtrl.text.replaceAll(',', '')) ?? 0;
       final modeVal = OdooRpcHelper.partnerPaymentModeValue(_paymentMode);
+
+      // Laravel create_customer_payment (preferred — no Odoo).
+      final laravelId = await FlutterCustomerPaymentApi.createPayment(
+        sessionId: sid,
+        params: {
+          if (_customer?.id != null) 'partner_id': _customer!.id,
+          if (_customer?.id != null) 'customer_id': _customer!.id,
+          'payment_mode': modeVal,
+          'date': _fmtYmd(_date),
+          'clearance_date': _fmtYmd(_clearanceDate),
+          'deposit_date': _fmtYmd(_clearanceDate),
+          'received_amount': amount,
+          'payment_amount': amount,
+          'use_customer_advance': _useAdvance,
+          'pay_old_balance': _payOldBalance,
+          if (_responsible?.id != null)
+            'responsible_person_id': _responsible!.id,
+          if (modeVal == 'cheque') 'cheque_amount': amount,
+          'auto_process': false,
+          'pay_now': false,
+        },
+      );
+      if (laravelId != null) {
+        if (!mounted) return false;
+        setState(() {
+          _paymentId = laravelId;
+          _paymentName = 'PAY/$laravelId';
+        });
+        return true;
+      }
+
       final vals = <String, dynamic>{
         if (_customer?.id != null) 'partner_id': _customer!.id,
         'payment_mode': modeVal,
@@ -321,6 +353,15 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
         id,
         defaultPayAmount:
             double.tryParse(_amountCtrl.text.replaceAll(',', '')) ?? 0,
+      );
+    }
+    // Laravel open bills when Odoo lines are empty / unavailable.
+    if (rows.isEmpty) {
+      rows = await FlutterCustomerPaymentApi.getOpenBills(
+        sessionId: sid,
+        partnerId: _customer?.id,
+        partnerName: _customer?.name,
+        responsiblePersonId: _responsible?.id,
       );
     }
     // Fallback if lines are empty (wrong partner id / not yet computed).
@@ -500,14 +541,28 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
   Future<void> _onPayBill() async {
     await _runAction(
       label: 'Pay Bill',
-      run: (sid, id) => OdooRpcHelper.payBillPartnerPayment(sid, id),
+      run: (sid, id) async {
+        final ok = await FlutterCustomerPaymentApi.processPayment(
+          sessionId: sid,
+          paymentId: id,
+        );
+        if (ok) return true;
+        return OdooRpcHelper.payBillPartnerPayment(sid, id);
+      },
     );
   }
 
   Future<void> _onConfirm() async {
     await _runAction(
       label: 'Confirm',
-      run: (sid, id) => OdooRpcHelper.confirmPartnerPayment(sid, id),
+      run: (sid, id) async {
+        final ok = await FlutterCustomerPaymentApi.processPayment(
+          sessionId: sid,
+          paymentId: id,
+        );
+        if (ok) return true;
+        return OdooRpcHelper.confirmPartnerPayment(sid, id);
+      },
       popOnSuccess: true,
     );
   }
@@ -542,7 +597,16 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
     if (ok != true) return;
     await _runAction(
       label: 'Cancel',
-      run: (sid, pid) => OdooRpcHelper.cancelPartnerPayment(sid, pid),
+      run: (sid, pid) async {
+        if (await FlutterCustomerPaymentApi.actionPayment(
+          sessionId: sid,
+          paymentId: pid,
+          action: 'cancel',
+        )) {
+          return true;
+        }
+        return OdooRpcHelper.cancelPartnerPayment(sid, pid);
+      },
       popOnSuccess: true,
       successValue: false,
     );

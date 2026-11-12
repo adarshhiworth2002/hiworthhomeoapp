@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -109,15 +111,20 @@ class _EmployeePerformancePageState extends State<EmployeePerformancePage>
           child: Consumer<EmployeePerformanceViewModel>(
           builder: (context, model, _) {
             final hasEmployees = model.employees.isNotEmpty;
-            final hasKpis = model.summary.effectiveKpiCards.isNotEmpty;
+            final hasApiEmployees = model.summary.apiEmployees.isNotEmpty;
+            final hasRealKpis = model.summary.kpiCards.isNotEmpty ||
+                model.summary.billsCompletedToday > 0 ||
+                model.summary.activeSessions > 0 ||
+                model.summary.employeeCount > 0;
 
-            if (model.loading && !hasEmployees && !hasKpis) {
+            // Synthetic KPI placeholders must not hide the loading state.
+            if (model.loading && !hasEmployees && !hasApiEmployees) {
               return const Center(
                 child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
               );
             }
 
-            if (!hasEmployees && !hasKpis) {
+            if (!hasEmployees && !hasApiEmployees && !hasRealKpis) {
               return RefreshIndicator(
                 color: const Color(0xFFE07A2F),
                 onRefresh: () => model.fetch(
@@ -514,17 +521,22 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
   String _searchQuery = '';
   DateTime? _fromDate;
   DateTime? _toDate;
+  bool _loadingBills = false;
+  String _billsError = '';
 
   @override
   void initState() {
     super.initState();
     _searchController = TextEditingController();
     _group = widget.group;
-    // Match website: default to today so the list opens on the current range.
+    // Match website employee bills: last ~30 days ending today.
     final today = _dateOnly(DateTime.now());
-    _fromDate = today;
     _toDate = today;
+    _fromDate = today.subtract(const Duration(days: 30));
     startLiveRefresh(_onRefresh);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_loadWebsiteBills());
+    });
   }
 
   @override
@@ -532,6 +544,39 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
     stopLiveRefresh();
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadWebsiteBills() async {
+    if (!mounted) return;
+    setState(() {
+      _loadingBills = true;
+      _billsError = '';
+    });
+    try {
+      final model = context.read<EmployeePerformanceViewModel>();
+      final bills = await model.fetchWorkerBills(
+        context,
+        group: _group,
+        dateFrom: _fromDate,
+        dateTo: _toDate,
+      );
+      if (!mounted) return;
+      setState(() {
+        _group = EmployeeBillsGroup(
+          employeeName: _group.employeeName,
+          invoices: bills,
+          performance: _group.performance,
+        );
+        if (bills.isEmpty) {
+          _billsError = 'No bills in this date range';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _billsError = 'Could not load bills');
+    } finally {
+      if (mounted) setState(() => _loadingBills = false);
+    }
   }
 
   Future<void> _onRefresh() async {
@@ -550,9 +595,10 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
         break;
       }
     }
-    setState(() {
-      if (match != null) _group = match;
-    });
+    if (match != null) {
+      setState(() => _group = match!);
+    }
+    await _loadWebsiteBills();
   }
 
   Future<void> _pickFrom() async {
@@ -609,15 +655,23 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
       _fromDate = null;
       _toDate = null;
     });
+    unawaited(_loadWebsiteBills());
   }
 
   List<InvoiceSummaryModel> get _filteredInvoices {
+    // Website already filtered by date when bills were loaded; still apply
+    // client-side date + search so Search after picking dates stays snappy.
     return _group.invoices.where((invoice) {
       if (!_invoiceInDateRange(invoice.invoiceDate, _fromDate, _toDate)) {
         return false;
       }
       return PrefixSearch.matchesAny(
-        [invoice.displayCustomer, invoice.displayNumber, invoice.invoiceNumber],
+        [
+          invoice.listCustomerLabel,
+          invoice.displayCustomer,
+          invoice.displayNumber,
+          invoice.invoiceNumber,
+        ],
         _searchQuery,
       );
     }).toList(growable: false);
@@ -653,6 +707,7 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
               toDate: _toDate,
               onPickFrom: _pickFrom,
               onPickTo: _pickTo,
+              onSearch: _loadingBills ? null : () => unawaited(_loadWebsiteBills()),
               onClear: hasDateFilter ? _clearDates : null,
             ),
           ),
@@ -661,8 +716,10 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                '${invoices.length} bill(s)'
-                '${hasDateFilter ? ' in selected range' : ''}',
+                _loadingBills
+                    ? 'Loading bills…'
+                    : '${invoices.length} bill(s)'
+                        '${hasDateFilter ? ' in selected range' : ''}',
                 style: TextStyle(
                   color: sectionTextMuted,
                   fontSize: 14,
@@ -682,7 +739,21 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
             child: RefreshIndicator(
               color: const Color(0xFFE07A2F),
               onRefresh: _onRefresh,
-              child: invoices.isEmpty
+              child: _loadingBills && invoices.isEmpty
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: const [
+                        SizedBox(
+                          height: 220,
+                          child: Center(
+                            child: CircularProgressIndicator(
+                              color: Color(0xFFE07A2F),
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : invoices.isEmpty
                   ? ListView(
                       physics: const AlwaysScrollableScrollPhysics(),
                       children: [
@@ -690,10 +761,12 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
                           height: MediaQuery.sizeOf(context).height * 0.35,
                           child: Center(
                             child: Text(
-                              _emptyBillsMessage(
-                                searchQuery: _searchQuery,
-                                hasDateFilter: hasDateFilter,
-                              ),
+                              _billsError.isNotEmpty
+                                  ? _billsError
+                                  : _emptyBillsMessage(
+                                      searchQuery: _searchQuery,
+                                      hasDateFilter: hasDateFilter,
+                                    ),
                               textAlign: TextAlign.center,
                               style: const TextStyle(color: sectionTextMuted),
                             ),
@@ -744,6 +817,7 @@ class _DateRangeFilterBar extends StatelessWidget {
     required this.toDate,
     required this.onPickFrom,
     required this.onPickTo,
+    this.onSearch,
     this.onClear,
   });
 
@@ -751,6 +825,7 @@ class _DateRangeFilterBar extends StatelessWidget {
   final DateTime? toDate;
   final VoidCallback onPickFrom;
   final VoidCallback onPickTo;
+  final VoidCallback? onSearch;
   final VoidCallback? onClear;
 
   @override
@@ -807,6 +882,22 @@ class _DateRangeFilterBar extends StatelessWidget {
                   onTap: onPickTo,
                 ),
               ),
+              if (onSearch != null) ...[
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: onSearch,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2F80ED),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    minimumSize: const Size(0, 44),
+                  ),
+                  child: const Text('Search'),
+                ),
+              ],
             ],
           ),
         ],
@@ -1027,7 +1118,7 @@ class _EmployeeInvoiceOpenPageState extends State<EmployeeInvoiceOpenPage>
                 ),
                 _Meta(
                   'Customer Name',
-                  invoice.displayCustomer ?? '—',
+                  invoice.listCustomerLabel,
                   emphasize: true,
                 ),
                 _Meta(
@@ -1166,7 +1257,8 @@ class _EmployeeBillDetailsPageState extends State<EmployeeBillDetailsPage>
                   _formatDate(invoice.invoiceDate),
                 ),
                 _DetailRow('Invoice Number', invoice.displayNumber),
-                _DetailRow('Customer Name', invoice.displayCustomer ?? '—'),
+                // Opened bill: blank when walkin/demo; lists use Walkin Customer.
+                _DetailRow('Customer Name', invoice.displayCustomer ?? ''),
                 _DetailRow(
                   'Total Amount',
                   InvoiceSummaryModel.formatMoney(invoice.total),
@@ -1564,17 +1656,20 @@ class _EmployeeCard extends StatelessWidget {
                   children: [
                     _EmpStatChip(
                       'Today',
-                      '${perf?.billsToday ?? group.count}',
+                      '${(perf?.billsToday ?? 0) > 0 ? perf!.billsToday : group.count}',
                     ),
-                    if (perf != null) ...[
-                      _EmpStatChip('Month', '${perf.billsMonth}'),
-                      _EmpStatChip('Sessions', '${perf.activeSessions}'),
-                      _EmpStatChip(
-                        'Avg',
-                        perf.avgWorkTimeToday ?? '00:00',
-                      ),
-                    ] else
-                      _EmpStatChip('Bills', '${group.count}'),
+                    _EmpStatChip(
+                      'Month',
+                      '${(perf?.billsMonth ?? 0) > 0 ? perf!.billsMonth : group.count}',
+                    ),
+                    _EmpStatChip(
+                      'Sessions',
+                      '${perf?.activeSessions ?? 0}',
+                    ),
+                    _EmpStatChip(
+                      'Avg',
+                      perf?.avgWorkTimeToday ?? '00:00',
+                    ),
                   ],
                 ),
               ],
@@ -1718,7 +1813,7 @@ class _InvoiceListCard extends StatelessWidget {
                           flex: 2,
                           child: _MiniField(
                             label: 'Customer',
-                            value: invoice.displayCustomer ?? '—',
+                            value: invoice.listCustomerLabel,
                           ),
                         ),
                         Expanded(

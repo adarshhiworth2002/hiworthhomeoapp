@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -24,6 +26,8 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
   PaymentBookFilter listFilter = const PaymentBookFilter();
 
   List<InvoiceSummaryModel> _catalog = [];
+  /// When Search is active, rows come from Payment Book (same API as that page).
+  List<InvoiceSummaryModel>? _filterOverride;
   DateTime? _catalogLoadedAt;
 
   static List<InvoiceSummaryModel> _sharedCatalog = [];
@@ -58,20 +62,134 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
     _sharedCatalog =
         PaymentHistoryService.applyTrustedToList(List.from(cached));
     _sharedCatalogLoadedAt = DateTime.now();
+    _mergePaymentBookIntoSharedCatalog();
   }
 
-  void applyListFilter(PaymentBookFilter filter) {
+  /// Payment Book often has today's drafts before history cache catches up.
+  static void _mergePaymentBookIntoSharedCatalog() {
+    final book = PaymentBookService.cachedBook;
+    if (book == null || book.invoices.isEmpty) return;
+    final byId = <int, InvoiceSummaryModel>{};
+    for (final inv in _sharedCatalog) {
+      final id = inv.id;
+      if (id != null && id > 0) byId[id] = inv;
+    }
+    var changed = false;
+    for (final inv in book.invoices) {
+      final id = inv.id;
+      if (id == null || id <= 0) continue;
+      final patched = PaymentHistoryService.withTrustedTotals(inv);
+      final existing = byId[id];
+      if (existing == null) {
+        byId[id] = patched;
+        changed = true;
+      } else {
+        final merged = PaymentHistoryService.withTrustedTotals(
+          existing.mergedWith(patched),
+        );
+        if (!identical(merged, existing)) {
+          byId[id] = merged;
+          changed = true;
+        }
+      }
+    }
+    if (!changed && byId.length == _sharedCatalog.length) return;
+    _sharedCatalog = byId.values.toList(growable: false);
+    _sharedCatalogLoadedAt = DateTime.now();
+  }
+
+  /// Same Search path as Payment Book: fetch via `get_payment_book` /
+  /// history fallback, then keep a client pass for invoice # / dates.
+  Future<void> applyListFilter(
+    BuildContext context,
+    PaymentBookFilter filter, {
+    bool forceRefresh = true,
+  }) async {
     listFilter = filter;
+    if (filter.isActive) {
+      selectedState = 'all';
+    }
+    if (!filter.isActive) {
+      await clearListFilter(context);
+      return;
+    }
+
+    loading = true;
+    error = '';
     _notify();
+
+    try {
+      final loginModel = Provider.of<LoginViewmodel>(context, listen: false);
+      final sessionId = loginModel.sessionId;
+      if (sessionId == null || sessionId.isEmpty) {
+        error = 'Session expired. Please log in again.';
+        return;
+      }
+      if (!InvoiceB2bIndex.isReady) {
+        await InvoiceB2bIndex.loadFromCredentials(
+          db: LoginViewmodel.dbName,
+          login: loginModel.loginEmail,
+          password: loginModel.loginPassword,
+        );
+      }
+      if (!context.mounted || _disposed) return;
+
+      final book = await PaymentBookService.fetch(
+        sessionId: sessionId,
+        dateFrom: filter.dateFrom == null
+            ? null
+            : _formatApiDate(filter.dateFrom!),
+        dateTo:
+            filter.dateTo == null ? null : _formatApiDate(filter.dateTo!),
+        customer: filter.hasCustomer ? filter.customerQuery.trim() : null,
+        customerType: filter.customerTypeApiValue,
+        paymentMode: filter.paymentModeApiValue,
+        forceRefresh: forceRefresh,
+      );
+      if (_disposed) return;
+
+      // Keep full catalog intact; override only the filtered view.
+      _filterOverride = PaymentHistoryService.applyTrustedToList(
+        book.invoices.where(filter.matches).toList(growable: false),
+      );
+      items = _filterCatalog(selectedState);
+      error = '';
+    } catch (e, s) {
+      if (kDebugMode) debugPrint('CustomerInvoice applyListFilter: $e\n$s');
+      error = 'Network error. Please check your connection and try again.';
+    } finally {
+      loading = false;
+      _notify();
+    }
   }
 
-  void clearListFilter() {
+  Future<void> clearListFilter(BuildContext context) async {
     listFilter = const PaymentBookFilter();
+    _filterOverride = null;
+    _hydrateFromCaches();
+    items = _filterCatalog(selectedState);
+    _notify();
+    if (!context.mounted) return;
+    unawaited(fetch(context, forceRefresh: true, silent: true));
+  }
+
+  static String _formatApiDate(DateTime date) {
+    final y = date.year.toString().padLeft(4, '0');
+    final m = date.month.toString().padLeft(2, '0');
+    final d = date.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  /// Switch Draft/Open/Paid/… without a network round-trip.
+  void setSelectedState(String state) {
+    selectedState = state;
+    items = _filterCatalog(selectedState);
     _notify();
   }
 
   List<InvoiceSummaryModel> get visibleItems {
-    return items.where(listFilter.matches).toList(growable: false);
+    // Status chip on top of Payment Book Search results (or full catalog).
+    return _filterCatalog(selectedState);
   }
 
   static Future<List<InvoiceSummaryModel>> fetchCatalog({
@@ -149,14 +267,20 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
     if (_sharedCatalog.isEmpty) seedFromPaymentHistory();
     if (_sharedCatalog.isEmpty) {
       final history = PaymentHistoryService.cachedInvoices;
-      if (history == null || history.isEmpty) return false;
-      _sharedCatalog =
-          PaymentHistoryService.applyTrustedToList(List.from(history));
-      _sharedCatalogLoadedAt = DateTime.now();
+      if (history == null || history.isEmpty) {
+        // Still try Payment Book drafts (today) when history is cold.
+        _mergePaymentBookIntoSharedCatalog();
+        if (_sharedCatalog.isEmpty) return false;
+      } else {
+        _sharedCatalog =
+            PaymentHistoryService.applyTrustedToList(List.from(history));
+        _sharedCatalogLoadedAt = DateTime.now();
+      }
     } else {
       _sharedCatalog =
           PaymentHistoryService.applyTrustedToList(_sharedCatalog);
     }
+    _mergePaymentBookIntoSharedCatalog();
     _catalog = List<InvoiceSummaryModel>.from(_sharedCatalog);
     _catalogLoadedAt = _sharedCatalogLoadedAt;
     items = _filterCatalog(selectedState);
@@ -172,6 +296,12 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
     bool silent = false,
   }) async {
     if (state != null) selectedState = state;
+
+    // Keep Payment Book Search results in sync on live refresh.
+    if (listFilter.isActive && forceRefresh) {
+      await applyListFilter(context, listFilter, forceRefresh: true);
+      return;
+    }
 
     final shown = _hydrateFromCaches();
     if (shown) _notify();
@@ -277,7 +407,8 @@ class CustomerInvoiceViewModel extends ChangeNotifier {
   }
 
   List<InvoiceSummaryModel> _filterCatalog(String state) {
-    final catalog = PaymentHistoryService.applyTrustedToList(_catalog);
+    final source = _filterOverride ?? _catalog;
+    final catalog = PaymentHistoryService.applyTrustedToList(source);
     var list = state == 'all'
         ? List<InvoiceSummaryModel>.from(catalog)
         : catalog.where((inv) => inv.sectionKey == state).toList();

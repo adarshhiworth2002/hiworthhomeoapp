@@ -107,14 +107,18 @@ class _PaymentHistoryDetailPageState extends State<PaymentHistoryDetailPage>
                 ),
                 const SizedBox(height: 10),
                 _Meta('Invoice Number', invoice.displayNumber),
-                _Meta('Customer', invoice.displayCustomer ?? '—'),
+                // Walkin / Demo → blank on opened detail; lists use Walkin Customer.
+                _Meta('Customer', invoice.displayCustomer ?? ''),
                 _Meta('Invoice Date', invoice.invoiceDate ?? '—'),
                 _Meta(
                   'Expiry Medicine Bill',
                   invoice.expiryMedicineBill ? 'Yes' : 'No',
                 ),
                 _Meta('Verify Status', verify),
-                _Meta('Billed By', invoice.billedBy ?? '—'),
+                _Meta(
+                  'Billed By',
+                  invoice.displayBilledBy,
+                ),
                 _Meta('Status', status),
                 const SizedBox(height: 10),
                 Row(

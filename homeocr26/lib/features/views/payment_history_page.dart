@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -81,16 +83,29 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (sheetContext) => InvoiceSearchFilterSheet(
-        initialFilter: _viewModel.filter,
+        // Same sheet as Payment Book (today dates by default).
+        initialFilter: _viewModel.filter.isActive
+            ? _viewModel.filter
+            : PaymentBookFilter.today(),
         parentContext: context,
+        datesRequired: true,
+        clearLabel: 'Clear all',
       ),
     );
     if (!mounted || result == null) return;
     if (result.clear) {
-      _viewModel.clearFilter();
+      setState(() {
+        _searchQuery = '';
+        _searchController.clear();
+      });
+      await _viewModel.clearFilter(context);
       return;
     }
-    _viewModel.applyFilter(result.filter);
+    setState(() {
+      _searchQuery = '';
+      _searchController.clear();
+    });
+    await _viewModel.applyFilter(context, result.filter);
   }
 
   Future<void> _reloadSettled({List<InvoiceSummaryModel>? live}) async {
@@ -120,6 +135,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
             query: _searchQuery,
             customer: item.customer,
             displayCustomer: item.displayCustomer,
+            listCustomerLabel: item.listCustomerLabel,
             displayNumber: item.displayNumber,
             invoiceNumber: item.invoiceNumber,
           ),
@@ -268,7 +284,9 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                     padding: SystemSafe.horizontalPadding(context, bottom: 8),
                     child: _HistoryFilterChips(
                       filter: model.filter,
-                      onClear: model.clearFilter,
+                      onClear: () {
+                        unawaited(model.clearFilter(context));
+                      },
                     ),
                   ),
                 Padding(

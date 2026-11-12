@@ -28,15 +28,16 @@ class NetAmountModel {
     String? section,
   }) {
     final result = response['result'];
-    if (result is! Map) {
-      return const NetAmountModel();
-    }
-
-    final root = Map<String, dynamic>.from(result);
+    final root = result is Map
+        ? Map<String, dynamic>.from(result)
+        : Map<String, dynamic>.from(response);
     final dataNode = root['data'];
     final Map<String, dynamic> data = dataNode is Map
         ? Map<String, dynamic>.from(dataNode)
         : root;
+    if (data.isEmpty && result is! Map && !response.containsKey('status')) {
+      return const NetAmountModel();
+    }
 
     final youGot = _pickDouble(data, const [
       'you_got',
@@ -281,7 +282,8 @@ class NetAmountRow {
   factory NetAmountRow.fromInvoice(InvoiceSummaryModel invoice) {
     return NetAmountRow(
       id: invoice.id,
-      customer: invoice.displayCustomer ?? invoice.customer,
+      // Null/empty for Demo / walk-in so Amount Book groups as Walkin Customer.
+      customer: invoice.displayCustomer,
       invoiceNumber: invoice.displayNumber == 'Unknown'
           ? invoice.invoiceNumber
           : invoice.displayNumber,
@@ -387,10 +389,13 @@ class NetAmountRow {
     Map<String, dynamic> response,
   ) {
     final result = response['result'];
-    if (result is! Map) return [];
-
-    final root = Map<String, dynamic>.from(result);
+    final root = result is Map
+        ? Map<String, dynamic>.from(result)
+        : Map<String, dynamic>.from(response);
+    final dataNode = root['data'];
     final candidates = <dynamic>[
+      if (dataNode is List) dataNode,
+      if (dataNode is Map) dataNode,
       root['data'],
       root['payment_history'],
       root['payments'],
@@ -413,7 +418,8 @@ class NetAmountRow {
             candidate['invoice_list'] ??
             candidate['invoices'] ??
             candidate['records'] ??
-            candidate['items'];
+            candidate['items'] ??
+            candidate['cheques'];
         if (nested is List) {
           return nested
               .whereType<Map>()

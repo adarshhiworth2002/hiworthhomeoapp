@@ -7,12 +7,9 @@ import 'WebApi/web_api_impl.dart';
 import 'api_request_helper.dart';
 import 'endPoints.dart';
 import 'invoice_list_pager.dart';
-import 'odoo_rpc_helper.dart';
 
 /// Shared cache for customer payments used by Cash Book YOU GOT rows.
-///
-/// Prefers website `partner.payment` (with allocated bills). Falls back to
-/// `api/flutter/get_customer_payment_list` when Odoo is unavailable.
+/// Uses Laravel `api/flutter/get_customer_payment_list` only.
 class CustomerPaymentListService {
   const CustomerPaymentListService._();
 
@@ -68,65 +65,7 @@ class CustomerPaymentListService {
     String? webSessionId,
     required bool headOnly,
   }) async {
-    // 1) Website partner.payment — correct multi-bill allocations + cancel.
-    if (webSessionId != null && webSessionId.isNotEmpty) {
-      try {
-        final raw = await OdooRpcHelper.fetchPartnerPaymentsForCashBook(
-          webSessionId,
-          limit: headOnly ? 120 : 400,
-        );
-        if (raw.isNotEmpty) {
-          final parsed = raw
-              .map(CustomerPaymentRecord.fromJson)
-              .where((p) => p.amount > 0.0001 || p.invoices.isNotEmpty)
-              .toList(growable: false);
-          if (parsed.isNotEmpty) {
-            List<CustomerPaymentRecord> merged;
-            if (headOnly && _cache != null && _cache!.isNotEmpty) {
-              final newById = <int, CustomerPaymentRecord>{
-                for (final p in parsed)
-                  if (p.id != null) p.id!: p,
-              };
-              final headOldest = parsed
-                  .map((p) => p.dateTime)
-                  .whereType<DateTime>()
-                  .fold<DateTime?>(
-                    null,
-                    (min, d) => min == null || d.isBefore(min) ? d : min,
-                  );
-              final kept = <CustomerPaymentRecord>[];
-              for (final old in _cache!) {
-                final id = old.id;
-                if (id != null && newById.containsKey(id)) continue;
-                if (id != null &&
-                    headOldest != null &&
-                    old.dateTime != null &&
-                    !old.dateTime!.isBefore(headOldest) &&
-                    !newById.containsKey(id)) {
-                  // Was in the head window but missing now → cancelled on website.
-                  continue;
-                }
-                kept.add(old);
-              }
-              merged = [...newById.values, ...kept];
-            } else {
-              // Full replace — cancelled website payments disappear.
-              merged = [...parsed];
-            }
-            merged.sort(_compareNewestFirst);
-            _cache = merged;
-            _cachedAt = DateTime.now();
-            return merged;
-          }
-        }
-      } catch (e) {
-        if (kDebugMode) {
-          debugPrint('CustomerPaymentListService odoo: $e');
-        }
-      }
-    }
-
-    // 2) Flutter API fallback.
+    // Laravel / Flutter API only (no Odoo).
     try {
       final fromApi = headOnly
           ? await _refreshHead(flutterSessionId)
@@ -280,12 +219,14 @@ class CustomerPaymentListService {
     final decoded = json.decode(body);
     if (decoded is! Map) return const [];
     final map = Map<String, dynamic>.from(decoded);
-    if (map['result'] is Map &&
-        (map['result'] as Map)['status'] == 'error') {
+    final result = map['result'];
+    final statusSource =
+        result is Map ? Map<String, dynamic>.from(result) : map;
+    final status = '${statusSource['status'] ?? ''}'.trim().toLowerCase();
+    if (status == 'error' || status == 'fail' || status == 'failed') {
       if (kDebugMode) {
         debugPrint(
-          'get_customer_payment_list error: '
-          '${(map['result'] as Map)['message']}',
+          'get_customer_payment_list error: ${statusSource['message']}',
         );
       }
       return const [];

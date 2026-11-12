@@ -179,15 +179,24 @@ class StockItemModel {
 
   static List<StockItemModel> parseList(Map<String, dynamic> response) {
     final result = response['result'];
-    if (result is! Map) return [];
+    final root = result is Map
+        ? Map<String, dynamic>.from(result)
+        : Map<String, dynamic>.from(response);
+    final dataNode = root['data'];
+    final data = dataNode is Map
+        ? Map<String, dynamic>.from(dataNode)
+        : root;
 
     final candidates = <dynamic>[
-      result['stock_list'],
-      result['stocks'],
-      result['data'],
-      result['records'],
-      result['items'],
-      result['results'],
+      data['stock_list'],
+      data['stocks'],
+      data['records'],
+      data['items'],
+      data['results'],
+      if (dataNode is List) dataNode,
+      root['stock_list'],
+      root['stocks'],
+      root['data'],
     ];
 
     for (final candidate in candidates) {
@@ -216,6 +225,26 @@ class StockItemModel {
     }
 
     return [];
+  }
+
+  static StockItemModel? parseOne(Map<String, dynamic> response) {
+    final list = parseList(response);
+    if (list.isNotEmpty) return list.first;
+    final result = response['result'];
+    final root = result is Map
+        ? Map<String, dynamic>.from(result)
+        : Map<String, dynamic>.from(response);
+    final data = root['data'];
+    final candidate = data is Map
+        ? data
+        : (root['stock'] is Map ? root['stock'] : root);
+    if (candidate is Map &&
+        (candidate.containsKey('id') ||
+            candidate.containsKey('medicine') ||
+            candidate.containsKey('name'))) {
+      return StockItemModel.fromJson(Map<String, dynamic>.from(candidate));
+    }
+    return null;
   }
 
   String get medicineLabel {

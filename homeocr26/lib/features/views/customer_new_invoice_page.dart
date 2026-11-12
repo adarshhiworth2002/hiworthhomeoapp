@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../models/stock_item_model.dart';
 import '../../viewModels/customer_invoice_viewmodel.dart';
+import '../../viewModels/customer_med_viewModel.dart';
 import '../../viewModels/login_viewmodel.dart';
 import '../services/WebApi/web_api_impl.dart';
 import '../services/api_request_helper.dart';
@@ -17,8 +18,12 @@ import '../services/bill_name_store.dart';
 import '../services/calendar_date.dart';
 import '../services/endPoints.dart';
 import '../services/invoice_calc_helper.dart';
+import '../services/invoice_detail_service.dart';
 import '../services/invoice_draft_helper.dart';
 import '../services/invoice_helper.dart';
+import '../services/appConfig.dart';
+import '../services/auth_session_store.dart';
+import '../services/flutter_customer_invoice_web_api.dart';
 import '../services/invoice_stock_restore_helper.dart';
 import '../services/live_data_sync.dart';
 import '../services/odoo_rpc_helper.dart';
@@ -150,6 +155,9 @@ class _BillLine {
   String rack = '';
   /// Read-only sellable qty shown when product is picked From stock.
   String? availableStock;
+  /// Warehouse sellable qty from last QR/stock fetch (before this bill's reserve).
+  /// Available Stock = [warehouseStockBase] − reserved line qty on this bill.
+  double? warehouseStockBase;
   /// When true, product is taken from stock and save deducts sellable qty.
   /// When false, free-text medicine name; bill line does not affect stock.
   bool fromStock = true;
@@ -275,6 +283,7 @@ class _BillLine {
     unitTp = '';
     unitP = '';
     availableStock = null;
+    warehouseStockBase = null;
     revision++;
   }
 }
@@ -330,13 +339,20 @@ class _LineTemplate {
   factory _LineTemplate.fromInvoiceLine(InvoiceLineModel l) {
     String? money(double? v) =>
         v == null ? null : v.toStringAsFixed(2);
+    String? displayDate(String? raw) {
+      final t = (raw ?? '').trim();
+      if (t.isEmpty) return null;
+      return StockDateParser.tryParse(t) ?? t;
+    }
+
+    // Bill UI "MFD" column stores manufacture date in [manuf], not company name.
     return _LineTemplate(
       product: l.productName,
       potency: l.potency,
       company: l.company,
       batch: l.batch,
-      manuf: l.manufacturer,
-      expiry: l.expiry,
+      manuf: displayDate(l.mfd) ?? displayDate(l.manufacturer),
+      expiry: displayDate(l.expiry),
       pack: l.packing,
       group: l.group,
       mrp: money(l.mrp),
@@ -396,6 +412,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   _NamedOption? _customer;
   _NamedOption? _doctor;
   _NamedOption? _responsible;
+  /// Website "Billed By". Defaults to Pharmacy Admin; overwritten when the
+  /// Laravel/web invoice payload returns a non-empty billed_by.
+  String? _billedBy;
+  static const String _kDefaultBilledBy =
+      InvoiceSummaryModel.defaultBilledBy;
   String? _paymentMode = 'Cash';
   String? _gstType = 'GST MINUS';
   String? _discountType = 'Percentage';
@@ -412,11 +433,19 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   bool _invoiceCommittedOnServer = false;
   /// Empty Odoo draft was created this session (delete on discard, not keep as draft).
   bool _draftCreatedThisSession = false;
+  /// True when [_invoiceNumber] was restored from a discarded bill.
+  bool _reusedDiscardedNumber = false;
   /// Odoo move id for this bill (from add_to_invoice).
   int? _serverInvoiceId;
+  /// Server-committed lines removed locally; zeroed on Save (not on Discard).
+  final List<_BillLine> _deferredServerRemovals = [];
   InvoiceCalcResult _totals = InvoiceCalcResult.zero;
   /// Which invoice line shows the full edit form; others use draft-style summary.
   int? _editingLineIndex;
+  /// Qty when the current line edit started (for local Available Stock).
+  double? _editingLineStartQty;
+  /// Warehouse remaining + start qty (local reserve baseline while editing).
+  double? _editingAvailBase;
   /// Required field labels to highlight in red on the expanded line.
   Set<String> _lineRequiredErrors = {};
   double? _customerAdvance;
@@ -483,15 +512,26 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (edit != null) {
       _applyEditInvoice(edit);
     } else {
-      _invoiceNumber = InvoiceHelper.nextFromLatest(
-        ids: widget.existingInvoices.map((e) => e.id),
-        numbers: widget.existingInvoices.map((e) => e.displayNumber),
-      );
-      if (_invoiceNumber.isEmpty) {
-        _invoiceNumber = InvoiceHelper.nextInvoiceNumber([
-          ...widget.existingNumbers,
-          ...widget.existingInvoices.map((e) => e.displayNumber),
-        ]);
+      // Prefer a number freed by Discard (e.g. discard R0159 → next is R0159).
+      String? reused;
+      try {
+        reused = Provider.of<CustomerMedViewmodel>(context, listen: false)
+            .takeReuseInvoiceNumber();
+      } catch (_) {}
+      if ((reused ?? '').trim().isNotEmpty) {
+        _invoiceNumber = reused!.trim();
+        _reusedDiscardedNumber = true;
+      } else {
+        _invoiceNumber = InvoiceHelper.nextFromLatest(
+          ids: widget.existingInvoices.map((e) => e.id),
+          numbers: widget.existingInvoices.map((e) => e.displayNumber),
+        );
+        if (_invoiceNumber.isEmpty) {
+          _invoiceNumber = InvoiceHelper.nextInvoiceNumber([
+            ...widget.existingNumbers,
+            ...widget.existingInvoices.map((e) => e.displayNumber),
+          ]);
+        }
       }
     }
     _seedFromExistingInvoices();
@@ -499,6 +539,14 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     _expenseCtrl.addListener(_recalculate);
     // Background only — UI is already visible.
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // New bill must not inherit a discarded move id from a prior scan.
+      if (widget.editInvoice == null) {
+        try {
+          Provider.of<CustomerMedViewmodel>(context, listen: false)
+              .clearLastAddedInvoice();
+        } catch (_) {}
+      }
+      _seedDefaultBilledBy();
       _loadSavedNames();
       _loadPartnerNames();
       _loadPharmacyCustomers();
@@ -507,8 +555,65 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       _loadDiscountCategories();
       _loadStockSuggestionPools();
       _loadNextInvoiceNumber();
+      _refreshEditHeaderFromServer();
       _recalculate();
     });
+  }
+
+  /// List/seed payloads often omit responsible_person; reload detail and apply.
+  Future<void> _refreshEditHeaderFromServer() async {
+    final seed = widget.editInvoice;
+    if (seed == null) return;
+    try {
+      final loaded = await InvoiceDetailService.fetchCustomerInvoice(
+        context,
+        seed: seed,
+      );
+      if (!mounted) return;
+      setState(() {
+        final responsible = (loaded.responsiblePerson ?? '').trim();
+        if (responsible.isNotEmpty) {
+          _responsible = _NamedOption(name: responsible);
+          final lower = responsible.toLowerCase();
+          if (!_responsiblePeople.any((r) => r.name.toLowerCase() == lower)) {
+            _responsiblePeople = [..._responsiblePeople, _responsible!]
+              ..sort(
+                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+              );
+          }
+        }
+        _applyBilledByFromServer(loaded.billedBy);
+        final doctor = (loaded.doctor ?? '').trim();
+        if (doctor.isNotEmpty) _doctor = _NamedOption(name: doctor);
+        final verified = (loaded.verifiedBy ?? '').trim();
+        if (verified.isNotEmpty) _verifiedByCtrl.text = verified;
+      });
+    } catch (e) {
+      if (kDebugMode) debugPrint('refresh edit header: $e');
+    }
+  }
+
+  String get _displayBilledBy {
+    final billed = (_billedBy ?? '').trim();
+    return billed.isEmpty ? _kDefaultBilledBy : billed;
+  }
+
+  void _seedDefaultBilledBy() {
+    if ((_billedBy ?? '').trim().isNotEmpty) return;
+    if (!mounted) return;
+    setState(() => _billedBy = _kDefaultBilledBy);
+  }
+
+  /// Prefer website/API billed-by; keep Pharmacy Admin when server omits it.
+  void _applyBilledByFromServer(String? raw, {bool forceDefaultIfEmpty = false}) {
+    final billed = (raw ?? '').trim();
+    if (billed.isNotEmpty) {
+      _billedBy = billed;
+      return;
+    }
+    if (forceDefaultIfEmpty || (_billedBy ?? '').trim().isEmpty) {
+      _billedBy = _kDefaultBilledBy;
+    }
   }
 
   void _applyEditInvoice(InvoiceSummaryModel inv) {
@@ -517,6 +622,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     _invoiceCommittedOnServer = inv.id != null;
     // Existing bill — Close must not wipe pre-existing lines; only session QR adds.
     _billKept = true;
+    // Demo / Walkin / empty → leave Customer blank on the opened bill.
     final customer = (inv.displayCustomer ?? '').trim();
     if (customer.isNotEmpty) {
       _customer = _NamedOption(
@@ -525,6 +631,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         address: inv.address,
         phone: inv.phone,
       );
+    } else {
+      _customer = null;
     }
     _addressCtrl.text = (inv.address ?? '').trim();
     _phoneCtrl.text = (inv.phone ?? '').trim();
@@ -534,6 +642,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (responsible.isNotEmpty) {
       _responsible = _NamedOption(name: responsible);
     }
+    _applyBilledByFromServer(inv.billedBy);
     final pay = (inv.paymentMode ?? '').trim();
     if (pay.isNotEmpty) {
       _paymentMode = _normalizePaymentMode(pay);
@@ -573,6 +682,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       final line = _BillLine();
       line.odooLineId = l.id;
       line.applyFromStock(_LineTemplate.fromInvoiceLine(l));
+      // Preserve QR uid so qty reduce can rebuild via add_to_invoice.
+      final uid = (l.lineUid ?? l.productBarcode ?? '').trim();
+      if (uid.isNotEmpty) {
+        line.addQrData = uid;
+      }
       final qty = l.qty;
       if (qty != null) {
         line.qty = qty == qty.roundToDouble()
@@ -712,6 +826,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
   void _seedFromExistingInvoices() {
     final byCustomer = <String, _NamedOption>{};
     final byDoctor = <String, _NamedOption>{};
+    final byResponsible = <String, _NamedOption>{};
 
     for (final inv in widget.existingInvoices) {
       final name = (inv.displayCustomer ?? '').trim();
@@ -722,6 +837,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       final doctor = (inv.doctor ?? '').trim();
       if (doctor.isNotEmpty) {
         byDoctor[doctor.toLowerCase()] = _NamedOption(name: doctor);
+      }
+      final responsible = (inv.responsiblePerson ?? '').trim();
+      if (responsible.isNotEmpty) {
+        byResponsible[responsible.toLowerCase()] =
+            _NamedOption(name: responsible);
       }
       for (final line in inv.lines) {
         _addOpt(_products, _productKeys, line.productName);
@@ -740,6 +860,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     _doctors = byDoctor.values.toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    if (byResponsible.isNotEmpty) {
+      _responsiblePeople = byResponsible.values.toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    }
   }
 
   Future<void> _loadSavedNames() async {
@@ -749,6 +873,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     };
     final byDoctor = {
       for (final d in _doctors) d.name.toLowerCase(): d,
+    };
+    final byResponsible = {
+      for (final r in _responsiblePeople) r.name.toLowerCase(): r,
     };
 
     for (final name in await BillNameStore.loadCustomers()) {
@@ -761,12 +888,19 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       if (t.isEmpty) continue;
       byDoctor.putIfAbsent(t.toLowerCase(), () => _NamedOption(name: t));
     }
+    for (final name in await BillNameStore.loadResponsible()) {
+      final t = name.trim();
+      if (t.isEmpty) continue;
+      byResponsible.putIfAbsent(t.toLowerCase(), () => _NamedOption(name: t));
+    }
 
     if (!mounted) return;
     setState(() {
       _customers = byCustomer.values.toList()
         ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       _doctors = byDoctor.values.toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      _responsiblePeople = byResponsible.values.toList()
         ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     });
   }
@@ -832,6 +966,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
   Future<void> _loadNextInvoiceNumber() async {
     if (widget.editInvoice != null) return;
+    // Keep the number freed by Discard (do not jump ahead).
+    if (_reusedDiscardedNumber) return;
     try {
       final sid = await _odooSessionId();
       if (sid.isEmpty || !mounted) return;
@@ -901,27 +1037,44 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
   Future<void> _loadResponsiblePeople() async {
     try {
+      final byName = <String, _NamedOption>{
+        for (final r in _responsiblePeople) r.name.toLowerCase(): r,
+      };
+      // Keep the value already applied from a saved invoice in the list.
+      final selected = (_responsible?.name ?? '').trim();
+      if (selected.isNotEmpty) {
+        byName.putIfAbsent(
+          selected.toLowerCase(),
+          () => _responsible!,
+        );
+      }
+      for (final name in await BillNameStore.loadResponsible()) {
+        final t = name.trim();
+        if (t.isEmpty) continue;
+        byName.putIfAbsent(t.toLowerCase(), () => _NamedOption(name: t));
+      }
+
       final sid = await _odooSessionId();
-      if (sid.isEmpty) return;
-      final rows = await OdooRpcHelper.searchResponsiblePersons(sid);
-      if (!mounted || rows.isEmpty) return;
-      setState(() {
-        _responsiblePeople = rows
-            .map((row) {
+      if (sid.isNotEmpty) {
+        final rows = await OdooRpcHelper.searchResponsiblePersons(sid);
+        for (final row in rows) {
           final id = row['id'];
           final name = (row['name'] ?? row['display_name'] ?? '')
               .toString()
               .trim();
-          if (name.isEmpty) return null;
-          return _NamedOption(
+          if (name.isEmpty) continue;
+          byName[name.toLowerCase()] = _NamedOption(
             name: name,
             id: id is num ? id.toInt() : int.tryParse('$id'),
           );
-        })
-            .whereType<_NamedOption>()
-            .toList()
+        }
+      }
+
+      if (!mounted || byName.isEmpty) return;
+      setState(() {
+        _responsiblePeople = byName.values.toList()
           ..sort(
-                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+            (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
           );
       });
     } catch (e) {
@@ -1381,6 +1534,76 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     return v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
   }
 
+  /// Warehouse qty minus this bill's reserved qty (and other matching lines).
+  String? _formatAvailableAfterReserve(
+    _BillLine line,
+    double? warehouseQty,
+  ) {
+    if (warehouseQty == null) return null;
+    final reserved = _reservedQtyForStockIdentity(line);
+    final remaining =
+        (warehouseQty - reserved).clamp(0, double.infinity).toDouble();
+    return remaining == remaining.roundToDouble()
+        ? remaining.toInt().toString()
+        : remaining.toStringAsFixed(2);
+  }
+
+  /// Keep Available Stock in sync with Qty using the stored warehouse baseline.
+  void _recomputeLineAvailableStock(_BillLine line) {
+    if (!line.fromStock) {
+      line.availableStock = null;
+      return;
+    }
+    final base = line.warehouseStockBase;
+    if (base == null) return;
+    line.availableStock = _formatAvailableAfterReserve(line, base);
+  }
+
+  /// Sum qty of bill lines that share the same stock identity as [line].
+  double _reservedQtyForStockIdentity(_BillLine line) {
+    return _reservedQtyForIdentity(
+      product: line.product,
+      potency: line.potency,
+      batch: line.batch,
+      pack: line.pack,
+    );
+  }
+
+  /// Local-until-Save: qty already on this open bill for the same stock row.
+  double _reservedQtyForIdentity({
+    String? product,
+    String? potency,
+    String? batch,
+    String? pack,
+  }) {
+    final productKey = _normField(product);
+    final potencyKey = _normField(potency);
+    final batchKey = _normField(batch);
+    final packKey = _normField(pack);
+    if (productKey.isEmpty) return 0;
+    var total = 0.0;
+    for (final other in _lines) {
+      if (_normField(other.product) != productKey) continue;
+      if (potencyKey.isNotEmpty &&
+          _normField(other.potency).isNotEmpty &&
+          !_potencyEquals(other.potency, potency)) {
+        continue;
+      }
+      if (batchKey.isNotEmpty &&
+          _normField(other.batch).isNotEmpty &&
+          !_fieldEquals(other.batch, batch)) {
+        continue;
+      }
+      if (packKey.isNotEmpty &&
+          _normField(other.pack).isNotEmpty &&
+          !_fieldEquals(other.pack, pack)) {
+        continue;
+      }
+      total += InvoiceCalcHelper.parseNum(other.qty);
+    }
+    return total;
+  }
+
   void _applyStockToLine(
       _BillLine line,
       StockItemModel stock, {
@@ -1394,7 +1617,12 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       preservePotency: preservePotency,
       preserveProduct: preserveProduct,
     );
-    line.availableStock = _formatAvailableStock(stock);
+    final warehouse = stock.availableStock ?? stock.stock ?? stock.itemQty;
+    if (warehouse != null && warehouse >= 0) {
+      line.warehouseStockBase = warehouse;
+    }
+    line.availableStock = _formatAvailableAfterReserve(line, warehouse) ??
+        _formatAvailableStock(stock);
     if (linkStockIds) {
       if (stock.stockId != null) {
         line.stockDisplayId = stock.stockId;
@@ -1543,7 +1771,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         line.availableStock = null;
         return;
       }
-      line.availableStock = _formatAvailableStock(match);
+      final warehouse = match.availableStock ?? match.stock ?? match.itemQty;
+      if (warehouse != null && warehouse >= 0) {
+        line.warehouseStockBase = warehouse;
+      }
+      // Keep column in sync with Qty: warehouse minus reserved on this bill.
+      line.availableStock = _formatAvailableAfterReserve(line, warehouse) ??
+          _formatAvailableStock(match);
       if (match.stockId != null) line.stockDisplayId = match.stockId;
       if (match.entryStockId != null) line.entryStockId = match.entryStockId;
     });
@@ -2013,6 +2247,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       }
       // Available Stock waits until potency + company + batch + pack match.
       line.availableStock = null;
+      line.warehouseStockBase = null;
       line.revision++;
       _addOpt(_products, _productKeys, name);
     });
@@ -2075,6 +2310,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         line.addQrData = null;
         line.addQrDataAlt = null;
         line.availableStock = null;
+        line.warehouseStockBase = null;
       } else {
         // Switching back to stock: clear free-text product so user re-picks.
         line.clearRelatedExceptProduct();
@@ -2082,6 +2318,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         line.stockDisplayId = null;
         line.entryStockId = null;
         line.availableStock = null;
+        line.warehouseStockBase = null;
       }
       line.revision++;
       _lineRequiredErrors = {};
@@ -2337,25 +2574,16 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     return null;
   }
 
-  void _markLineServerCommitted(
-      _BillLine line,
-      QrData data,
-      double qty, {
-        int? invoiceId,
-        bool rpcAdjustedItemQty = false,
-      }) {
+  void _attachLocalQrMeta(
+    _BillLine line,
+    QrData data, {
+    double? reserveQty,
+  }) {
     line.fromStock = true;
-    line.serverCommitted = true;
-    line.serverCommittedQty += qty;
     line.addedThisSession = true;
-    if (rpcAdjustedItemQty) line.rpcAdjustedItemQty = true;
-    if (invoiceId != null) {
-      line.serverInvoiceId = invoiceId;
-      _serverInvoiceId = invoiceId;
-    }
     final primary = _primaryAddQrToken(data);
     if (primary != null && primary.isNotEmpty) {
-      line.addQrData ??= primary;
+      line.addQrData = primary;
     }
     if (data.stockEntryId != null) {
       line.stockDisplayId = data.stockDisplayId ?? data.stockEntryId;
@@ -2365,16 +2593,37 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     } else if (data.productId != null) {
       line.stockDisplayId ??= data.productId;
     }
-    // Show Available Stock on the bill line (same value as the QR stock dialog).
     final stock = data.availableStock ?? data.stockQty;
     if (stock != null && stock >= 0) {
-      line.availableStock = stock == stock.roundToDouble()
-          ? stock.toInt().toString()
-          : stock.toStringAsFixed(2);
+      // Remember warehouse so Qty edits can raise/lower Available Stock.
+      line.warehouseStockBase = stock;
+      // Fresh scan: show warehouse remaining after this line's qty.
+      final reserved = reserveQty ?? InvoiceCalcHelper.parseNum(line.qty);
+      final remaining = (stock - reserved).clamp(0, double.infinity);
+      line.availableStock = remaining == remaining.roundToDouble()
+          ? remaining.toInt().toString()
+          : remaining.toStringAsFixed(2);
     }
     final alt = _alternateAddQrToken(data, line.addQrData);
     if (alt != null && alt.isNotEmpty) {
       line.addQrDataAlt ??= alt;
+    }
+  }
+
+  void _markLineServerCommitted(
+      _BillLine line,
+      QrData data,
+      double qty, {
+        int? invoiceId,
+        bool rpcAdjustedItemQty = false,
+      }) {
+    _attachLocalQrMeta(line, data);
+    line.serverCommitted = true;
+    line.serverCommittedQty += qty;
+    if (rpcAdjustedItemQty) line.rpcAdjustedItemQty = true;
+    if (invoiceId != null) {
+      line.serverInvoiceId = invoiceId;
+      _serverInvoiceId = invoiceId;
     }
   }
 
@@ -2383,6 +2632,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       double qty, {
         int? invoiceId,
         bool rpcAdjustedItemQty = false,
+        bool commitToServer = true,
       }) {
     String? money(double? v) {
       if (v == null) return null;
@@ -2397,7 +2647,22 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final qtyText = qty == qty.roundToDouble()
         ? qty.toInt().toString()
         : qty.toString();
-    final manuf = data.mfd?.trim();
+    String? displayDate(String? raw) {
+      final t = (raw ?? '').trim();
+      if (t.isEmpty) return null;
+      // Keep pharmacy MM/yyyy when that is what the API sent.
+      if (RegExp(r'^\d{1,2}[/\-.]\d{2,4}$').hasMatch(t)) {
+        final parsed = StockDateParser.tryParse(t);
+        if (parsed == null || parsed.isEmpty) return t;
+        final parts = parsed.split('/');
+        if (parts.length == 3) return '${parts[1]}/${parts[2]}';
+        return parsed;
+      }
+      return StockDateParser.tryParse(t) ?? t;
+    }
+
+    final manuf = displayDate(data.mfd);
+    final expiry = displayDate(data.expiry);
     final unitP = money(data.unitPrice);
     // Do not auto-fill line discount from QR — only show when user enters it.
 
@@ -2410,6 +2675,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       }
       _editingLineIndex = null;
       _lineRequiredErrors = {};
+      if ((_billedBy ?? '').trim().isEmpty) {
+        _billedBy = _kDefaultBilledBy;
+      }
 
       existingIndex = _lines.indexWhere((l) {
         final sameProduct = (l.product ?? '').trim().toLowerCase() ==
@@ -2436,17 +2704,31 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
             manuf.isNotEmpty) {
           line.manuf = manuf;
         }
+        if ((line.expiry == null || line.expiry!.trim().isEmpty) &&
+            expiry != null &&
+            expiry.isNotEmpty) {
+          line.expiry = expiry;
+        }
         if (line.unitP.trim().isEmpty && unitP != null) {
           // unitP from scan may be tax-inclusive — recalc from MRP instead.
           _recalcLinePrices(line);
         }
-        _markLineServerCommitted(
-          line,
-          data,
-          qty,
-          invoiceId: invoiceId,
-          rpcAdjustedItemQty: rpcAdjustedItemQty,
-        );
+        if (commitToServer) {
+          _markLineServerCommitted(
+            line,
+            data,
+            qty,
+            invoiceId: invoiceId,
+            rpcAdjustedItemQty: rpcAdjustedItemQty,
+          );
+        } else {
+          _attachLocalQrMeta(line, data);
+          // Warehouse from QR minus total reserved qty for this identity.
+          _recomputeLineAvailableStock(line);
+          if ((line.availableStock ?? '').trim().isEmpty) {
+            _bumpLineAvailableStock(line, restored: -qty);
+          }
+        }
         line.revision++;
       } else {
         final line = _BillLine();
@@ -2457,18 +2739,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
               ? null
               : data.company?.trim(),
           batch: batch?.isEmpty == true ? null : batch,
-          manuf: () {
-            final raw = manuf == null || manuf.isEmpty ? null : manuf;
-            if (raw == null) return null;
-            return StockDateParser.tryParse(raw) ?? raw;
-          }(),
-          expiry: () {
-            final raw = data.expiry?.trim().isEmpty == true
-                ? null
-                : data.expiry?.trim();
-            if (raw == null) return null;
-            return StockDateParser.tryParse(raw) ?? raw;
-          }(),
+          manuf: manuf,
+          expiry: expiry,
           pack: data.packing?.trim().isEmpty == true
               ? null
               : data.packing?.trim(),
@@ -2481,15 +2753,23 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           rack: data.rack?.trim().isEmpty == true ? null : data.rack?.trim(),
         );
         line.applyFromStock(t);
+        // Force MFD/EXPIRY even if template merge skipped blanks.
+        line.manuf = manuf ?? line.manuf;
+        line.expiry = expiry ?? line.expiry;
         line.qty = qtyText;
         _recalcLinePrices(line);
-        _markLineServerCommitted(
-          line,
-          data,
-          qty,
-          invoiceId: invoiceId,
-          rpcAdjustedItemQty: rpcAdjustedItemQty,
-        );
+        if (commitToServer) {
+          _markLineServerCommitted(
+            line,
+            data,
+            qty,
+            invoiceId: invoiceId,
+            rpcAdjustedItemQty: rpcAdjustedItemQty,
+          );
+        } else {
+          _attachLocalQrMeta(line, data, reserveQty: qty);
+        }
+        line.revision++;
         _mergeTemplateIntoPools(t);
         _templates.add(t);
         _lines = [..._lines, line];
@@ -2500,10 +2780,23 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         ? existingIndex
         : _lines.length - 1;
     if (target >= 0 && target < _lines.length) {
+      // Ensure Available Stock reflects the qty just reserved locally.
+      _recomputeLineAvailableStock(_lines[target]);
+      if (kDebugMode) {
+        debugPrint(
+          'scan stock line=${_lines[target].product} '
+          'qty=${_lines[target].qty} '
+          'warehouse=${_lines[target].warehouseStockBase} '
+          'available=${_lines[target].availableStock}',
+        );
+      }
+      setState(() {});
       unawaited(_applyWebsiteStockId(_lines[target]));
       unawaited(_enrichQrLine(_lines[target]));
-      unawaited(_resolveOdooLineIdAfterQr(_lines[target]));
-      unawaited(_reloadInvoiceHeaderAfterQr(invoiceId ?? _serverInvoiceId));
+      if (commitToServer) {
+        unawaited(_resolveOdooLineIdAfterQr(_lines[target]));
+        unawaited(_reloadInvoiceHeaderAfterQr(invoiceId ?? _serverInvoiceId));
+      }
     }
   }
 
@@ -2518,15 +2811,21 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     }
   }
 
-  /// After QR add, pull invoice header (customer/address/…) from Odoo if set.
+  /// After QR add, pull invoice header (customer/address/billed by/…) from Laravel.
   Future<void> _reloadInvoiceHeaderAfterQr(int? invoiceId) async {
     final id = invoiceId;
     if (id == null || id <= 0) return;
     try {
-      final sid = await _odooSessionId();
-      if (sid.isEmpty) return;
-      final inv = await OdooRpcHelper.readPharmacyInvoice(sid, id);
-      if (!mounted || inv == null) return;
+      if (!mounted) return;
+      final inv = await InvoiceDetailService.fetchCustomerInvoice(
+        context,
+        seed: InvoiceSummaryModel(
+          id: id,
+          invoiceNumber: _invoiceNumber,
+          billedBy: _billedBy,
+        ),
+      );
+      if (!mounted) return;
       setState(() {
         final cust = (inv.displayCustomer ?? '').trim();
         if (cust.isNotEmpty &&
@@ -2567,6 +2866,15 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           final parsed = CalendarDate.parse(inv.invoiceDate);
           _invoiceDateDisplay =
           parsed != null ? CalendarDate.dmy(parsed) : inv.invoiceDate!.trim();
+        }
+        // Server value wins when present (e.g. another user billed the invoice).
+        _applyBilledByFromServer(inv.billedBy);
+        final responsible = (inv.responsiblePerson ?? '').trim();
+        if (responsible.isNotEmpty) {
+          _responsible = _NamedOption(name: responsible);
+        }
+        if ((inv.verifiedBy ?? '').trim().isNotEmpty) {
+          _verifiedByCtrl.text = inv.verifiedBy!.trim();
         }
       });
       if (_customer != null) unawaited(_loadCustomerBalances(_customer!));
@@ -3015,34 +3323,36 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     FocusScope.of(context).unfocus();
     SystemChannels.textInput.invokeMethod('TextInput.hide');
 
-    final login = Provider.of<LoginViewmodel>(context, listen: false);
-    if (!await _ensureServerInvoice(login)) {
-      _toast('Could not open bill on server. Try Save, then scan again.');
-      return;
-    }
+    // Local-until-Save: scan only fills the phone bill. Save commits.
+    _serverInvoiceId ??= widget.editInvoice?.id;
     if (!mounted) return;
 
     final result = await AddToCustomerPage.showPopup(
       context,
       lockedInvoiceNumber: _invoiceNumber,
-      lockedInvoiceId: _serverInvoiceId,
+      lockedInvoiceId: _serverInvoiceId ?? widget.editInvoice?.id,
+      deferServerCommit: true,
+      localReservedQty: ({
+        String? product,
+        String? potency,
+        String? batch,
+        String? pack,
+      }) =>
+          _reservedQtyForIdentity(
+            product: product,
+            potency: potency,
+            batch: batch,
+            pack: pack,
+          ),
     );
     if (result != null && mounted) {
-      _invoiceCommittedOnServer = true;
-      setState(() {
-        if (result.invoiceId != null) _serverInvoiceId = result.invoiceId;
-        final resolvedName = (result.invoiceName ?? '').trim();
-        if (resolvedName.isNotEmpty) {
-          _invoiceNumber = resolvedName;
-        }
-      });
       _addOrUpdateLineFromQr(
         result.data,
         result.qty,
         invoiceId: result.invoiceId ?? _serverInvoiceId,
-        rpcAdjustedItemQty: result.rpcAdjustedItemQty,
+        rpcAdjustedItemQty: false,
+        commitToServer: false,
       );
-      unawaited(LiveDataSync.syncNow());
     }
   }
 
@@ -3058,7 +3368,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           widget.editInvoice?.id != null;
 
   /// Create the draft on the server when the UI only has a local preview number.
+  ///
+  /// With Odoo RPC off, Laravel `add_to_invoice` creates the bill on first
+  /// Save — we only need a non-empty invoice number here.
   Future<bool> _ensureServerInvoice(LoginViewmodel login) async {
+    _serverInvoiceId ??= widget.editInvoice?.id;
     if (_hasServerInvoice) {
       // Prefer resolving id if we only know the number.
       if (_serverInvoiceId == null && _invoiceNumber.trim().isNotEmpty) {
@@ -3077,6 +3391,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         }
       }
       return _serverInvoiceId != null || widget.editInvoice != null;
+    }
+
+    if (!AppConfig.odooRpcEnabled) {
+      return _invoiceNumber.trim().isNotEmpty;
     }
 
     final sessionId = login.sessionId ?? '';
@@ -3136,8 +3454,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     }
     final odooSid = sid.isNotEmpty ? sid : flutterSid;
 
-    final moveId = _serverInvoiceId;
-    if (moveId == null || moveId <= 0) {
+    var moveId = _serverInvoiceId;
+    if ((moveId == null || moveId <= 0) && AppConfig.odooRpcEnabled) {
       _toast('Invoice was not created on server. Try Save again.');
       return false;
     }
@@ -3150,6 +3468,12 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
       // Free-text line: write without stock_entry_id / stock deduction.
       if (!line.fromStock) {
+        if (moveId == null || moveId <= 0) {
+          _toast(
+            'Line ${i + 1}: save a stock/QR product first, then add manual lines.',
+          );
+          return false;
+        }
         final unit = InvoiceCalcHelper.parseNum(line.mrp);
         final disc = InvoiceCalcHelper.parseNum(line.discount);
         final taxPct = InvoiceCalcHelper.normalizeCustomerTaxPercent(
@@ -3228,7 +3552,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         final disc = InvoiceCalcHelper.parseNum(line.discount);
         final mrp = InvoiceCalcHelper.parseNum(line.mrp);
         final params = <String, dynamic>{
-          'invoice_id': moveId,
+          if (moveId != null && moveId > 0) 'invoice_id': moveId,
           'invoice_number': _invoiceNumber.trim(),
           'qr_data': token,
           'quantity': qtyValue,
@@ -3280,19 +3604,25 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           _invoiceCommittedOnServer = true;
 
           final result = body['result'];
-          if (result is Map) {
-            final idRaw = result['invoice_id'] ?? result['id'];
+          final meta = result is Map ? result : body;
+          if (meta is Map) {
+            final idRaw = meta['invoice_id'] ?? meta['id'];
             final id = idRaw is int
                 ? idRaw
                 : int.tryParse(idRaw?.toString() ?? '');
-            if (id != null) {
+            if (id != null && id > 0) {
               line.serverInvoiceId = id;
               // If API spawned a different move, abandon the empty draft we made.
-              if (id != moveId && _draftCreatedThisSession) {
+              if (moveId != null &&
+                  id != moveId &&
+                  _draftCreatedThisSession) {
                 try {
+                  final loginVm = context.read<LoginViewmodel>();
                   await OdooRpcHelper.deleteCustomerInvoiceDraft(
                     odooSid,
                     moveId,
+                    login: loginVm.loginEmail,
+                    password: loginVm.loginPassword,
                   );
                 } catch (e) {
                   if (kDebugMode) {
@@ -3301,15 +3631,28 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                 }
                 _draftCreatedThisSession = false;
               }
+              moveId = id;
               _serverInvoiceId = id;
             }
+            final lineIdRaw = meta['line_id'];
+            final lineId = lineIdRaw is int
+                ? lineIdRaw
+                : int.tryParse(lineIdRaw?.toString() ?? '');
+            if (lineId != null && lineId > 0) {
+              line.odooLineId = lineId;
+            }
             final name =
-            (result['invoice_name'] ?? result['invoice_number'] ?? '')
+            (meta['invoice_name'] ?? meta['invoice_number'] ?? '')
                 .toString()
                 .trim();
-            final match = RegExp(r'(\d{3,5}/\d{4}-\d{2})').firstMatch(name);
-            if (match != null) {
-              _invoiceNumber = match.group(1)!;
+            if (name.isNotEmpty) {
+              final match =
+                  RegExp(r'(\d{3,5}/\d{4}-\d{2}|R\d+)').firstMatch(name);
+              if (match != null) {
+                _invoiceNumber = match.group(1)!;
+              } else if (_invoiceNumber.trim().isEmpty) {
+                _invoiceNumber = name;
+              }
             }
           }
           // add_to_invoice often ignores Dis% — write it onto the new line now.
@@ -3339,6 +3682,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         _toast(
           'Line ${i + 1}: could not find stock for '
               '${line.product ?? 'product'}. Pick from stock list or use QR scan.',
+        );
+        return false;
+      }
+      if (moveId == null || moveId <= 0) {
+        _toast(
+          'Line ${i + 1}: could not add ${line.product ?? 'product'} '
+          '(scan QR so Save can create the bill).',
         );
         return false;
       }
@@ -3426,11 +3776,12 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     }
   }
 
-  /// Push one committed line's qty/price to Odoo.
+  /// Push one committed line's qty/price to the server.
   ///
-  /// Do **not** manually adjust `entry.stock` here — writing `quantity` on
-  /// `account.move.line` already restores/deducts sellable stock on the server.
-  /// A second client-side adjust made stock climb (e.g. 2→1 restored twice).
+  /// With Odoo RPC on, writing `quantity` on `account.move.line` restores /
+  /// deducts sellable stock — do not double-adjust client-side.
+  /// With RPC off, Laravel `add_to_invoice` (increase) / website line update
+  /// (decrease/set) must run so stock matches the new qty.
   Future<bool> _syncOneCommittedLine(_BillLine line, String sid) async {
     if (!line.hasRequiredLineFields) return false;
 
@@ -3440,6 +3791,31 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final mrp = InvoiceCalcHelper.parseNum(line.mrp);
     final disc = InvoiceCalcHelper.parseNum(line.discount);
     final newQty = qty > 0 ? qty : 0.0;
+    final prev = line.serverCommitted ? line.serverCommittedQty : newQty;
+    final delta = newQty - prev;
+
+    if (!AppConfig.odooRpcEnabled) {
+      final ok = await _syncOneCommittedLineLaravel(
+        line,
+        newQty: newQty,
+        prevQty: prev,
+        delta: delta,
+        discount: disc,
+        mrp: mrp,
+      );
+      if (!ok) return false;
+      // Rebuild may clear serverCommitted when newQty is 0; still update
+      // local committed qty + sellable stock display from the delta.
+      line.serverCommittedQty = line.serverCommitted ? newQty : 0;
+      _bumpLineAvailableStock(line, restored: -delta);
+      if (kDebugMode && delta.abs() > 0.0001) {
+        debugPrint(
+          'line qty synced product=${line.product} '
+          'prevCommitted=$prev → $newQty (stock via Laravel)',
+        );
+      }
+      return true;
+    }
 
     if (line.odooLineId == null || line.odooLineId! <= 0) {
       // Without a line id we cannot persist Dis% — fail loudly when Dis set.
@@ -3471,20 +3847,550 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     }
 
     if (line.serverCommitted) {
-      final prev = line.serverCommittedQty;
       line.serverCommittedQty = newQty;
       if (kDebugMode && (prev - newQty).abs() > 0.0001) {
         debugPrint(
           'line qty synced product=${line.product} '
-              'prevCommitted=$prev → $newQty (stock via Odoo line write)',
+          'prevCommitted=$prev → $newQty (stock via Odoo line write)',
         );
       }
     }
     return true;
   }
 
+  void _bumpLineAvailableStock(_BillLine line, {required double restored}) {
+    if (restored.abs() < 0.0001) return;
+    if (line.warehouseStockBase != null) {
+      // Server changed warehouse; keep baseline aligned then recompute.
+      line.warehouseStockBase =
+          (line.warehouseStockBase! + restored).clamp(0, double.infinity);
+      _recomputeLineAvailableStock(line);
+      return;
+    }
+    final raw = (line.availableStock ?? '').trim();
+    if (raw.isEmpty) return;
+    final current = double.tryParse(raw);
+    if (current == null) return;
+    final next = (current + restored).clamp(0, double.infinity).toDouble();
+    line.availableStock = next == next.roundToDouble()
+        ? next.toInt().toString()
+        : next.toStringAsFixed(2);
+  }
+
+  /// Laravel-only qty sync: increase via `add_to_invoice`, decrease/set via
+  /// website invoice update (same stock rules as the pharmacy site).
+  Future<bool> _syncOneCommittedLineLaravel(
+    _BillLine line, {
+    required double newQty,
+    required double prevQty,
+    required double delta,
+    required double discount,
+    required double mrp,
+  }) async {
+    final login = context.read<LoginViewmodel>();
+    final flutterSid = login.sessionId ?? '';
+    if (flutterSid.isEmpty) return false;
+
+    // Qty unchanged — nothing to push for stock (Dis%/price ignored here).
+    if (delta.abs() < 0.0001) return true;
+
+    final moveId = line.serverInvoiceId ?? _serverInvoiceId ?? widget.editInvoice?.id;
+
+    // Increase: add_to_invoice deducts the delta (same as another QR add).
+    if (delta > 0.0001) {
+      final qr = (line.addQrData ?? line.addQrDataAlt ?? '').trim();
+      if (qr.isEmpty) {
+        if (kDebugMode) {
+          debugPrint(
+            'syncOneCommittedLineLaravel: no qr_data to increase '
+            '${line.product}',
+          );
+        }
+        return false;
+      }
+      final taxPct = InvoiceCalcHelper.normalizeCustomerTaxPercent(
+        InvoiceCalcHelper.parseNum(line.tax),
+      );
+      final qtyValue =
+          delta == delta.roundToDouble() ? delta.toInt() : delta;
+      final params = <String, dynamic>{
+        'invoice_number': _invoiceNumber.trim(),
+        'qr_data': qr,
+        'quantity': qtyValue,
+        if (moveId != null && moveId > 0) 'invoice_id': moveId,
+        'tax_percent': taxPct,
+        'tax': taxPct,
+        'gst': taxPct,
+        'gst_percent': taxPct,
+      };
+      if (kDebugMode) {
+        debugPrint('syncOneCommittedLineLaravel add delta params: $params');
+      }
+      final response = await WebApiImpl().addMedicineQty(
+        userDetails: {
+          'jsonrpc': '2.0',
+          'method': 'call',
+          'params': params,
+          'id': 1,
+          ...params,
+        },
+        sessionId: flutterSid,
+      );
+      final body = response.body;
+      if (kDebugMode) {
+        debugPrint(
+          'syncOneCommittedLineLaravel add delta response: '
+          '${body.length > 240 ? '${body.substring(0, 240)}…' : body}',
+        );
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return false;
+      }
+      try {
+        final decoded = jsonDecode(body);
+        if (decoded is Map) {
+          final status = '${decoded['status'] ?? ''}'.toLowerCase();
+          if (status == 'error' || status == 'fail' || status == 'failed') {
+            return false;
+          }
+        }
+      } catch (_) {
+        return false;
+      }
+      return true;
+    }
+
+    // Decrease: prefer website line qty write when it restores stock; otherwise
+    // hard-discard + rebuild (never cancel — cancel burns invoice numbers).
+    if (moveId == null || moveId <= 0) {
+      if (kDebugMode) {
+        debugPrint(
+          'syncOneCommittedLineLaravel: no invoice id to reduce '
+          '${line.product}',
+        );
+      }
+      return false;
+    }
+
+    var email = (login.loginEmail ?? '').trim();
+    var pass = login.loginPassword ?? '';
+    if (email.isEmpty || pass.isEmpty) {
+      final saved = await AuthSessionStore.load();
+      email = (saved?.email ?? '').trim();
+      pass = saved?.password ?? '';
+    }
+    if (email.isEmpty || pass.isEmpty) {
+      if (kDebugMode) {
+        debugPrint(
+          'syncOneCommittedLineLaravel: missing login for qty reduce',
+        );
+      }
+      return false;
+    }
+
+    final needRestore = -delta;
+    // Refresh live line id + entry_stock_id + qr (website form rewrites
+    // line ids; qty writes must key off entry_stock_id like the site).
+    final lineId = await _resolveLineIdFromCustomerInvoice(
+          sessionId: flutterSid,
+          invoiceId: moveId,
+          line: line,
+        ) ??
+        line.odooLineId;
+    final qr = (line.addQrData ?? line.addQrDataAlt ?? '').trim();
+    final stockBefore = qr.isEmpty
+        ? null
+        : await _fetchQrAvailableStock(sessionId: flutterSid, qrData: qr);
+
+    if (kDebugMode) {
+      debugPrint(
+        'syncOneCommittedLineLaravel: decrease ${line.product} '
+        'prev=$prevQty → $newQty needStock=+$needRestore '
+        'stockBefore=$stockBefore lineId=$lineId '
+        'entry=${line.entryStockId} '
+        'qr=${qr.isEmpty ? '(none)' : qr}',
+      );
+    }
+
+    if (lineId != null && lineId > 0) {
+      final wrote = await FlutterCustomerInvoiceWebApi.updateInvoiceLineQuantity(
+        invoiceId: moveId,
+        lineId: lineId,
+        quantity: newQty,
+        email: email,
+        password: pass,
+        entryStockId: line.entryStockId,
+        sessionId: flutterSid,
+        apiToken: AuthSessionStore.currentApiToken,
+      );
+      if (wrote) {
+        if (stockBefore == null || qr.isEmpty) {
+          line.odooLineId = lineId;
+          return true;
+        }
+        final stockAfter = await _fetchQrAvailableStock(
+          sessionId: flutterSid,
+          qrData: qr,
+        );
+        if (stockAfter != null &&
+            stockAfter + 0.0001 >= stockBefore + needRestore) {
+          if (kDebugMode) {
+            debugPrint(
+              'syncOneCommittedLineLaravel: website qty ok '
+              'stock $stockBefore → $stockAfter',
+            );
+          }
+          line.odooLineId = lineId;
+          return true;
+        }
+        if (kDebugMode) {
+          debugPrint(
+            'syncOneCommittedLineLaravel: website qty wrote but stock '
+            'not restored (before=$stockBefore after=$stockAfter) '
+            '— falling back to discard+rebuild',
+          );
+        }
+      }
+    }
+
+    final rebuilt = await _rebuildLaravelInvoiceAtCurrentQtys(
+      flutterSid: flutterSid,
+      email: email,
+      password: pass,
+      moveId: moveId,
+    );
+    if (!rebuilt) return false;
+
+    if (stockBefore != null && qr.isNotEmpty) {
+      final stockAfter = await _fetchQrAvailableStock(
+        sessionId: flutterSid,
+        qrData: qr,
+      );
+      if (stockAfter != null &&
+          stockAfter + 0.0001 < stockBefore + needRestore) {
+        if (kDebugMode) {
+          debugPrint(
+            'syncOneCommittedLineLaravel: rebuild ok but stock short '
+            'before=$stockBefore after=$stockAfter need=+$needRestore',
+          );
+        }
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// Discard the Laravel draft (restores all committed stock) and re-add every
+  /// server-committed line at its current UI qty via `add_to_invoice`.
+  Future<bool> _rebuildLaravelInvoiceAtCurrentQtys({
+    required String flutterSid,
+    required String email,
+    required String password,
+    required int moveId,
+  }) async {
+    final committed = _lines.where((l) => l.serverCommitted).toList();
+    if (committed.isEmpty) return true;
+
+    for (final l in committed) {
+      final q = InvoiceCalcHelper.parseNum(l.qty);
+      if (q <= 0.0001) continue;
+      final qr = (l.addQrData ?? l.addQrDataAlt ?? '').trim();
+      if (qr.isEmpty) {
+        if (kDebugMode) {
+          debugPrint(
+            'rebuildLaravelInvoice: cannot re-add ${l.product} without qr_data',
+          );
+        }
+        return false;
+      }
+    }
+
+    final discarded = await FlutterCustomerInvoiceWebApi.discardInvoice(
+      invoiceId: moveId,
+      email: email,
+      password: password,
+      sessionId: flutterSid,
+      apiToken: AuthSessionStore.currentApiToken,
+    );
+    if (!discarded) {
+      if (kDebugMode) {
+        debugPrint(
+          'rebuildLaravelInvoice: discard #$moveId failed',
+        );
+      }
+      return false;
+    }
+
+    _serverInvoiceId = null;
+    _invoiceCommittedOnServer = false;
+    for (final l in committed) {
+      l.odooLineId = null;
+      l.serverInvoiceId = null;
+      l.serverCommitted = false;
+      l.serverCommittedQty = 0;
+    }
+
+    int? newInvoiceId;
+    final invoiceNumber = _invoiceNumber.trim();
+
+    for (final l in committed) {
+      final q = InvoiceCalcHelper.parseNum(l.qty);
+      if (q <= 0.0001) continue;
+      final qr = (l.addQrData ?? l.addQrDataAlt ?? '').trim();
+      final taxPct = InvoiceCalcHelper.normalizeCustomerTaxPercent(
+        InvoiceCalcHelper.parseNum(l.tax),
+      );
+      final qtyValue = q == q.roundToDouble() ? q.toInt() : q;
+      final params = <String, dynamic>{
+        'invoice_number': invoiceNumber,
+        'qr_data': qr,
+        'quantity': qtyValue,
+        if (newInvoiceId != null && newInvoiceId > 0) 'invoice_id': newInvoiceId,
+        'tax_percent': taxPct,
+        'tax': taxPct,
+        'gst': taxPct,
+        'gst_percent': taxPct,
+      };
+      if (kDebugMode) {
+        debugPrint('rebuildLaravelInvoice add_to_invoice: $params');
+      }
+      final response = await WebApiImpl().addMedicineQty(
+        userDetails: {
+          'jsonrpc': '2.0',
+          'method': 'call',
+          'params': params,
+          'id': 1,
+          ...params,
+        },
+        sessionId: flutterSid,
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        if (kDebugMode) {
+          debugPrint(
+            'rebuildLaravelInvoice add failed HTTP ${response.statusCode}',
+          );
+        }
+        return false;
+      }
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is! Map) return false;
+        final status = '${decoded['status'] ?? ''}'.toLowerCase();
+        if (status == 'error' || status == 'fail' || status == 'failed') {
+          return false;
+        }
+        final invId = decoded['invoice_id'] ?? decoded['id'];
+        final parsedInv = invId is int ? invId : int.tryParse('$invId');
+        if (parsedInv != null && parsedInv > 0) {
+          newInvoiceId = parsedInv;
+          _serverInvoiceId = parsedInv;
+          _invoiceCommittedOnServer = true;
+        }
+        final newLineId = decoded['line_id'];
+        final parsedLine =
+            newLineId is int ? newLineId : int.tryParse('$newLineId');
+        if (parsedLine != null && parsedLine > 0) {
+          l.odooLineId = parsedLine;
+        }
+        l.serverInvoiceId = newInvoiceId;
+        l.serverCommitted = true;
+        l.serverCommittedQty = q;
+        l.addedThisSession = true;
+      } catch (e) {
+        if (kDebugMode) debugPrint('rebuildLaravelInvoice parse: $e');
+        return false;
+      }
+    }
+
+    if (kDebugMode) {
+      debugPrint(
+        'rebuildLaravelInvoice: done old=#$moveId new=#$newInvoiceId '
+        'lines=${committed.where((l) => l.serverCommitted).length}',
+      );
+    }
+    return newInvoiceId != null ||
+        committed.every((l) => InvoiceCalcHelper.parseNum(l.qty) <= 0.0001);
+  }
+
+  Future<double?> _fetchQrAvailableStock({
+    required String sessionId,
+    required String qrData,
+  }) async {
+    final token = qrData.trim();
+    if (token.isEmpty) return null;
+    try {
+      final candidates = <String>[
+        token,
+        if (!token.toUpperCase().startsWith('SUPPLIER:')) 'SUPPLIER:$token',
+      ];
+      for (final qr in candidates) {
+        final response = await WebApiImpl().qrFetch(
+          sessionId: sessionId,
+          userDetails: {
+            'jsonrpc': '2.0',
+            'method': 'call',
+            'params': {'qr_data': qr},
+            'id': 1,
+            'qr_data': qr,
+          },
+        );
+        if (response.statusCode < 200 || response.statusCode >= 300) continue;
+        final decoded = jsonDecode(response.body);
+        if (decoded is! Map) continue;
+        final data = decoded['data'] ??
+            (decoded['result'] is Map ? decoded['result']['data'] : null);
+        if (data is! Map) continue;
+        for (final key in const [
+          'available_stock',
+          'stock_qty',
+          'entry_stock_qty',
+          'batch_stock_qty',
+          'total_stock_qty',
+          'product_stock_qty',
+        ]) {
+          final v = data[key];
+          if (v == null) continue;
+          final n = v is num ? v.toDouble() : double.tryParse('$v');
+          if (n != null) return n;
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('_fetchQrAvailableStock: $e');
+    }
+    return null;
+  }
+
+  // Kept for Laravel line-id lookup if a dedicated qty API appears.
+  // ignore: unused_element
+  Future<int?> _resolveLineIdFromCustomerInvoice({
+    required int invoiceId,
+    required String sessionId,
+    required _BillLine line,
+  }) async {
+    try {
+      final response = await WebApiImpl().fetchInvoiceList(
+        endpointPath: EndPoint.customerInvoice.path,
+        sessionId: sessionId,
+        userDetails: {
+          'invoice_id': invoiceId,
+          'id': invoiceId,
+        },
+        logResponseBody: false,
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return null;
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map) return null;
+      final data = decoded['data'];
+      if (data is! Map) return null;
+      final lines = data['lines'];
+      if (lines is! List) return null;
+      final product = (line.product ?? '').trim().toLowerCase();
+      final batch = (line.batch ?? '').trim().toLowerCase();
+      final uid = (line.addQrData ?? line.addQrDataAlt ?? '').trim().toLowerCase();
+      int? fallback;
+      String? fallbackUid;
+      int? fallbackEntry;
+      void applyMeta(Map raw, String lineUidRaw) {
+        if ((line.addQrData ?? '').trim().isEmpty && lineUidRaw.isNotEmpty) {
+          line.addQrData = lineUidRaw;
+        }
+        final entryRaw = raw['entry_stock_id'] ??
+            raw['stock_entry_id'] ??
+            raw['entry_id'];
+        final entryId = entryRaw is int
+            ? entryRaw
+            : int.tryParse('$entryRaw');
+        if (entryId != null && entryId > 0) {
+          line.entryStockId = entryId;
+        }
+        line.odooLineId = raw['id'] is int
+            ? raw['id'] as int
+            : int.tryParse('${raw['id'] ?? raw['line_id']}') ?? line.odooLineId;
+      }
+
+      for (final raw in lines) {
+        if (raw is! Map) continue;
+        final id = raw['id'] ?? raw['line_id'];
+        final parsed = id is int ? id : int.tryParse('$id');
+        if (parsed == null || parsed <= 0) continue;
+        final lineUidRaw =
+            '${raw['line_uid'] ?? raw['uid'] ?? raw['product_barcode'] ?? ''}'
+                .trim();
+        final lineUid = lineUidRaw.toLowerCase();
+        final entryRaw = raw['entry_stock_id'] ??
+            raw['stock_entry_id'] ??
+            raw['entry_id'];
+        final entryId = entryRaw is int
+            ? entryRaw
+            : int.tryParse('$entryRaw');
+        fallback ??= parsed;
+        fallbackEntry ??= entryId;
+        if (fallbackUid == null && lineUidRaw.isNotEmpty) {
+          fallbackUid = lineUidRaw;
+        }
+        if (uid.isNotEmpty && lineUid == uid) {
+          applyMeta(Map<String, dynamic>.from(raw), lineUidRaw);
+          return parsed;
+        }
+        final name = '${raw['product_name'] ?? raw['name'] ?? ''}'
+            .trim()
+            .toLowerCase();
+        final b = '${raw['batch'] ?? raw['batch_no'] ?? ''}'
+            .trim()
+            .toLowerCase();
+        if (product.isNotEmpty && name == product) {
+          if (batch.isEmpty || b.isEmpty || b == batch) {
+            applyMeta(Map<String, dynamic>.from(raw), lineUidRaw);
+            return parsed;
+          }
+        }
+      }
+      if ((line.addQrData ?? '').trim().isEmpty &&
+          fallbackUid != null &&
+          fallbackUid.isNotEmpty) {
+        line.addQrData = fallbackUid;
+      }
+      if (fallbackEntry != null &&
+          fallbackEntry > 0 &&
+          (line.entryStockId == null || line.entryStockId! <= 0)) {
+        line.entryStockId = fallbackEntry;
+      }
+      return fallback;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('_resolveLineIdFromCustomerInvoice: $e');
+      }
+      return null;
+    }
+  }
+
   /// Push edits on lines that already exist on the server (edit bill / QR).
   Future<bool> _syncCommittedLines(LoginViewmodel login) async {
+    final sid = await _odooSessionId();
+    final flutterSid = login.sessionId ?? '';
+    if (sid.isEmpty && flutterSid.isEmpty) return false;
+    final session = sid.isNotEmpty ? sid : flutterSid;
+
+    final moveId = _serverInvoiceId ?? widget.editInvoice?.id;
+    if (moveId != null && moveId > 0) {
+      await _resolveAllOdooLineIds(session, moveId);
+    }
+
+    // Zero lines removed locally since last Save.
+    for (final line in List<_BillLine>.from(_deferredServerRemovals)) {
+      line.qty = '0';
+      final ok = await _syncOneCommittedLine(line, session);
+      if (!ok) {
+        _toast(
+          'Could not remove ${line.product ?? 'line'} on the server.',
+        );
+        return false;
+      }
+    }
+    _deferredServerRemovals.clear();
+
     final committed = _lines
         .where(
           (l) => l.serverCommitted && l.hasRequiredLineFields,
@@ -3492,16 +4398,8 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         .toList(growable: false);
     if (committed.isEmpty) return true;
 
-    final sid = await _odooSessionId();
-    if (sid.isEmpty) return false;
-
-    final moveId = _serverInvoiceId ?? widget.editInvoice?.id;
-    if (moveId != null && moveId > 0) {
-      await _resolveAllOdooLineIds(sid, moveId);
-    }
-
     for (final line in committed) {
-      final ok = await _syncOneCommittedLine(line, sid);
+      final ok = await _syncOneCommittedLine(line, session);
       if (!ok) {
         _toast(
           'Could not update ${line.product ?? 'line'} on the server.',
@@ -3539,8 +4437,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (moveId == null) return false;
 
     try {
-      final email = (login.loginEmail ?? '').trim();
-      final pass = login.loginPassword ?? '';
+      var email = (login.loginEmail ?? '').trim();
+      var pass = login.loginPassword ?? '';
+      if (email.isEmpty || pass.isEmpty) {
+        final saved = await AuthSessionStore.load();
+        email = (saved?.email ?? '').trim();
+        pass = saved?.password ?? '';
+      }
       var sid = login.sessionId ?? '';
       if (email.isNotEmpty && pass.isNotEmpty) {
         final webSid = await OdooRpcHelper.cachedWebSessionId(
@@ -3552,13 +4455,46 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       }
 
       final customerName = (_customer?.name ?? '').trim();
+      final billed = (_billedBy ?? '').trim().isEmpty
+          ? _kDefaultBilledBy
+          : (_billedBy ?? '').trim();
+      final clearCustomer = customerName.isEmpty ||
+          InvoiceSummaryModel.isPlaceholderCustomerName(customerName);
+
+      // Laravel path: website PUT (Odoo write no-ops when RPC is off).
+      if (!AppConfig.odooRpcEnabled) {
+        if (email.isEmpty || pass.isEmpty) return false;
+        final ok = await FlutterCustomerInvoiceWebApi.updateInvoiceHeader(
+          invoiceId: moveId,
+          email: email,
+          password: pass,
+          customerName: clearCustomer ? null : customerName,
+          customerId: clearCustomer ? null : _customer?.id,
+          clearCustomer: clearCustomer,
+          billedBy: billed,
+          address: _addressCtrl.text.trim(),
+          phone: _phoneCtrl.text.trim(),
+          paymentMode: _paymentMode,
+          sessionId: sid,
+          apiToken: AuthSessionStore.currentApiToken,
+        );
+        if (kDebugMode) {
+          debugPrint(
+            'syncHeader Laravel #$moveId ok=$ok '
+            'customer=${clearCustomer ? '(walk-in)' : customerName} '
+            'billedBy=$billed',
+          );
+        }
+        return ok;
+      }
+
       final rate = double.tryParse(_discountRateCtrl.text.trim());
       final ok = await OdooRpcHelper.updateCustomerInvoiceHeader(
         sessionId: sid,
         invoiceId: moveId,
-        customerName: customerName,
-        pharmacyCustomerId: _customer?.id,
-        clearCustomer: customerName.isEmpty,
+        customerName: clearCustomer ? '' : customerName,
+        pharmacyCustomerId: clearCustomer ? null : _customer?.id,
+        clearCustomer: clearCustomer,
         address: _addressCtrl.text.trim(),
         phone: _phoneCtrl.text.trim(),
         doctor: (_doctor?.name ?? '').trim(),
@@ -3671,8 +4607,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       if (doctorName.isNotEmpty) {
         await BillNameStore.rememberDoctor(doctorName);
       }
+      if (responsibleName.isNotEmpty) {
+        await BillNameStore.rememberResponsible(responsibleName);
+      }
 
-      // Local preview number is not a real Odoo bill until create / QR add.
+      // Local preview number is not a real bill until create / first add.
       final ensured = await _ensureServerInvoice(login);
       if (!ensured) {
         _toast(
@@ -3681,27 +4620,31 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         return;
       }
 
-      // Save the customer/header first so the invoice is linked to the
-      // pharmacy.customer record before products are committed. This is
-      // important for the customer invoice list, which uses the customer
-      // relation rather than only the display name.
-      final headerBeforeLines = await _syncHeaderToOdoo(login);
-      if (!headerBeforeLines) {
-        _toast(
-          'Could not save customer details to the bill. Please try again.',
-        );
-        return;
+      final hasServerId =
+          (_serverInvoiceId ?? widget.editInvoice?.id ?? 0) > 0;
+
+      // When the bill already exists, sync header first. On a brand-new
+      // Laravel bill there is no id yet — commit lines first (add_to_invoice
+      // creates the draft), then push header.
+      if (hasServerId) {
+        final headerBeforeLines = await _syncHeaderToOdoo(login);
+        if (!headerBeforeLines) {
+          _toast(
+            'Could not save customer details to the bill. Please try again.',
+          );
+          return;
+        }
       }
 
-      // Manually added products must go through add_to_invoice (like QR).
+      // Manually / QR-scanned products go through add_to_invoice on Save.
       final linesOk = await _commitPendingLines(login);
       if (!linesOk) return;
 
       final syncedLines = await _syncCommittedLines(login);
       if (!syncedLines) return;
 
-      // add_to_invoice can return/resolve a different account.move id, so
-      // write the customer/header once more after all lines are committed.
+      // Always write header after lines so customer/billed_by stick on the
+      // move id returned by add_to_invoice.
       final synced = await _syncHeaderToOdoo(login);
       if (!synced) {
         _toast(
@@ -3798,6 +4741,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final total = _totals.total;
     final dateRaw = _invoiceDateDisplay.trim();
     final parsedDate = CalendarDate.parse(dateRaw);
+    final responsible = (_responsible?.name ?? '').trim();
+    final billed = (_billedBy ?? '').trim();
+    final verified = _verifiedByCtrl.text.trim();
+    final remarks = _remarksCtrl.text.trim();
+    final discCat = (_discountCategory?.name ?? '').trim();
     final summary = InvoiceSummaryModel(
       id: id,
       invoiceNumber: _invoiceNumber.trim().isEmpty
@@ -3811,23 +4759,28 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           ? null
           : _addressCtrl.text.trim(),
       phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
+      responsiblePerson: responsible.isEmpty ? null : responsible,
       doctor: (_doctor?.name ?? '').trim().isEmpty
           ? null
           : _doctor!.name.trim(),
       invoiceDate: parsedDate != null
           ? CalendarDate.ymd(parsedDate)
           : CalendarDate.ymd(),
+      billedBy: billed.isEmpty ? _kDefaultBilledBy : billed,
       status: 'draft',
       moveState: 'draft',
       paymentState: 'not_paid',
       paymentMode: _paymentMode,
       gstType: _gstType,
+      discountCategory: discCat.isEmpty ? null : discCat,
       discountType: _discountType,
       discountRate: InvoiceCalcHelper.parseNum(_discountRateCtrl.text),
+      verifiedBy: verified.isEmpty ? null : verified,
       expense: _expenseTextCtrl.text.trim().isEmpty
           ? null
           : _expenseTextCtrl.text.trim(),
       expenseAmt: InvoiceCalcHelper.parseNum(_expenseCtrl.text),
+      remarks: remarks.isEmpty ? null : remarks,
       taxAmount: _totals.taxAmount,
       subtotal: _totals.subtotal,
       discountTotal: _totals.discountTotal,
@@ -3878,11 +4831,43 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     _recalculate();
   }
 
+  void _refreshLocalAvailableWhileEditing(_BillLine line) {
+    if (!line.fromStock) return;
+    // Prefer warehouse baseline so Available Stock rises/falls with Qty.
+    if (line.warehouseStockBase != null) {
+      _recomputeLineAvailableStock(line);
+      return;
+    }
+    final base = _editingAvailBase;
+    if (base == null) return;
+    final newQty = InvoiceCalcHelper.parseNum(line.qty);
+    final remaining = (base - newQty).clamp(0, double.infinity).toDouble();
+    line.availableStock = remaining == remaining.roundToDouble()
+        ? remaining.toInt().toString()
+        : remaining.toStringAsFixed(2);
+  }
+
   void _editLine(int index) {
     if (index == _editingLineIndex) return;
     if (!_warnIfEditingLineIncomplete()) return;
     setState(() {
       _editingLineIndex = index;
+      if (index >= 0 && index < _lines.length) {
+        final line = _lines[index];
+        final startQty = InvoiceCalcHelper.parseNum(line.qty);
+        _editingLineStartQty = startQty;
+        if (line.warehouseStockBase != null) {
+          _editingAvailBase = line.warehouseStockBase;
+          _recomputeLineAvailableStock(line);
+        } else {
+          final avail =
+              double.tryParse((line.availableStock ?? '').trim()) ?? 0;
+          _editingAvailBase = avail + startQty;
+        }
+      } else {
+        _editingLineStartQty = null;
+        _editingAvailBase = null;
+      }
       _lineRequiredErrors = {};
     });
   }
@@ -3895,24 +4880,16 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     // Apply Customer Group Discount once more after all Add-a-line fields are set.
     await _maybeApplyLineDiscount(line);
 
-    // Sync qty/price to Odoo; stock follows from the line write (not a
-    // second client-side restore).
-    if (line.serverCommitted) {
-      final sid = await _odooSessionId();
-      if (sid.isEmpty) {
-        _toast('Session expired. Please log in again.');
-        return;
-      }
-      final ok = await _syncOneCommittedLine(line, sid);
-      if (!ok) {
-        _toast('Could not update quantity. Try again.');
-        return;
-      }
-    }
+    // Local-until-Save: qty/price stay on the phone; Save pushes deltas.
+    _refreshLocalAvailableWhileEditing(line);
+    _recalcLinePrices(line);
+    _recalculate();
 
     if (!mounted) return;
     setState(() {
       _editingLineIndex = null;
+      _editingLineStartQty = null;
+      _editingAvailBase = null;
       _lineRequiredErrors = {};
     });
   }
@@ -3932,47 +4909,21 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     if (index < 0 || index >= _lines.length) return;
 
     final line = _lines[index];
-    final needsRestore =
-        line.serverCommitted && line.serverCommittedQty > 0;
-
-    if (!needsRestore) {
-      setState(() {
-        final next = [..._lines]..removeAt(index);
-        _lines = next;
-        _adjustEditingIndexAfterRemove(index);
-        if (_lines.every((l) => !l.serverCommitted)) {
-          _invoiceCommittedOnServer = false;
-        }
-      });
-      _recalculate();
-      return;
+    // Local-until-Save: never touch server stock here. If the line was already
+    // committed, remember it so Save can zero it; Discard abandons the list.
+    if (line.serverCommitted && line.serverCommittedQty > 0) {
+      _deferredServerRemovals.add(line);
     }
 
-    setState(() => _removingLine = true);
-    try {
-      final ok = await _restoreLineStock(line);
-      if (!ok) {
-        _toast('Could not restore stock for this product. Try again.');
-        return;
+    setState(() {
+      final next = [..._lines]..removeAt(index);
+      _lines = next;
+      _adjustEditingIndexAfterRemove(index);
+      if (_lines.every((l) => !l.serverCommitted)) {
+        _invoiceCommittedOnServer = false;
       }
-
-      if (!mounted) return;
-      setState(() {
-        final next = [..._lines]..removeAt(index);
-        _lines = next;
-        _adjustEditingIndexAfterRemove(index);
-        if (_lines.every((l) => !l.serverCommitted)) {
-          _invoiceCommittedOnServer = false;
-        }
-      });
-      _recalculate();
-      _toast('Product removed and stock restored');
-    } catch (e) {
-      if (kDebugMode) debugPrint('remove_line restore err: $e');
-      _toast('Could not restore stock for this product. Try again.');
-    } finally {
-      if (mounted) setState(() => _removingLine = false);
-    }
+    });
+    _recalculate();
   }
 
   Future<bool> _restoreLineStock(_BillLine line) async {
@@ -4008,37 +4959,51 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     );
   }
 
-  bool get _hasUnsavedServerLines =>
-      _lines.any(
-            (l) =>
-        l.addedThisSession &&
-            l.serverCommitted &&
-            l.serverCommittedQty > 0,
-      );
+  bool get _hasLocalBillContent =>
+      _lines.isNotEmpty ||
+      _deferredServerRemovals.isNotEmpty ||
+      _customer != null ||
+      _addressCtrl.text.trim().isNotEmpty ||
+      _phoneCtrl.text.trim().isNotEmpty ||
+      _remarksCtrl.text.trim().isNotEmpty;
 
   bool get _shouldWarnBeforeLeave {
-    if (_billKept || widget.editInvoice != null) return false;
-    return _draftCreatedThisSession ||
-        _hasUnsavedServerLines ||
-        _lines.isNotEmpty ||
-        _customer != null ||
-        _addressCtrl.text.trim().isNotEmpty ||
-        _phoneCtrl.text.trim().isNotEmpty ||
-        _remarksCtrl.text.trim().isNotEmpty;
+    if (_billKept) return false;
+    // Editing an existing draft: warn only when local edits would be abandoned.
+    if (widget.editInvoice != null) {
+      return _hasLocalEditsVsServer;
+    }
+    return _hasLocalBillContent || _draftCreatedThisSession;
+  }
+
+  /// True when edit-mode UI differs from what was loaded / last saved.
+  bool get _hasLocalEditsVsServer {
+    if (_deferredServerRemovals.isNotEmpty) return true;
+    for (final l in _lines) {
+      if (!l.serverCommitted && l.hasRequiredLineFields) return true;
+      if (l.serverCommitted) {
+        final q = InvoiceCalcHelper.parseNum(l.qty);
+        if ((q - l.serverCommittedQty).abs() > 0.0001) return true;
+      }
+    }
+    return false;
   }
 
   Future<bool> _confirmLeaveWithoutSave() async {
+    final editingExisting = widget.editInvoice != null;
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: sectionBg,
-        title: const Text(
-          'Leave without saving?',
-          style: TextStyle(color: sectionText, fontWeight: FontWeight.w700),
+        title: Text(
+          editingExisting ? 'Discard local changes?' : 'Leave without saving?',
+          style: const TextStyle(color: sectionText, fontWeight: FontWeight.w700),
         ),
-        content: const Text(
-          'This bill will not be saved as a draft. Unsaved lines and a new bill number will be discarded.',
-          style: TextStyle(color: sectionText),
+        content: Text(
+          editingExisting
+              ? 'Changes on this phone will be discarded. The server bill stays as it was.'
+              : 'This bill will not be saved. Nothing is written to the server, and the bill number can be used again.',
+          style: const TextStyle(color: sectionText),
         ),
         actions: [
           TextButton(
@@ -4058,7 +5023,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     return result == true;
   }
 
-  /// Close without Save → restore stock; delete session draft (do not keep draft).
+  /// Close without Save — phone-only. Never deletes/cancels a server bill.
   Future<void> _discardAndClose() async {
     if (_removingLine || _saving) return;
 
@@ -4067,86 +5032,29 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       if (!ok || !mounted) return;
     }
 
-    final draftId = _serverInvoiceId;
-    final shouldDeleteDraft = widget.editInvoice == null &&
-        draftId != null &&
-        draftId > 0 &&
-        (_draftCreatedThisSession || _hasUnsavedServerLines);
-
-    if (!_hasUnsavedServerLines && !_draftCreatedThisSession) {
-      if (mounted) Navigator.of(context).pop(false);
-      return;
-    }
-
-    setState(() => _removingLine = true);
     try {
-      var deleted = false;
-      if (shouldDeleteDraft && draftId != null) {
-        // Full draft delete unlinks every AML and Odoo restores stock —
-        // skip per-line remove (display id ≠ stock_entry_id used to fail
-        // and show "Could not restore stock" even when discard succeeded).
-        final sid = await _odooSessionId();
-        if (sid.isNotEmpty) {
-          deleted = await OdooRpcHelper.deleteCustomerInvoiceDraft(
-            sid,
-            draftId,
-          );
-          if (kDebugMode) {
-            debugPrint(
-              'discard draft #$draftId deleted=$deleted',
-            );
-          }
-        }
-        // Evict from local caches even if unlink raced with live sync.
-        PaymentHistoryService.removeInvoice(draftId);
-        PaymentBookService.removeInvoice(draftId);
-        CustomerInvoiceViewModel.evictInvoice(draftId);
-        // Force next home fetch to hit the server (avoid stale draft ghost).
-        PaymentBookService.clearCache();
-        PaymentHistoryService.clearCache();
-        if (!deleted) {
-          _toast('Bill may still appear until the next refresh.');
-        }
-      } else {
-        final committed = _lines
-            .where(
-              (l) =>
-                  l.addedThisSession &&
-                  l.serverCommitted &&
-                  l.serverCommittedQty > 0,
-            )
-            .toList(growable: false);
-        var allOk = true;
-        for (final line in committed) {
-          final ok = await _restoreLineStock(line);
-          if (!ok) allOk = false;
-        }
-        if (!allOk) {
-          _toast(
-            'Could not restore all stock. Check the bill and try again.',
-          );
-        }
-      }
+      Provider.of<CustomerMedViewmodel>(context, listen: false)
+          .clearLastAddedInvoice();
+    } catch (_) {}
 
-      if (!mounted) return;
-      setState(() {
-        _lines = [
-          for (final l in _lines)
-            if (!l.addedThisSession) l,
-        ];
-        if (_lines.every((l) => !l.serverCommitted)) {
-          _invoiceCommittedOnServer = false;
+    // New bill: free the preview number for the next draft.
+    if (widget.editInvoice == null) {
+      try {
+        final med = Provider.of<CustomerMedViewmodel>(context, listen: false);
+        final freed = _invoiceNumber.trim();
+        if (freed.isNotEmpty) {
+          med.rememberDiscardedInvoiceNumber(freed);
         }
-        _draftCreatedThisSession = false;
-      });
-      Navigator.of(context).pop(false);
-      unawaited(LiveDataSync.syncNow());
-    } catch (e) {
-      if (kDebugMode) debugPrint('discard_and_close err: $e');
-      _toast('Could not restore stock while closing. Try again.');
-    } finally {
-      if (mounted) setState(() => _removingLine = false);
+      } catch (_) {}
+      _serverInvoiceId = null;
+      _invoiceCommittedOnServer = false;
+      _draftCreatedThisSession = false;
     }
+
+    _deferredServerRemovals.clear();
+
+    if (!mounted) return;
+    Navigator.of(context).pop(false);
   }
 
   @override
@@ -4348,9 +5256,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                           title: 'Responsible Person',
                           options: _responsiblePeople,
                           selected: _responsible,
-                          onCreate: (name) async {
-                            // Local-only until website create API exists.
-                          },
+                          onCreate: BillNameStore.rememberResponsible,
                         );
                         if (picked == null || !mounted) return;
                         setState(() {
@@ -4545,6 +5451,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                               _lineRequiredErrors = next;
                             }
                           }
+                          if (_editingLineIndex == i) {
+                            _refreshLocalAvailableWhileEditing(line);
+                          }
                           _recalcLinePrices(line);
                           setState(() {});
                           _recalculate();
@@ -4650,7 +5559,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                         decimal: true,
                       ),
                     ),
-                    const _ReadRow('Billed By', 'Administrator'),
+                    _ReadRow(
+                      'Billed By',
+                      _displayBilledBy,
+                    ),
                     _ReadRow(
                       'Status',
                       widget.editInvoice?.displayStatus ?? 'Draft',
@@ -5051,12 +5963,15 @@ class _LineCardState extends State<_LineCard> {
         ),
         _CompactLineRow(
           left: _CompactField('Group', line.group),
-          right: const _CompactField('', null),
+          right: _CompactField(
+            'Rack',
+            line.rack.trim().isEmpty ? null : line.rack,
+          ),
         ),
         if (line.fromStock && (line.availableStock ?? '').trim().isNotEmpty)
           _CompactLineRow(
             left: _CompactField('Available Stock', line.availableStock),
-            right: const _CompactField('', null),
+            right: const _CompactField.spacer(),
           ),
         _CompactLineRow(
           left: _CompactField('Qty', fmtNum(qty > 0 ? qty : null)),
@@ -5080,7 +5995,7 @@ class _LineCardState extends State<_LineCard> {
         _CompactLineRow(
           left: _CompactField('Total', fmtMoney(total > 0 ? total : null),
               emphasize: true),
-          right: const _CompactField('', null),
+          right: const _CompactField.spacer(),
         ),
       ],
     );
@@ -5312,6 +6227,15 @@ class _LineCardState extends State<_LineCard> {
 
   void _commitLineDate(_BillLine line, {required bool manuf}) {
     final ctrl = manuf ? _manufCtrl : _expiryCtrl;
+    final raw = ctrl.text.trim();
+    // Focus-loss with an empty controller must not wipe a QR-filled value.
+    if (raw.isEmpty) {
+      final existing = manuf ? line.manuf : line.expiry;
+      if ((existing ?? '').trim().isNotEmpty) {
+        ctrl.text = existing!.trim();
+        return;
+      }
+    }
     final parsed = StockDateParser.tryParse(ctrl.text);
     if (parsed == null) {
       setState(() {
@@ -5324,12 +6248,20 @@ class _LineCardState extends State<_LineCard> {
       return;
     }
     setState(() {
-      ctrl.text = parsed;
+      // Keep MM/yyyy when user/API entered month+year only.
+      final display = RegExp(r'^\d{1,2}[/\-.]\d{2,4}$').hasMatch(raw) &&
+              parsed.isNotEmpty
+          ? () {
+              final parts = parsed.split('/');
+              return parts.length == 3 ? '${parts[1]}/${parts[2]}' : parsed;
+            }()
+          : parsed;
+      ctrl.text = display;
       if (manuf) {
-        line.manuf = parsed.isEmpty ? null : parsed;
+        line.manuf = display.isEmpty ? null : display;
         _manufError = null;
       } else {
-        line.expiry = parsed.isEmpty ? null : parsed;
+        line.expiry = display.isEmpty ? null : display;
         _expiryError = null;
       }
       line.revision++;
@@ -5357,14 +6289,26 @@ class _CompactLineRow extends StatelessWidget {
 }
 
 class _CompactField extends StatelessWidget {
-  const _CompactField(this.label, this.value, {this.emphasize = true});
+  const _CompactField(this.label, this.value, {this.emphasize = true})
+      : spacer = false;
+
+  /// Empty half of a row — avoids showing a blank `: —` field.
+  const _CompactField.spacer()
+      : label = '',
+        value = null,
+        emphasize = false,
+        spacer = true;
 
   final String label;
   final String? value;
   final bool emphasize;
+  final bool spacer;
 
   @override
   Widget build(BuildContext context) {
+    if (spacer || label.trim().isEmpty) {
+      return const SizedBox.shrink();
+    }
     final text = (value == null || value!.trim().isEmpty) ? '—' : value!;
     return RichText(
       text: TextSpan(

@@ -6,10 +6,26 @@ class QrResponseModel {
   QrResponseModel({this.jsonrpc, this.id, this.result});
 
   factory QrResponseModel.fromJson(Map<String, dynamic> json) {
+    // Odoo: { result: { status, data } }
+    final result = json['result'];
+    if (result is Map) {
+      return QrResponseModel(
+        jsonrpc: json['jsonrpc']?.toString(),
+        id: json['id'],
+        result: QrResult.fromJson(Map<String, dynamic>.from(result)),
+      );
+    }
+    // Laravel flat: { status, data: { ...product fields } }
+    if (json.containsKey('data') || json.containsKey('status')) {
+      return QrResponseModel(
+        jsonrpc: json['jsonrpc']?.toString(),
+        id: json['id'],
+        result: QrResult.fromJson(Map<String, dynamic>.from(json)),
+      );
+    }
     return QrResponseModel(
-      jsonrpc: json['jsonrpc'],
+      jsonrpc: json['jsonrpc']?.toString(),
       id: json['id'],
-      result: json['result'] != null ? QrResult.fromJson(json['result']) : null,
     );
   }
 
@@ -160,7 +176,14 @@ class QrData {
       ]),
       tax: (json['tax_percent'] as num?)?.toDouble() ??
           (json['tax'] as num?)?.toDouble(),
-      expiry: json['expiry'],
+      expiry: _firstNonEmptyString(json, const [
+        'expiry',
+        'expiry_date',
+        'exp_date',
+        'exp',
+        'expiration_date',
+        'expire_date',
+      ]),
       potency: _firstNonEmptyString(json, const [
         'potency',
         'potency_name',
@@ -195,6 +218,10 @@ class QrData {
         'mfd',
         'mfd_date',
         'manufacturing_date',
+        'manufacture_date',
+        'manuf_date',
+        'mf_date',
+        'mfg_date',
         'manuf',
       ]),
       unitPrice: resolvedUnit,
