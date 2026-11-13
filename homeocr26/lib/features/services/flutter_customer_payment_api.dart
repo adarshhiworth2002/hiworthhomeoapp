@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../../models/cheque_clearance_model.dart';
+import '../../models/customer_payment_model.dart';
 import 'WebApi/web_api_impl.dart';
 import 'api_request_helper.dart';
 import 'api_response_helper.dart';
@@ -51,6 +52,67 @@ class FlutterCustomerPaymentApi {
         debugPrint('FlutterCustomerPaymentApi.getOpenBills: $e');
       }
       return const [];
+    }
+  }
+
+  static final Map<int, ({CustomerPaymentRecord payment, DateTime at})>
+      _paymentDetailCache = {};
+  static const _paymentDetailTtl = Duration(seconds: 8);
+
+  static void clearPaymentDetailCache([int? paymentId]) {
+    if (paymentId == null) {
+      _paymentDetailCache.clear();
+      return;
+    }
+    _paymentDetailCache.remove(paymentId);
+  }
+
+  /// Payment voucher + allocated invoice lines (`get_customer_payment`).
+  static Future<CustomerPaymentRecord?> getPayment({
+    required String sessionId,
+    required int paymentId,
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh) {
+      final hit = _paymentDetailCache[paymentId];
+      if (hit != null &&
+          DateTime.now().difference(hit.at) < _paymentDetailTtl &&
+          hit.payment.invoices.isNotEmpty) {
+        return hit.payment;
+      }
+    }
+    try {
+      final response = await WebApiImpl().fetchInvoiceList(
+        endpointPath: EndPoint.customerPaymentDetail.path,
+        sessionId: sessionId,
+        userDetails: ApiRequestHelper.jsonRpcCall({
+          'payment_id': paymentId,
+          'id': paymentId,
+        }),
+        logResponseBody: kDebugMode,
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return null;
+      }
+      final body = response.body.trim();
+      if (!body.startsWith('{')) return null;
+      final decoded = json.decode(body);
+      if (decoded is! Map) return null;
+      final map = Map<String, dynamic>.from(decoded);
+      if (!ApiResponseHelper.isSuccess(map)) return null;
+      final data = ApiResponseHelper.dataMap(map);
+      final payment = CustomerPaymentRecord.fromJson(data);
+      if (payment.amount <= 0.0001 && payment.invoices.isEmpty) return null;
+      _paymentDetailCache[paymentId] = (
+        payment: payment,
+        at: DateTime.now(),
+      );
+      return payment;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FlutterCustomerPaymentApi.getPayment: $e');
+      }
+      return null;
     }
   }
 

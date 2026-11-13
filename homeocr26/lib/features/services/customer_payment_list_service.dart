@@ -16,7 +16,7 @@ class CustomerPaymentListService {
   static List<CustomerPaymentRecord>? _cache;
   static DateTime? _cachedAt;
   static Future<List<CustomerPaymentRecord>>? _inFlight;
-  static const _cacheTtl = Duration(seconds: 12);
+  static const _cacheTtl = Duration(seconds: 4);
 
   static bool get hasFreshCache =>
       _cache != null &&

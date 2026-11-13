@@ -9,7 +9,7 @@ class LiveDataSync {
   LiveDataSync._();
 
   /// How often to pull fresh data while the app is in the foreground.
-  static const Duration pollInterval = Duration(seconds: 8);
+  static const Duration pollInterval = Duration(seconds: 3);
 
   static Timer? _timer;
   static AppLifecycleListener? _lifecycle;

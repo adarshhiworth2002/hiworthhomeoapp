@@ -140,9 +140,78 @@ class PaymentBookService {
       );
     }
 
+    // After saving a bill, Laravel may return only today's new row while
+    // home_count still reflects the full set — never wipe a fuller cache.
+    final prior = _cache;
+    final priorN = prior?.invoices.length ?? 0;
+    final nextN = filtered.invoices.length;
+    final homeHint = filtered.homeCount;
+    if (prior != null &&
+        priorN > 0 &&
+        nextN < priorN &&
+        (nextN == 0 || (homeHint > 0 && nextN < homeHint))) {
+      final merged = _mergeInvoiceLists(prior.invoices, filtered.invoices);
+      var bal = 0.0;
+      var tot = 0.0;
+      for (final inv in merged) {
+        bal += inv.balance ?? 0;
+        tot += inv.total ?? 0;
+      }
+      final kept = PaymentBookModel(
+        cardName: (filtered.cardName ?? '').isNotEmpty
+            ? filtered.cardName
+            : prior.cardName,
+        dateFrom: filtered.dateFrom ?? prior.dateFrom,
+        dateTo: filtered.dateTo ?? prior.dateTo,
+        homeCount: homeHint > prior.homeCount ? homeHint : prior.homeCount,
+        totalCount: merged.length,
+        totalBalance: bal,
+        totalAmount: tot,
+        invoices: merged,
+      );
+      _cache = kept;
+      _cachedAt = DateTime.now();
+      return kept;
+    }
+
     _cache = filtered;
     _cachedAt = DateTime.now();
     return filtered;
+  }
+
+  static List<InvoiceSummaryModel> _mergeInvoiceLists(
+    List<InvoiceSummaryModel> base,
+    List<InvoiceSummaryModel> incoming,
+  ) {
+    final byId = <int, InvoiceSummaryModel>{};
+    for (final inv in incoming) {
+      final id = inv.id;
+      if (id != null) byId[id] = inv;
+    }
+    final out = <InvoiceSummaryModel>[];
+    final seen = <int>{};
+    for (final inv in incoming) {
+      final id = inv.id;
+      if (id == null) {
+        out.add(inv);
+        continue;
+      }
+      if (seen.contains(id)) continue;
+      seen.add(id);
+      out.add(inv);
+    }
+    for (final inv in base) {
+      final id = inv.id;
+      if (id == null) {
+        out.add(inv);
+        continue;
+      }
+      if (seen.contains(id)) continue;
+      seen.add(id);
+      final patch = byId[id];
+      out.add(patch == null ? inv : inv.mergedWith(patch));
+    }
+    return out;
   }
 
   static Future<PaymentBookModel> _fetchPaymentBookEndpoint({
@@ -187,50 +256,57 @@ class PaymentBookService {
       return _cache ?? const PaymentBookModel();
     }
 
-    return _applyTrustedTotals(PaymentBookModel.fromResponse(map));
+    final parsed = _applyTrustedTotals(PaymentBookModel.fromResponse(map));
+    // Today-only endpoint often returns invoices:[] while home_count is large.
+    // Prefer existing cache / shared history catalog over an empty wipe.
+    if (parsed.invoices.isEmpty &&
+        parsed.homeCount > 0 &&
+        (_cache?.invoices.isNotEmpty == true ||
+            PaymentHistoryService.hasAnyCache)) {
+      final seed = _cache?.invoices.isNotEmpty == true
+          ? _cache!.invoices
+          : (PaymentHistoryService.cachedInvoices ?? const []);
+      if (seed.isNotEmpty) {
+        final today = CalendarDate.today();
+        final ranged = seed.where((inv) {
+          final day = CalendarDate.parse(inv.invoiceDate);
+          if (day == null) return true;
+          return !day.isBefore(today) && !day.isAfter(today);
+        }).toList(growable: false);
+        if (ranged.isEmpty) return parsed;
+        var bal = 0.0;
+        var tot = 0.0;
+        for (final inv in ranged) {
+          bal += inv.balance ?? 0;
+          tot += inv.total ?? 0;
+        }
+        return PaymentBookModel(
+          cardName: parsed.cardName,
+          dateFrom: parsed.dateFrom,
+          dateTo: parsed.dateTo,
+          homeCount: parsed.homeCount,
+          totalCount: ranged.length,
+          totalBalance: bal,
+          totalAmount: tot,
+          invoices: ranged,
+        );
+      }
+    }
+    return parsed;
   }
 
   /// Fallback when payment-book date params are broken on the server.
+  /// Uses [PaymentHistoryService] so sparse `get_payment_history` still
+  /// expands via `get_customer_invoice_list` instead of wiping the catalog.
   static Future<PaymentBookModel> _fetchViaPaymentHistory({
     required String sessionId,
     String? dateFrom,
     String? dateTo,
   }) async {
-    final params = <String, dynamic>{
-      'limit': 500,
-    };
-    if (dateFrom != null && dateFrom.isNotEmpty) {
-      params['date_from'] = dateFrom;
-      params['from_date'] = dateFrom;
-    }
-    if (dateTo != null && dateTo.isNotEmpty) {
-      params['date_to'] = dateTo;
-      params['to_date'] = dateTo;
-    }
-
-    final webApi = WebApiImpl();
-    final response = await webApi.fetchInvoiceList(
-      endpointPath: EndPoint.paymentHistory.path,
-      userDetails: ApiRequestHelper.jsonRpcCall(params),
+    final invoices = await PaymentHistoryService.fetchInvoices(
       sessionId: sessionId,
-      logResponseBody: false,
+      forceRefresh: true,
     );
-
-    if (response.statusCode != 200) {
-      return const PaymentBookModel();
-    }
-
-    final body = json.decode(response.body);
-    if (body is! Map) return const PaymentBookModel();
-
-    final map = Map<String, dynamic>.from(body);
-    if (map['result'] is Map && (map['result'] as Map)['status'] == 'error') {
-      return const PaymentBookModel();
-    }
-
-    final invoices = InvoiceSummaryModel.parseList(map)
-        .map(PaymentHistoryService.withTrustedTotals)
-        .toList(growable: false);
     // Keep only rows inside the requested date window (API may return extra).
     // Hide cancelled/canceled and emptied drafts (total+balance 0) — discard
     // may leave an empty draft when hard-delete routes are missing.

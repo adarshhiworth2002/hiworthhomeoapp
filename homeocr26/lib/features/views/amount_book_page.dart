@@ -54,10 +54,13 @@ class _AmountBookPageState extends State<AmountBookPage>
           headOnly: true,
         );
         if (!mounted) return;
-        await _viewModel.prefetchBalances(context, refreshStale: true);
+        // Non-blocking — don't delay the next poll waiting on balances.
+        unawaited(
+          _viewModel.prefetchBalances(context, refreshStale: true),
+        );
       },
-      // Head + stale balance refresh so website advance/old edits appear.
-      interval: const Duration(seconds: 8),
+      // Head refresh so website edits appear within a few seconds.
+      interval: const Duration(seconds: 3),
       immediate: false,
     );
   }
@@ -533,8 +536,8 @@ class _CustomerTab extends StatelessWidget {
                   children: [
                     const SizedBox(height: 8),
                     _SummaryCard(
-                      youGot: model.allYouGot,
-                      youGave: model.allYouGave,
+                      youGot: model.summaryYouGot,
+                      youGave: model.summaryYouGave,
                       loading: model.loading,
                     ),
                     const SizedBox(height: 12),

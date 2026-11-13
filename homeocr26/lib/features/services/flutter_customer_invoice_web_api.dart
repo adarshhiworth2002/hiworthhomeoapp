@@ -14,6 +14,19 @@ import 'WebApi/web_api_impl.dart';
 class FlutterCustomerInvoiceWebApi {
   const FlutterCustomerInvoiceWebApi._();
 
+  /// Reused across Save header / line qty writes so we do not re-login and
+  /// re-download the ~3MB edit page on every call in one session.
+  static Map<String, String>? _cachedWebsiteCookies;
+  static String? _cachedWebsiteCookieKey;
+  static DateTime? _cachedWebsiteCookiesAt;
+  static const Duration _websiteCookieTtl = Duration(minutes: 25);
+
+  static void clearWebsiteSessionCache() {
+    _cachedWebsiteCookies = null;
+    _cachedWebsiteCookieKey = null;
+    _cachedWebsiteCookiesAt = null;
+  }
+
   /// Hard-delete a draft bill on the Laravel website so the invoice number
   /// can be reused.
   ///
@@ -643,8 +656,10 @@ class FlutterCustomerInvoiceWebApi {
     return out;
   }
 
-  /// Push customer / billed-by header fields via the Laravel website form
-  /// (`PUT/PATCH /customer-invoices/{id}`) when Odoo RPC is off.
+  /// Push customer / billed-by / responsible header fields when Odoo RPC is off.
+  ///
+  /// Fast path: Flutter `/api/flutter/*` or JSON PUT with bearer (no login /
+  /// no multi-MB edit HTML). Slow path: cached website session + form PUT.
   static Future<bool> updateInvoiceHeader({
     required int invoiceId,
     required String email,
@@ -653,6 +668,8 @@ class FlutterCustomerInvoiceWebApi {
     int? customerId,
     bool clearCustomer = false,
     String? billedBy,
+    String? responsiblePerson,
+    int? responsiblePersonId,
     String? address,
     String? phone,
     String? paymentMode,
@@ -665,64 +682,74 @@ class FlutterCustomerInvoiceWebApi {
     if (login.isEmpty || pass.isEmpty) return false;
 
     final base = AppConfig.webViewBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 25);
-    final cookies = <String, String>{};
-    final bearer = (apiToken ?? AuthSessionStore.currentApiToken).trim();
+    var bearer = (apiToken ?? '').trim();
+    if (bearer.isEmpty) bearer = AuthSessionStore.currentApiToken;
+    if (bearer.isEmpty) bearer = (sessionId ?? '').trim();
+    final sid = (sessionId ?? '').trim();
 
-    try {
-      final loginGet = await _request(
-        client,
-        method: 'GET',
-        uri: Uri.parse('$base/login'),
-        cookies: cookies,
-        bearerToken: bearer,
-      );
-      final loginHtml = await loginGet.transform(utf8.decoder).join();
-      _storeCookies(cookies, loginGet.cookies, loginGet.headers);
-      final loginToken = _extractCsrf(loginHtml) ?? _xsrfFromCookies(cookies);
-      if (loginToken == null || loginToken.isEmpty) return false;
-
-      final loginPost = await _request(
-        client,
-        method: 'POST',
-        uri: Uri.parse('$base/login'),
-        cookies: cookies,
-        form: {
-          '_token': loginToken,
-          'email': login,
-          'login': login,
-          'password': pass,
-        },
-        xsrfToken: _xsrfFromCookies(cookies) ?? loginToken,
-        bearerToken: bearer,
-        followRedirects: false,
-        referer: '$base/login',
-      );
-      final loginBody = await loginPost.transform(utf8.decoder).join();
-      _storeCookies(cookies, loginPost.cookies, loginPost.headers);
-      final loginLoc = _locationOf(loginPost, loginBody);
-      if (!_looksLoggedIn(
-        statusCode: loginPost.statusCode,
-        location: loginLoc,
-        body: loginBody,
-      )) {
-        return false;
-      }
-      if (loginLoc != null && loginLoc.isNotEmpty && !_isLoginUrl(loginLoc)) {
-        final next = loginLoc.startsWith('http')
-            ? Uri.parse(loginLoc)
-            : Uri.parse('$base${loginLoc.startsWith('/') ? '' : '/'}$loginLoc');
-        final land = await _request(
-          client,
-          method: 'GET',
-          uri: next,
-          cookies: cookies,
-          bearerToken: bearer,
-          followRedirects: false,
+    // 1) Flutter API — same token as add_to_invoice (no website scrape).
+    final viaFlutter = await _tryFlutterHeaderApis(
+      invoiceId: invoiceId,
+      customerName: customerName,
+      customerId: customerId,
+      clearCustomer: clearCustomer,
+      billedBy: billedBy,
+      responsiblePerson: responsiblePerson,
+      responsiblePersonId: responsiblePersonId,
+      address: address,
+      phone: phone,
+      paymentMode: paymentMode,
+      sessionId: sid.isNotEmpty ? sid : bearer,
+    );
+    if (viaFlutter) {
+      if (kDebugMode) {
+        debugPrint(
+          'FlutterCustomerInvoiceWebApi: header #$invoiceId via flutter API',
         );
-        await land.drain();
-        _storeCookies(cookies, land.cookies, land.headers);
       }
+      return true;
+    }
+
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
+    try {
+      // 2) JSON PUT with bearer only (skips login + 3MB edit page).
+      if (bearer.isNotEmpty) {
+        final viaJson = await _tryJsonHeaderUpdate(
+          client: client,
+          base: base,
+          invoiceId: invoiceId,
+          customerName: customerName,
+          customerId: customerId,
+          clearCustomer: clearCustomer,
+          billedBy: billedBy,
+          responsiblePerson: responsiblePerson,
+          responsiblePersonId: responsiblePersonId,
+          address: address,
+          phone: phone,
+          paymentMode: paymentMode,
+          cookies: const {},
+          xsrfToken: '',
+          bearerToken: bearer,
+        );
+        if (viaJson) {
+          if (kDebugMode) {
+            debugPrint(
+              'FlutterCustomerInvoiceWebApi: header #$invoiceId via JSON bearer',
+            );
+          }
+          return true;
+        }
+      }
+
+      // 3) Website form with cached cookies (login once per ~25 min).
+      final cookies = await _obtainWebsiteCookies(
+        client: client,
+        base: base,
+        email: login,
+        password: pass,
+        bearerToken: bearer,
+      );
+      if (cookies == null) return false;
 
       String? pageHtml;
       var referer = '$base/customer-invoices/$invoiceId/edit';
@@ -741,7 +768,10 @@ class FlutterCustomerInvoiceWebApi {
         final html = await page.transform(utf8.decoder).join();
         _storeCookies(cookies, page.cookies, page.headers);
         final loc = _locationOf(page, html);
-        if (_isLoginRedirect(page.statusCode, loc, html)) return false;
+        if (_isLoginRedirect(page.statusCode, loc, html)) {
+          clearWebsiteSessionCache();
+          return false;
+        }
         if (page.statusCode >= 400) continue;
         pageHtml = html;
         referer = '$base$path';
@@ -758,10 +788,13 @@ class FlutterCustomerInvoiceWebApi {
       form['_token'] = formToken;
       _applyHeaderFieldsToForm(
         form,
+        pageHtml: pageHtml,
         customerName: customerName,
         customerId: customerId,
         clearCustomer: clearCustomer,
         billedBy: billedBy,
+        responsiblePerson: responsiblePerson,
+        responsiblePersonId: responsiblePersonId,
         address: address,
         phone: phone,
         paymentMode: paymentMode,
@@ -783,15 +816,12 @@ class FlutterCustomerInvoiceWebApi {
         final body = await res.transform(utf8.decoder).join();
         _storeCookies(cookies, res.cookies, res.headers);
         final loc = _locationOf(res, body);
-        if (_isLoginRedirect(res.statusCode, loc, body)) continue;
+        if (_isLoginRedirect(res.statusCode, loc, body)) {
+          clearWebsiteSessionCache();
+          continue;
+        }
         if (res.statusCode >= 200 && res.statusCode < 400) {
           updated = true;
-          if (kDebugMode) {
-            debugPrint(
-              'FlutterCustomerInvoiceWebApi: header $method '
-              '#$invoiceId HTTP ${res.statusCode}',
-            );
-          }
           break;
         }
       }
@@ -818,7 +848,6 @@ class FlutterCustomerInvoiceWebApi {
         }
       }
 
-      // JSON fallback for Livewire/Inertia pages.
       if (!updated) {
         updated = await _tryJsonHeaderUpdate(
           client: client,
@@ -828,6 +857,8 @@ class FlutterCustomerInvoiceWebApi {
           customerId: customerId,
           clearCustomer: clearCustomer,
           billedBy: billedBy,
+          responsiblePerson: responsiblePerson,
+          responsiblePersonId: responsiblePersonId,
           address: address,
           phone: phone,
           paymentMode: paymentMode,
@@ -841,7 +872,8 @@ class FlutterCustomerInvoiceWebApi {
         debugPrint(
           'FlutterCustomerInvoiceWebApi: header #$invoiceId '
           'customer=${clearCustomer ? '(clear)' : customerName} '
-          'billedBy=$billedBy updated=$updated',
+          'billedBy=$billedBy responsible=$responsiblePerson '
+          'updated=$updated',
         );
       }
       return updated;
@@ -855,12 +887,186 @@ class FlutterCustomerInvoiceWebApi {
     }
   }
 
-  static void _applyHeaderFieldsToForm(
-    Map<String, String> form, {
+  static Future<Map<String, String>?> _obtainWebsiteCookies({
+    required HttpClient client,
+    required String base,
+    required String email,
+    required String password,
+    required String bearerToken,
+  }) async {
+    final key = '$email|${bearerToken.isNotEmpty}';
+    final now = DateTime.now();
+    if (_cachedWebsiteCookies != null &&
+        _cachedWebsiteCookieKey == key &&
+        _cachedWebsiteCookiesAt != null &&
+        now.difference(_cachedWebsiteCookiesAt!) < _websiteCookieTtl) {
+      return Map<String, String>.from(_cachedWebsiteCookies!);
+    }
+
+    final cookies = <String, String>{};
+    final loginGet = await _request(
+      client,
+      method: 'GET',
+      uri: Uri.parse('$base/login'),
+      cookies: cookies,
+      bearerToken: bearerToken,
+    );
+    final loginHtml = await loginGet.transform(utf8.decoder).join();
+    _storeCookies(cookies, loginGet.cookies, loginGet.headers);
+    final loginToken = _extractCsrf(loginHtml) ?? _xsrfFromCookies(cookies);
+    if (loginToken == null || loginToken.isEmpty) return null;
+
+    final loginPost = await _request(
+      client,
+      method: 'POST',
+      uri: Uri.parse('$base/login'),
+      cookies: cookies,
+      form: {
+        '_token': loginToken,
+        'email': email,
+        'login': email,
+        'password': password,
+      },
+      xsrfToken: _xsrfFromCookies(cookies) ?? loginToken,
+      bearerToken: bearerToken,
+      followRedirects: false,
+      referer: '$base/login',
+    );
+    final loginBody = await loginPost.transform(utf8.decoder).join();
+    _storeCookies(cookies, loginPost.cookies, loginPost.headers);
+    final loginLoc = _locationOf(loginPost, loginBody);
+    if (!_looksLoggedIn(
+      statusCode: loginPost.statusCode,
+      location: loginLoc,
+      body: loginBody,
+    )) {
+      return null;
+    }
+    if (loginLoc != null && loginLoc.isNotEmpty && !_isLoginUrl(loginLoc)) {
+      final next = loginLoc.startsWith('http')
+          ? Uri.parse(loginLoc)
+          : Uri.parse('$base${loginLoc.startsWith('/') ? '' : '/'}$loginLoc');
+      final land = await _request(
+        client,
+        method: 'GET',
+        uri: next,
+        cookies: cookies,
+        bearerToken: bearerToken,
+        followRedirects: false,
+      );
+      await land.drain();
+      _storeCookies(cookies, land.cookies, land.headers);
+    }
+
+    _cachedWebsiteCookies = Map<String, String>.from(cookies);
+    _cachedWebsiteCookieKey = key;
+    _cachedWebsiteCookiesAt = now;
+    return cookies;
+  }
+
+  static Future<bool> _tryFlutterHeaderApis({
+    required int invoiceId,
     String? customerName,
     int? customerId,
     bool clearCustomer = false,
     String? billedBy,
+    String? responsiblePerson,
+    int? responsiblePersonId,
+    String? address,
+    String? phone,
+    String? paymentMode,
+    required String sessionId,
+  }) async {
+    final sid = sessionId.trim();
+    if (sid.isEmpty) return false;
+
+    final params = <String, dynamic>{
+      'invoice_id': invoiceId,
+      'id': invoiceId,
+      if (clearCustomer ||
+          ((customerName ?? '').trim().isEmpty && customerId == null)) ...{
+        'customer_id': null,
+        'customer_name': null,
+        'pharmacy_customer_id': null,
+        'clear_customer': true,
+      } else ...{
+        if ((customerName ?? '').trim().isNotEmpty)
+          'customer_name': customerName!.trim(),
+        if (customerId != null && customerId > 0) ...{
+          'customer_id': customerId,
+          'pharmacy_customer_id': customerId,
+        },
+      },
+      if ((billedBy ?? '').trim().isNotEmpty) ...{
+        'billed_by': billedBy!.trim(),
+        'billed_by_name': billedBy.trim(),
+      },
+      if (responsiblePersonId != null && responsiblePersonId > 0) ...{
+        'responsible_person_id': responsiblePersonId,
+        'responsible_id': responsiblePersonId,
+      },
+      if ((responsiblePerson ?? '').trim().isNotEmpty) ...{
+        'responsible_person': responsiblePerson!.trim(),
+        'responsible_person_name': responsiblePerson.trim(),
+      },
+      if ((address ?? '').trim().isNotEmpty) 'address': address!.trim(),
+      if ((phone ?? '').trim().isNotEmpty) 'phone': phone!.trim(),
+      if ((paymentMode ?? '').trim().isNotEmpty)
+        'payment_mode': paymentMode!.trim().toLowerCase(),
+    };
+
+    final api = WebApiImpl();
+    for (final path in const [
+      'api/flutter/update_customer_invoice',
+      'api/flutter/update_invoice_header',
+      'api/flutter/update_customer_invoice_header',
+      'api/flutter/set_customer_invoice_header',
+    ]) {
+      try {
+        final response = await api.fetchInvoiceList(
+          endpointPath: path,
+          sessionId: sid,
+          userDetails: {
+            'jsonrpc': '2.0',
+            'method': 'call',
+            'params': params,
+            'id': 1,
+            ...params,
+          },
+          logResponseBody: false,
+        );
+        if (response.statusCode < 200 || response.statusCode >= 300) continue;
+        final body = response.body.trim();
+        if (body.isEmpty) continue;
+        if (!body.startsWith('{')) continue;
+        final decoded = jsonDecode(body);
+        if (decoded is! Map) continue;
+        final map = Map<String, dynamic>.from(decoded);
+        final status = '${map['status'] ?? ''}'.toLowerCase();
+        if (status == 'error' || status == 'fail' || status == 'failed') {
+          continue;
+        }
+        // Unknown route often returns HTML login or 404 JSON without success.
+        if (status == 'success' ||
+            map['result'] != null ||
+            map['data'] != null ||
+            map['ok'] == true) {
+          return true;
+        }
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  static void _applyHeaderFieldsToForm(
+    Map<String, String> form, {
+    String? pageHtml,
+    String? customerName,
+    int? customerId,
+    bool clearCustomer = false,
+    String? billedBy,
+    String? responsiblePerson,
+    int? responsiblePersonId,
     String? address,
     String? phone,
     String? paymentMode,
@@ -915,6 +1121,44 @@ class FlutterCustomerInvoiceWebApi {
       ], billed);
     }
 
+    final responsibleName = (responsiblePerson ?? '').trim();
+    final responsibleId = responsiblePersonId != null && responsiblePersonId > 0
+        ? responsiblePersonId
+        : null;
+    if (responsibleId != null || responsibleName.isNotEmpty) {
+      final html = pageHtml ?? '';
+      final resolvedId = responsibleId != null
+          ? '$responsibleId'
+          : _resolveSelectOptionValue(
+              html,
+              const [
+                'responsible_person_id',
+                'responsible_person',
+                'responsible_id',
+                'responsible',
+              ],
+              responsibleName,
+            );
+      final writeValue =
+          (resolvedId != null && resolvedId.isNotEmpty) ? resolvedId : responsibleName;
+      if (writeValue.isNotEmpty) {
+        setKeys(const [
+          'responsible_person_id',
+          'responsible_person',
+          'responsible_person_name',
+          'responsible_id',
+          'responsible',
+          'responsible_name',
+        ], writeValue);
+      }
+      if (responsibleName.isNotEmpty) {
+        setKeys(const [
+          'responsible_person_name',
+          'responsible_name',
+        ], responsibleName);
+      }
+    }
+
     final addr = (address ?? '').trim();
     if (addr.isNotEmpty) {
       setKeys(const ['address', 'manual_address'], addr);
@@ -929,6 +1173,926 @@ class FlutterCustomerInvoiceWebApi {
     }
   }
 
+  /// Match a `<select name=…>` option by label or value; returns option value.
+  static String? _resolveSelectOptionValue(
+    String html,
+    List<String> fieldNames,
+    String want,
+  ) {
+    final needle = want.trim().toLowerCase();
+    if (needle.isEmpty || html.isEmpty) return null;
+    final selectRe = RegExp(
+      r'''<select\b([^>]*)>([\s\S]*?)</select>''',
+      caseSensitive: false,
+    );
+    final optionRe = RegExp(
+      r'''<option\b([^>]*)>([\s\S]*?)</option>''',
+      caseSensitive: false,
+    );
+    for (final m in selectRe.allMatches(html)) {
+      final name = (_attr(m.group(1) ?? '', 'name') ?? '').toLowerCase();
+      if (name.isEmpty) continue;
+      final matchField = fieldNames.any(
+        (f) => name == f || name.endsWith('[$f]') || name.endsWith('.$f'),
+      );
+      if (!matchField) continue;
+      for (final opt in optionRe.allMatches(m.group(2) ?? '')) {
+        final value = (_attr(opt.group(1) ?? '', 'value') ?? '').trim();
+        final label = _decodeHtmlEntities(
+          (opt.group(2) ?? '').replaceAll(RegExp(r'<[^>]+>'), '').trim(),
+        );
+        if (value.toLowerCase() == needle || label.toLowerCase() == needle) {
+          return value.isNotEmpty ? value : label;
+        }
+      }
+    }
+    return null;
+  }
+
+  static String _decodeHtmlEntities(String raw) {
+    return raw
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&nbsp;', ' ');
+  }
+
+  /// Options for the Responsible Person dropdown scraped from an invoice
+  /// edit form (`#invoice-responsible` / `name=responsible_person_id`).
+  static List<({int? id, String name})> parseResponsibleOptions(String html) {
+    final out = <({int? id, String name})>[];
+    final seen = <String>{};
+    final selectRe = RegExp(
+      r'''<select\b([^>]*)>([\s\S]*?)</select>''',
+      caseSensitive: false,
+    );
+    final optionRe = RegExp(
+      r'''<option\b([^>]*)>([\s\S]*?)</option>''',
+      caseSensitive: false,
+    );
+    const fieldNames = [
+      'responsible_person_id',
+      'responsible_person',
+      'responsible_id',
+      'responsible',
+    ];
+    for (final m in selectRe.allMatches(html)) {
+      final attrs = m.group(1) ?? '';
+      final name = (_attr(attrs, 'name') ?? '').toLowerCase();
+      final idAttr = (_attr(attrs, 'id') ?? '').toLowerCase();
+      final matchField = idAttr == 'invoice-responsible' ||
+          fieldNames.any(
+            (f) => name == f || name.endsWith('[$f]') || name.endsWith('.$f'),
+          );
+      if (!matchField) continue;
+      for (final opt in optionRe.allMatches(m.group(2) ?? '')) {
+        final value = (_attr(opt.group(1) ?? '', 'value') ?? '').trim();
+        final label = _decodeHtmlEntities(
+          (opt.group(2) ?? '').replaceAll(RegExp(r'<[^>]+>'), '').trim(),
+        );
+        if (label.isEmpty ||
+            label.toLowerCase() == 'select' ||
+            label.toLowerCase().startsWith('type to') ||
+            label == '—' ||
+            label == '-' ||
+            value.isEmpty) {
+          continue;
+        }
+        final key = label.toLowerCase();
+        if (!seen.add(key)) continue;
+        out.add((
+          id: int.tryParse(value),
+          name: label,
+        ));
+      }
+      break;
+    }
+    return out;
+  }
+
+  /// Selected responsible person label/id from an invoice edit form.
+  static ({int? id, String name})? parseSelectedResponsible(String html) {
+    final selectRe = RegExp(
+      r'''<select\b([^>]*)>([\s\S]*?)</select>''',
+      caseSensitive: false,
+    );
+    final optionRe = RegExp(
+      r'''<option\b([^>]*)>([\s\S]*?)</option>''',
+      caseSensitive: false,
+    );
+    const fieldNames = [
+      'responsible_person_id',
+      'responsible_person',
+      'responsible_id',
+      'responsible',
+    ];
+    for (final m in selectRe.allMatches(html)) {
+      final name = (_attr(m.group(1) ?? '', 'name') ?? '').toLowerCase();
+      if (name.isEmpty) continue;
+      final matchField = fieldNames.any(
+        (f) => name == f || name.endsWith('[$f]') || name.endsWith('.$f'),
+      );
+      if (!matchField) continue;
+      for (final opt in optionRe.allMatches(m.group(2) ?? '')) {
+        final attrs = opt.group(1) ?? '';
+        final isSelected = RegExp(
+          r'\bselected\b',
+          caseSensitive: false,
+        ).hasMatch(attrs);
+        if (!isSelected) continue;
+        final value = (_attr(attrs, 'value') ?? '').trim();
+        final label = _decodeHtmlEntities(
+          (opt.group(2) ?? '').replaceAll(RegExp(r'<[^>]+>'), '').trim(),
+        );
+        if (label.isEmpty ||
+            label.toLowerCase().startsWith('select') ||
+            label == '—' ||
+            label == '-') {
+          return null;
+        }
+        return (id: int.tryParse(value), name: label);
+      }
+      break;
+    }
+    // Fallback: plain input fields.
+    final form = _parseFormFields(html);
+    for (final key in form.keys) {
+      final lower = key.toLowerCase();
+      if (lower.contains('responsible') &&
+          (lower.contains('name') || !lower.contains('id'))) {
+        final v = form[key]!.trim();
+        if (v.isNotEmpty && int.tryParse(v) == null) {
+          return (id: null, name: v);
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Customer Advance / Old Balance from invoice/customer edit form HTML.
+  ///
+  /// Never treats Credit Limit / Remaining as Advance (common form mix-up).
+  static ({double? advance, double? oldBalance})? parseCustomerFormBalances(
+    String html,
+  ) {
+    final form = _parseFormFields(html);
+
+    bool isCreditOrLimitField(String lower) {
+      return lower.contains('credit') ||
+          lower.contains('limit') ||
+          lower.contains('remaining') ||
+          lower.contains('available');
+    }
+
+    bool fieldMatches(String lower, String want) {
+      if (isCreditOrLimitField(lower)) return false;
+      return lower == want ||
+          lower.endsWith('[$want]') ||
+          lower.endsWith('.$want') ||
+          lower.endsWith('_$want');
+    }
+
+    double? pick(List<String> keys) {
+      for (final entry in form.entries) {
+        final lower = entry.key.toLowerCase();
+        for (final want in keys) {
+          if (!fieldMatches(lower, want)) continue;
+          final raw = entry.value.replaceAll(',', '').trim();
+          if (raw.isEmpty) continue;
+          final v = double.tryParse(raw);
+          if (v != null) return v;
+        }
+      }
+      return null;
+    }
+
+    var advance = pick(const [
+      'customer_advance_amount',
+      'advance_amount',
+      'advance_amt',
+      'advance',
+    ]);
+    var oldBalance = pick(const [
+      'customer_old_balance',
+      'old_balance',
+      'previous_balance',
+      'opening_balance',
+    ]);
+    // Credit Limit (separate from Advance) — used to reject mis-mapped values.
+    double? creditLimitAmt;
+    for (final entry in form.entries) {
+      final lower = entry.key.toLowerCase();
+      if (!(lower.contains('credit') && lower.contains('limit'))) continue;
+      if (lower.contains('day')) continue;
+      final v = double.tryParse(entry.value.replaceAll(',', '').trim());
+      if (v != null) {
+        creditLimitAmt = v;
+        break;
+      }
+    }
+
+    // id= / name= attributes that _parseFormFields may miss (readonly spans).
+    double? fromAttr(List<String> names) {
+      for (final name in names) {
+        if (name.contains('credit') || name.contains('limit')) continue;
+        final re = RegExp(
+          '''(?:name|id)\\s*=\\s*["'](?:[^"']*_)?$name(?:[^"']*)?["'][^>]*value\\s*=\\s*["']([^"']*)["']'''
+          '''|value\\s*=\\s*["']([^"']*)["'][^>]*(?:name|id)\\s*=\\s*["'](?:[^"']*_)?$name(?:[^"']*)?["']''',
+          caseSensitive: false,
+        );
+        final m = re.firstMatch(html);
+        final raw = (m?.group(1) ?? m?.group(2) ?? '')
+            .replaceAll(',', '')
+            .trim();
+        if (raw.isEmpty) continue;
+        final v = double.tryParse(raw);
+        if (v != null) return v;
+      }
+      return null;
+    }
+
+    advance ??= fromAttr(const [
+      'customer_advance_amount',
+      'advance_amount',
+      'advance_amt',
+      'advance',
+    ]);
+    oldBalance ??= fromAttr(const [
+      'customer_old_balance',
+      'old_balance',
+    ]);
+
+    // Website often puts Credit Limit in a field we might misread as Advance.
+    if (advance != null &&
+        creditLimitAmt != null &&
+        (advance - creditLimitAmt).abs() < 0.0001) {
+      advance = null;
+    }
+
+    if (advance == null && oldBalance == null) return null;
+    return (advance: advance, oldBalance: oldBalance);
+  }
+
+  /// Login + load Responsible Person master list (same as website
+  /// `#invoice-responsible` / `data-options-url=…/masters/options/responsibles`).
+  static Future<List<({int? id, String name})>> fetchResponsiblePeople({
+    required String email,
+    required String password,
+    int? invoiceId,
+    String? apiToken,
+  }) async {
+    final login = email.trim();
+    final pass = password;
+    if (login.isEmpty || pass.isEmpty) return const [];
+
+    final base = AppConfig.webViewBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 25);
+    final cookies = <String, String>{};
+    final bearer = (apiToken ?? AuthSessionStore.currentApiToken).trim();
+
+    try {
+      final loginGet = await _request(
+        client,
+        method: 'GET',
+        uri: Uri.parse('$base/login'),
+        cookies: cookies,
+        bearerToken: bearer,
+      );
+      final loginHtml = await loginGet.transform(utf8.decoder).join();
+      _storeCookies(cookies, loginGet.cookies, loginGet.headers);
+      final loginToken = _extractCsrf(loginHtml) ?? _xsrfFromCookies(cookies);
+      if (loginToken == null || loginToken.isEmpty) return const [];
+
+      final loginPost = await _request(
+        client,
+        method: 'POST',
+        uri: Uri.parse('$base/login'),
+        cookies: cookies,
+        form: {
+          '_token': loginToken,
+          'email': login,
+          'login': login,
+          'password': pass,
+        },
+        xsrfToken: _xsrfFromCookies(cookies) ?? loginToken,
+        bearerToken: bearer,
+        followRedirects: false,
+        referer: '$base/login',
+      );
+      final loginBody = await loginPost.transform(utf8.decoder).join();
+      _storeCookies(cookies, loginPost.cookies, loginPost.headers);
+      if (!_looksLoggedIn(
+        statusCode: loginPost.statusCode,
+        location: _locationOf(loginPost, loginBody),
+        body: loginBody,
+      )) {
+        return const [];
+      }
+
+      // Canonical website master JSON (filterable dropdown source).
+      for (final path in const [
+        '/masters/options/responsibles',
+        '/masters/options/responsibles?q=',
+        '/masters/options/responsibles?term=',
+      ]) {
+        final rows = await _fetchResponsibleOptionsJson(
+          client: client,
+          base: base,
+          path: path,
+          cookies: cookies,
+          bearerToken: bearer,
+        );
+        if (rows.isNotEmpty) {
+          if (kDebugMode) {
+            debugPrint(
+              'FlutterCustomerInvoiceWebApi: responsible options '
+              '${rows.length} via $path',
+            );
+          }
+          return rows;
+        }
+      }
+
+      // Fallback: scrape hidden <select id="invoice-responsible"> on create/edit.
+      final paths = <String>[
+        if (invoiceId != null && invoiceId > 0) ...[
+          '/customer-invoices/$invoiceId/edit',
+          '/customer-invoices/$invoiceId',
+        ],
+        '/customer-invoices/create',
+      ];
+      for (final path in paths) {
+        final page = await _request(
+          client,
+          method: 'GET',
+          uri: Uri.parse('$base$path'),
+          cookies: cookies,
+          bearerToken: bearer,
+          followRedirects: false,
+        );
+        final html = await page.transform(utf8.decoder).join();
+        _storeCookies(cookies, page.cookies, page.headers);
+        final loc = _locationOf(page, html);
+        if (_isLoginRedirect(page.statusCode, loc, html)) continue;
+        if (page.statusCode >= 400) continue;
+
+        final optionUrl = RegExp(
+          r'''data-options-url\s*=\s*["']([^"']*responsibles[^"']*)["']''',
+          caseSensitive: false,
+        ).firstMatch(html)?.group(1);
+        if (optionUrl != null && optionUrl.trim().isNotEmpty) {
+          final uri = optionUrl.startsWith('http')
+              ? Uri.parse(optionUrl.trim())
+              : Uri.parse(
+                  '$base${optionUrl.startsWith('/') ? '' : '/'}${optionUrl.trim()}',
+                );
+          final rows = await _fetchResponsibleOptionsJson(
+            client: client,
+            base: base,
+            path: uri.path +
+                (uri.hasQuery ? '?${uri.query}' : ''),
+            cookies: cookies,
+            bearerToken: bearer,
+          );
+          if (rows.isNotEmpty) return rows;
+        }
+
+        final rows = parseResponsibleOptions(html);
+        if (rows.isNotEmpty) {
+          if (kDebugMode) {
+            debugPrint(
+              'FlutterCustomerInvoiceWebApi: responsible options '
+              '${rows.length} via $path (select)',
+            );
+          }
+          return rows;
+        }
+      }
+      return const [];
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FlutterCustomerInvoiceWebApi.fetchResponsiblePeople: $e');
+      }
+      return const [];
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static Future<List<({int? id, String name})>> _fetchResponsibleOptionsJson({
+    required HttpClient client,
+    required String base,
+    required String path,
+    required Map<String, String> cookies,
+    required String bearerToken,
+  }) async {
+    try {
+      final uri = path.startsWith('http')
+          ? Uri.parse(path)
+          : Uri.parse('$base${path.startsWith('/') ? '' : '/'}$path');
+      final res = await _request(
+        client,
+        method: 'GET',
+        uri: uri,
+        cookies: cookies,
+        bearerToken: bearerToken,
+        followRedirects: false,
+      );
+      final body = await res.transform(utf8.decoder).join();
+      _storeCookies(cookies, res.cookies, res.headers);
+      final loc = _locationOf(res, body);
+      if (_isLoginRedirect(res.statusCode, loc, body)) return const [];
+      if (res.statusCode < 200 || res.statusCode >= 300) return const [];
+      return parseResponsibleOptionsJson(body);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          'FlutterCustomerInvoiceWebApi._fetchResponsibleOptionsJson: $e',
+        );
+      }
+      return const [];
+    }
+  }
+
+  /// Parse `/masters/options/responsibles` JSON (array or `{results|data|options}`).
+  static List<({int? id, String name})> parseResponsibleOptionsJson(
+    String body,
+  ) {
+    final trimmed = body.trim();
+    if (trimmed.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(trimmed);
+      dynamic list = decoded;
+      if (decoded is Map) {
+        final map = Map<String, dynamic>.from(decoded);
+        list = map['results'] ??
+            map['data'] ??
+            map['options'] ??
+            map['items'] ??
+            map['responsibles'] ??
+            map['rows'];
+      }
+      if (list is! List) return const [];
+      final out = <({int? id, String name})>[];
+      final seen = <String>{};
+      for (final item in list) {
+        if (item is! Map) continue;
+        final row = Map<String, dynamic>.from(item);
+        final name = (row['name'] ??
+                row['text'] ??
+                row['label'] ??
+                row['display_name'] ??
+                row['title'] ??
+                '')
+            .toString()
+            .trim();
+        if (name.isEmpty ||
+            name == '—' ||
+            name == '-' ||
+            name.toLowerCase() == 'select' ||
+            name.toLowerCase().startsWith('type to')) {
+          continue;
+        }
+        final key = name.toLowerCase();
+        if (!seen.add(key)) continue;
+        final rawId = row['id'] ?? row['value'] ?? row['key'];
+        out.add((
+          id: rawId is num ? rawId.toInt() : int.tryParse('$rawId'),
+          name: name,
+        ));
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Read selected responsible person from website invoice edit page.
+  static Future<({int? id, String name})?> fetchSelectedResponsible({
+    required int invoiceId,
+    required String email,
+    required String password,
+    String? apiToken,
+  }) async {
+    if (invoiceId <= 0) return null;
+    final login = email.trim();
+    final pass = password;
+    if (login.isEmpty || pass.isEmpty) return null;
+
+    final base = AppConfig.webViewBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 25);
+    final cookies = <String, String>{};
+    final bearer = (apiToken ?? AuthSessionStore.currentApiToken).trim();
+
+    try {
+      final loginGet = await _request(
+        client,
+        method: 'GET',
+        uri: Uri.parse('$base/login'),
+        cookies: cookies,
+        bearerToken: bearer,
+      );
+      final loginHtml = await loginGet.transform(utf8.decoder).join();
+      _storeCookies(cookies, loginGet.cookies, loginGet.headers);
+      final loginToken = _extractCsrf(loginHtml) ?? _xsrfFromCookies(cookies);
+      if (loginToken == null || loginToken.isEmpty) return null;
+
+      final loginPost = await _request(
+        client,
+        method: 'POST',
+        uri: Uri.parse('$base/login'),
+        cookies: cookies,
+        form: {
+          '_token': loginToken,
+          'email': login,
+          'login': login,
+          'password': pass,
+        },
+        xsrfToken: _xsrfFromCookies(cookies) ?? loginToken,
+        bearerToken: bearer,
+        followRedirects: false,
+        referer: '$base/login',
+      );
+      final loginBody = await loginPost.transform(utf8.decoder).join();
+      _storeCookies(cookies, loginPost.cookies, loginPost.headers);
+      if (!_looksLoggedIn(
+        statusCode: loginPost.statusCode,
+        location: _locationOf(loginPost, loginBody),
+        body: loginBody,
+      )) {
+        return null;
+      }
+
+      for (final path in [
+        '/customer-invoices/$invoiceId/edit',
+        '/customer-invoices/$invoiceId',
+      ]) {
+        final page = await _request(
+          client,
+          method: 'GET',
+          uri: Uri.parse('$base$path'),
+          cookies: cookies,
+          bearerToken: bearer,
+          followRedirects: false,
+        );
+        final html = await page.transform(utf8.decoder).join();
+        _storeCookies(cookies, page.cookies, page.headers);
+        final loc = _locationOf(page, html);
+        if (_isLoginRedirect(page.statusCode, loc, html)) continue;
+        if (page.statusCode >= 400) continue;
+        final selected = parseSelectedResponsible(html);
+        if (selected != null && selected.name.isNotEmpty) {
+          if (kDebugMode) {
+            debugPrint(
+              'FlutterCustomerInvoiceWebApi: selected responsible '
+              '${selected.name} (#${selected.id}) via $path',
+            );
+          }
+          return selected;
+        }
+      }
+      return null;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FlutterCustomerInvoiceWebApi.fetchSelectedResponsible: $e');
+      }
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// Read Advance / Old Balance from website invoice edit (Laravel, no Odoo).
+  static Future<({double? advance, double? oldBalance})?>
+      fetchCustomerFormBalances({
+    required int invoiceId,
+    required String email,
+    required String password,
+    String? apiToken,
+  }) async {
+    if (invoiceId <= 0) return null;
+    final login = email.trim();
+    final pass = password;
+    if (login.isEmpty || pass.isEmpty) return null;
+
+    final base = AppConfig.webViewBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 25);
+    final bearer = (apiToken ?? AuthSessionStore.currentApiToken).trim();
+
+    try {
+      final cookies = await _obtainWebsiteCookies(
+        client: client,
+        base: base,
+        email: login,
+        password: pass,
+        bearerToken: bearer,
+      );
+      if (cookies == null) return null;
+
+      for (final path in [
+        '/customer-invoices/$invoiceId/edit',
+        '/customer-invoices/$invoiceId',
+      ]) {
+        final page = await _request(
+          client,
+          method: 'GET',
+          uri: Uri.parse('$base$path'),
+          cookies: cookies,
+          bearerToken: bearer,
+          followRedirects: false,
+        );
+        final html = await page.transform(utf8.decoder).join();
+        _storeCookies(cookies, page.cookies, page.headers);
+        // Keep cookie cache warm for subsequent balance reads.
+        _cachedWebsiteCookies = Map<String, String>.from(cookies);
+        _cachedWebsiteCookieKey = '$login|${bearer.isNotEmpty}';
+        _cachedWebsiteCookiesAt = DateTime.now();
+        final loc = _locationOf(page, html);
+        if (_isLoginRedirect(page.statusCode, loc, html)) {
+          clearWebsiteSessionCache();
+          continue;
+        }
+        if (page.statusCode >= 400) continue;
+        final hit = parseCustomerFormBalances(html);
+        if (hit != null) {
+          if (kDebugMode) {
+            debugPrint(
+              'FlutterCustomerInvoiceWebApi: balances via $path '
+              'advance=${hit.advance} old=${hit.oldBalance}',
+            );
+          }
+          return hit;
+        }
+      }
+      return null;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          'FlutterCustomerInvoiceWebApi.fetchCustomerFormBalances: $e',
+        );
+      }
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// Masters → Customers list/edit (`/masters/customers`) — source of truth for
+  /// Old Balance / Advance on the website (not invoice list APIs).
+  ///
+  /// [listOnly] skips the edit-form round-trip (faster live refresh for Old Balance).
+  static Future<
+          ({double? advance, double? oldBalance, int? customerId})?>
+      fetchCustomerMasterBalances({
+    required String customerName,
+    required String email,
+    required String password,
+    int? customerId,
+    String? apiToken,
+    bool listOnly = false,
+  }) async {
+    final name = customerName.trim();
+    if (name.isEmpty) return null;
+    final login = email.trim();
+    final pass = password;
+    if (login.isEmpty || pass.isEmpty) return null;
+
+    final base = AppConfig.webViewBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 25);
+    final bearer = (apiToken ?? AuthSessionStore.currentApiToken).trim();
+
+    try {
+      final cookies = await _obtainWebsiteCookies(
+        client: client,
+        base: base,
+        email: login,
+        password: pass,
+        bearerToken: bearer,
+      );
+      if (cookies == null) return null;
+
+      int? id = customerId != null && customerId > 0 ? customerId : null;
+      ({double? advance, double? oldBalance, int? customerId})? fromList;
+
+      Future<({double? advance, double? oldBalance, int? customerId})?>
+          readEditForm(int formId) async {
+        for (final path in [
+          '/masters/customers/$formId/edit',
+          '/masters/customers/$formId',
+        ]) {
+          final page = await _request(
+            client,
+            method: 'GET',
+            uri: Uri.parse('$base$path'),
+            cookies: cookies,
+            bearerToken: bearer,
+            followRedirects: false,
+          );
+          final html = await page.transform(utf8.decoder).join();
+          _storeCookies(cookies, page.cookies, page.headers);
+          _cachedWebsiteCookies = Map<String, String>.from(cookies);
+          _cachedWebsiteCookieKey = '$login|${bearer.isNotEmpty}';
+          _cachedWebsiteCookiesAt = DateTime.now();
+          final loc = _locationOf(page, html);
+          if (_isLoginRedirect(page.statusCode, loc, html)) continue;
+          if (page.statusCode >= 400) continue;
+          final form = parseCustomerFormBalances(html);
+          if (form != null &&
+              (form.advance != null || form.oldBalance != null)) {
+            final merged = (
+              advance: form.advance ?? fromList?.advance,
+              oldBalance: form.oldBalance ?? fromList?.oldBalance,
+              customerId: formId,
+            );
+            if (kDebugMode) {
+              debugPrint(
+                'FlutterCustomerInvoiceWebApi: master form balances '
+                '$name #$formId advance=${merged.advance} '
+                'old=${merged.oldBalance}',
+              );
+            }
+            return merged;
+          }
+        }
+        return null;
+      }
+
+      // Fast live path: known id → edit form (Advance + Old Balance).
+      if (!listOnly && id != null && id > 0) {
+        final formHit = await readEditForm(id);
+        if (formHit != null) return formHit;
+      }
+
+      // Searchable master list (Old Balance column; resolves id when unknown).
+      final q = Uri.encodeQueryComponent(
+        name.length > 24 ? name.substring(0, 24) : name,
+      );
+      for (final path in [
+        '/masters/customers?q=$q',
+        '/masters/customers?search=$q',
+        '/masters/customers',
+      ]) {
+        final page = await _request(
+          client,
+          method: 'GET',
+          uri: Uri.parse('$base$path'),
+          cookies: cookies,
+          bearerToken: bearer,
+          followRedirects: false,
+        );
+        final html = await page.transform(utf8.decoder).join();
+        _storeCookies(cookies, page.cookies, page.headers);
+        _cachedWebsiteCookies = Map<String, String>.from(cookies);
+        _cachedWebsiteCookieKey = '$login|${bearer.isNotEmpty}';
+        _cachedWebsiteCookiesAt = DateTime.now();
+        final loc = _locationOf(page, html);
+        if (_isLoginRedirect(page.statusCode, loc, html)) {
+          clearWebsiteSessionCache();
+          continue;
+        }
+        if (page.statusCode >= 400) continue;
+        final hit = parseCustomerMasterListBalances(html, name);
+        if (hit != null) {
+          fromList = hit;
+          id ??= hit.customerId;
+          if (kDebugMode) {
+            debugPrint(
+              'FlutterCustomerInvoiceWebApi: master list balances '
+              '$name advance=${hit.advance} old=${hit.oldBalance}',
+            );
+          }
+          if (listOnly) return hit;
+          if (hit.advance != null && hit.advance != 0) return hit;
+          break;
+        }
+      }
+
+      if (listOnly) return fromList;
+
+      // Edit form for Advance when list had no advance / id just discovered.
+      if (id != null && id > 0) {
+        final formHit = await readEditForm(id);
+        if (formHit != null) return formHit;
+      }
+
+      return fromList;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          'FlutterCustomerInvoiceWebApi.fetchCustomerMasterBalances: $e',
+        );
+      }
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static bool _masterBalanceUseful(double? advance, double? oldBalance) {
+    return (advance != null && advance != 0) ||
+        (oldBalance != null && oldBalance != 0);
+  }
+
+  /// Parse Old Balance / Advance from `/masters/customers` HTML table.
+  static ({double? advance, double? oldBalance, int? customerId})?
+      parseCustomerMasterListBalances(String html, String customerName) {
+    final want = customerName.trim().toLowerCase();
+    if (want.isEmpty) return null;
+
+    final headerRe = RegExp(
+      r'''<tr\b[^>]*>([\s\S]*?)</tr>''',
+      caseSensitive: false,
+    );
+    final cellRe = RegExp(
+      r'''<t[hd]\b[^>]*>([\s\S]*?)</t[hd]>''',
+      caseSensitive: false,
+    );
+
+    int? oldIdx;
+    int? advIdx;
+    int? nameIdx;
+    var headerDone = false;
+
+    ({double? advance, double? oldBalance, int? customerId})? best;
+
+    for (final row in headerRe.allMatches(html)) {
+      final cells = cellRe
+          .allMatches(row.group(1) ?? '')
+          .map((m) => _decodeHtmlEntities(
+                (m.group(1) ?? '')
+                    .replaceAll(RegExp(r'<[^>]+>'), ' ')
+                    .replaceAll(RegExp(r'\s+'), ' ')
+                    .trim(),
+              ))
+          .toList(growable: false);
+      if (cells.isEmpty) continue;
+
+      if (!headerDone) {
+        final lowers = cells.map((c) => c.toLowerCase()).toList();
+        final looksHeader = lowers.any(
+          (c) =>
+              c.contains('old balance') ||
+              c.contains('credit limit') ||
+              c == 'name' ||
+              c.contains('advance'),
+        );
+        if (looksHeader) {
+          for (var i = 0; i < lowers.length; i++) {
+            final c = lowers[i];
+            if (nameIdx == null && (c == 'name' || c.contains('customer'))) {
+              nameIdx = i;
+            }
+            if (oldIdx == null && c.contains('old') && c.contains('balance')) {
+              oldIdx = i;
+            }
+            if (advIdx == null && c.contains('advance')) {
+              advIdx = i;
+            }
+          }
+          headerDone = true;
+          continue;
+        }
+      }
+
+      final nameCell = nameIdx != null && nameIdx < cells.length
+          ? cells[nameIdx]
+          : cells.first;
+      final nameLower = nameCell.toLowerCase();
+      if (nameLower.isEmpty) continue;
+      final exact = nameLower == want;
+      final fuzzy = nameLower.contains(want) || want.contains(nameLower);
+      if (!exact && !fuzzy) continue;
+
+      double? parseMoney(String? raw) {
+        if (raw == null || raw.isEmpty) return null;
+        final cleaned = raw.replaceAll(',', '').replaceAll(RegExp(r'[^\d.\-]'), '');
+        if (cleaned.isEmpty) return null;
+        return double.tryParse(cleaned);
+      }
+
+      final old = oldIdx != null && oldIdx < cells.length
+          ? parseMoney(cells[oldIdx])
+          : null;
+      final adv = advIdx != null && advIdx < cells.length
+          ? parseMoney(cells[advIdx])
+          : null;
+
+      int? id;
+      final href = RegExp(
+        r'''/masters/customers/(\d+)''',
+        caseSensitive: false,
+      ).firstMatch(row.group(1) ?? '');
+      if (href != null) id = int.tryParse(href.group(1)!);
+
+      final hit = (advance: adv, oldBalance: old, customerId: id);
+      if (exact) return hit;
+      best ??= hit;
+    }
+    return best;
+  }
+
   static Future<bool> _tryJsonHeaderUpdate({
     required HttpClient client,
     required String base,
@@ -937,6 +2101,8 @@ class FlutterCustomerInvoiceWebApi {
     int? customerId,
     bool clearCustomer = false,
     String? billedBy,
+    String? responsiblePerson,
+    int? responsiblePersonId,
     String? address,
     String? phone,
     String? paymentMode,
@@ -961,6 +2127,16 @@ class FlutterCustomerInvoiceWebApi {
       if ((billedBy ?? '').trim().isNotEmpty) ...{
         'billed_by': billedBy!.trim(),
         'billed_by_name': billedBy.trim(),
+      },
+      if (responsiblePersonId != null && responsiblePersonId > 0) ...{
+        'responsible_person_id': responsiblePersonId,
+        'responsible_id': responsiblePersonId,
+      },
+      if ((responsiblePerson ?? '').trim().isNotEmpty) ...{
+        'responsible_person': responsiblePerson!.trim(),
+        'responsible_person_name': responsiblePerson.trim(),
+        'responsible': responsiblePerson.trim(),
+        'responsible_name': responsiblePerson.trim(),
       },
       if ((address ?? '').trim().isNotEmpty) 'address': address!.trim(),
       if ((phone ?? '').trim().isNotEmpty) 'phone': phone!.trim(),

@@ -23,6 +23,7 @@ class CustomerInvoiceDetailPage extends StatefulWidget {
     this.partnerLabel = 'Customer',
     this.allowScan = true,
     this.supplierLayout = false,
+    this.balanceOverride,
   });
 
   final InvoiceSummaryModel invoice;
@@ -32,6 +33,9 @@ class CustomerInvoiceDetailPage extends StatefulWidget {
   final bool allowScan;
   /// You Gave only: show Ordered Qty, Received Qty, Free Qty on lines.
   final bool supplierLayout;
+  /// When opening from a payment voucher, keep Balance after that pay
+  /// (API detail often still returns pre-pay residual).
+  final double? balanceOverride;
 
   @override
   State<CustomerInvoiceDetailPage> createState() =>
@@ -63,14 +67,21 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
     super.dispose();
   }
 
+  InvoiceSummaryModel _withPaymentBalance(InvoiceSummaryModel loaded) {
+    final override = widget.balanceOverride;
+    if (override == null) return loaded;
+    return loaded.mergedWith(InvoiceSummaryModel(balance: override));
+  }
+
   Future<void> _loadDetail() async {
     final loaded = await InvoiceDetailService.fetchCustomerInvoice(
       context,
       seed: widget.invoice,
+      asSupplier: widget.supplierLayout,
     );
     if (!mounted) return;
     setState(() {
-      _invoice = loaded;
+      _invoice = _withPaymentBalance(loaded);
       _loadingLines = false;
       _linesOverride = null;
     });
@@ -212,11 +223,12 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
       final loaded = await InvoiceDetailService.fetchCustomerInvoice(
         context,
         seed: _invoice,
+        asSupplier: widget.supplierLayout,
       );
       if (!mounted) return;
       if (loaded.lines.length >= expectedMin) {
         setState(() {
-          _invoice = loaded;
+          _invoice = _withPaymentBalance(loaded);
           _linesOverride = null;
           _loadingLines = false;
         });

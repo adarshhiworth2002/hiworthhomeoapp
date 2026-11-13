@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 
@@ -15,32 +17,35 @@ import 'auth_session_store.dart';
 import 'endPoints.dart';
 import 'session_helper.dart';
 
-/// Shares the server-generated customer invoice PDF via Laravel Flutter APIs.
+/// Shares a customer invoice / payment receipt PDF.
+///
+/// Prefers the server print PDF when available; otherwise builds a local
+/// receipt so Share still works when Laravel print routes fail.
 class CustomerInvoicePdfService {
   const CustomerInvoicePdfService._();
 
   static Future<void> shareInvoice(
     BuildContext context, {
     required InvoiceSummaryModel invoice,
+    double? payAmount,
+    String? paymentName,
   }) async {
     final id = invoice.id;
-    if (id == null || id <= 0) {
-      _toast(context, 'Invoice id missing — open the bill first.');
-      return;
-    }
-
     final login = Provider.of<LoginViewmodel>(context, listen: false);
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
-      const SnackBar(content: Text('Preparing invoice PDF…')),
+      const SnackBar(content: Text('Preparing receipt PDF…')),
     );
 
     try {
       Uint8List? bytes;
 
       final flutterSid = login.sessionId;
-      if (flutterSid != null && flutterSid.isNotEmpty) {
+      if (id != null &&
+          id > 0 &&
+          flutterSid != null &&
+          flutterSid.isNotEmpty) {
         // Laravel route: GET /api/pharmacy_mgmnt/auto_print_invoice/{moveId}
         bytes = await _fromAutoPrintApi(
           sessionId: flutterSid,
@@ -53,20 +58,30 @@ class CustomerInvoicePdfService {
         );
       }
 
+      // Server print is often HTML/login/500 — always keep a local receipt.
+      bytes ??= await _buildLocalReceiptPdf(
+        invoice: invoice,
+        payAmount: payAmount,
+        paymentName: paymentName,
+      );
+
       if (!context.mounted) return;
       messenger.hideCurrentSnackBar();
 
-      if (bytes == null || bytes.isEmpty) {
-        _toast(context, 'Could not generate invoice PDF.');
+      if (bytes.isEmpty) {
+        _toast(context, 'Could not generate receipt PDF.');
         return;
       }
 
       final name = invoice.displayNumber
           .replaceAll(RegExp(r'[^\w\-./]+'), '_')
           .replaceAll('/', '-');
+      final fileId = id != null && id > 0
+          ? id.toString()
+          : (name.isEmpty ? 'receipt' : name);
       await Printing.sharePdf(
         bytes: bytes,
-        filename: 'invoice_${name.isEmpty ? id : name}.pdf',
+        filename: 'invoice_${name.isEmpty ? fileId : name}.pdf',
       );
     } catch (e) {
       if (kDebugMode) debugPrint('CustomerInvoicePdfService.shareInvoice: $e');
@@ -100,6 +115,7 @@ class CustomerInvoicePdfService {
       if (body.startsWith('{')) {
         return _pdfFromJson(jsonDecode(body));
       }
+      // HTML print wrapper is not a shareable PDF.
       return null;
     } catch (e) {
       if (kDebugMode) {
@@ -144,6 +160,104 @@ class CustomerInvoicePdfService {
     }
   }
 
+  static Future<Uint8List> _buildLocalReceiptPdf({
+    required InvoiceSummaryModel invoice,
+    double? payAmount,
+    String? paymentName,
+  }) async {
+    final doc = pw.Document();
+    final number = invoice.displayNumber;
+    final customer = (invoice.displayCustomer ?? invoice.customer ?? '').trim();
+    final date = (invoice.invoiceDate ?? '').trim();
+    final mode = (invoice.paymentMode ?? '').trim();
+    final status = invoice.displayStatus.trim();
+    final payLabel = (paymentName ?? '').trim();
+
+    pw.Widget row(String label, String value, {bool bold = false}) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 8),
+        child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.SizedBox(
+              width: 130,
+              child: pw.Text(
+                label,
+                style: const pw.TextStyle(
+                  fontSize: 12,
+                  color: PdfColors.grey700,
+                ),
+              ),
+            ),
+            pw.Expanded(
+              child: pw.Text(
+                value.isEmpty ? '—' : value,
+                style: pw.TextStyle(
+                  fontSize: 13,
+                  fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    doc.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(36),
+        build: (context) => pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              'Payment Receipt',
+              style: pw.TextStyle(
+                fontSize: 22,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 6),
+            pw.Text(
+              'Athurasramam Homeo Medicals',
+              style: const pw.TextStyle(
+                fontSize: 12,
+                color: PdfColors.grey700,
+              ),
+            ),
+            pw.SizedBox(height: 18),
+            pw.Divider(),
+            pw.SizedBox(height: 12),
+            if (payLabel.isNotEmpty) row('Payment', payLabel, bold: true),
+            row('Invoice', number, bold: true),
+            row('Customer', customer.isEmpty ? '—' : customer),
+            row('Date', date.isEmpty ? '—' : date),
+            if (mode.isNotEmpty) row('Payment Mode', mode),
+            if (status.isNotEmpty) row('Status', status),
+            row('Bill Total', InvoiceSummaryModel.formatMoney(invoice.total)),
+            row('Balance', InvoiceSummaryModel.formatMoney(invoice.balance)),
+            if (payAmount != null && payAmount > 0.0001)
+              row(
+                'Pay Amount',
+                InvoiceSummaryModel.formatMoney(payAmount),
+                bold: true,
+              ),
+            pw.SizedBox(height: 24),
+            pw.Text(
+              'Shared from Homeo app',
+              style: const pw.TextStyle(
+                fontSize: 10,
+                color: PdfColors.grey600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    return doc.save();
+  }
+
   static Uint8List? _pdfFromJson(dynamic decoded) {
     if (decoded is! Map) return null;
     final result = decoded['result'] ?? decoded['data'] ?? decoded;
@@ -159,12 +273,6 @@ class CustomerInvoicePdfService {
         final raw = result[key];
         final bytes = _decodePdfPayload(raw);
         if (bytes != null) return bytes;
-      }
-      final url = result['pdf_url'] ?? result['url'] ?? result['report_url'];
-      if (url is String && url.trim().isNotEmpty) {
-        // Absolute or site-relative URL — caller may fetch separately.
-        // Handled below only when absolute http(s).
-        return null;
       }
     }
     return _decodePdfPayload(result);

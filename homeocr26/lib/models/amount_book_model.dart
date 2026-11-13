@@ -374,6 +374,8 @@ class AmountBookLedgerBuilder {
     final matched = <NetAmountRow>[];
 
     for (final row in invoiceRows) {
+      // Match cancelled payments: drop cancelled bills from YOU GAVE / ledger.
+      if (row.sectionKey == 'cancel') continue;
       if (!_rowMatchesCustomer(row, target)) continue;
       if (filter != null) {
         if (!rowInDateRange(row, filter.dateFrom, filter.dateTo)) continue;
@@ -582,9 +584,9 @@ class AmountBookLedgerBuilder {
     if (payment.invoices.isEmpty) return const [];
     final lines = <AmountBookInvoiceLine>[];
     for (final inv in payment.invoices) {
-      final allocated = inv.allocatedAmount > 0
-          ? inv.allocatedAmount
-          : (payment.invoices.length == 1 ? payment.amount : 0.0);
+      // Detail payloads list every open bill; only keep lines this voucher paid.
+      final allocated = CustomerPaymentRecord.effectiveAllocation(inv, payment);
+      if (allocated <= 0.0001) continue;
       final row = _rowForInvoice(inv, matched, payment);
       final number = inv.number.trim().isNotEmpty
           ? inv.number.trim()
@@ -596,14 +598,28 @@ class AmountBookLedgerBuilder {
       final invoiceDate = CalendarDate.parseDateTime(inv.invoiceDate) ??
           parseRowDateTime(row) ??
           payment.dateTime;
+      final total = inv.total ?? row.total;
+      double? balance = inv.balanceAfter ?? inv.balance;
+      if (balance == null && inv.balanceDue != null) {
+        balance = inv.balanceDue! - allocated;
+        if (balance < 0) balance = 0;
+      }
+      balance ??= row.balance;
+      if (balance != null &&
+          total != null &&
+          allocated > 0.0001 &&
+          (balance - total).abs() < 0.0001) {
+        final remaining = (inv.balanceDue ?? total) - allocated;
+        balance = remaining < 0 ? 0 : remaining;
+      }
       lines.add(
         AmountBookInvoiceLine(
           number: number,
           isYouGave: false,
           invoiceId: inv.invoiceId ?? row.id,
           sortDate: invoiceDate,
-          total: inv.total ?? row.total,
-          balance: inv.balance ?? row.balance,
+          total: total,
+          balance: balance,
           youGotAmount: allocated,
           status: inv.status.isNotEmpty
               ? inv.status
@@ -633,9 +649,17 @@ class AmountBookLedgerBuilder {
       if (payment.amount <= 0.0001) continue;
       sequence += 1;
       final lines = _linesForPayment(payment, matched);
-      final row = lines.isNotEmpty
+      CustomerPaymentInvoice? paidInv;
+      for (final inv in payment.invoices) {
+        if (CustomerPaymentRecord.effectiveAllocation(inv, payment) > 0.0001) {
+          paidInv = inv;
+          break;
+        }
+      }
+      paidInv ??= payment.invoices.isEmpty ? null : payment.invoices.first;
+      final row = paidInv != null
           ? _rowForInvoice(
-              payment.invoices.first,
+              paidInv,
               matched,
               payment,
             )
@@ -662,74 +686,6 @@ class AmountBookLedgerBuilder {
       );
     }
     return events;
-  }
-
-  static List<_LedgerEvent> _groupTimedPayEvents(List<_LedgerEvent> events) {
-    if (events.length < 2) return events;
-    final ungrouped = <_LedgerEvent>[];
-    final live = <_LedgerEvent>[];
-    final now = DateTime.now();
-    for (final event in events) {
-      final date = event.date;
-      final isLive = date != null &&
-          CalendarDate.hasClockTime(date) &&
-          now.difference(date).abs() <= const Duration(minutes: 2);
-      if (isLive) {
-        live.add(event);
-      } else {
-        ungrouped.add(event);
-      }
-    }
-    if (live.length < 2) return events;
-
-    live.sort((a, b) {
-      final cmp = (a.date ?? DateTime(1970)).compareTo(b.date ?? DateTime(1970));
-      if (cmp != 0) return cmp;
-      return a.sequence.compareTo(b.sequence);
-    });
-
-    final grouped = <_LedgerEvent>[];
-    var cluster = <_LedgerEvent>[live.first];
-    for (var i = 1; i < live.length; i++) {
-      final prev = cluster.last.date!;
-      final next = live[i].date!;
-      if (next.difference(prev).abs() <= const Duration(seconds: 2)) {
-        cluster.add(live[i]);
-      } else {
-        grouped.add(_mergePayCluster(cluster));
-        cluster = [live[i]];
-      }
-    }
-    grouped.add(_mergePayCluster(cluster));
-    return [...ungrouped, ...grouped];
-  }
-
-  static _LedgerEvent _mergePayCluster(List<_LedgerEvent> cluster) {
-    if (cluster.length == 1) return cluster.first;
-    var amount = 0.0;
-    final lines = <AmountBookInvoiceLine>[];
-    DateTime? latest = cluster.first.date;
-    for (final event in cluster) {
-      amount += event.amount;
-      lines.addAll(
-        event.lines.isNotEmpty ? event.lines : [_lineForEvent(event)],
-      );
-      if (event.date != null &&
-          (latest == null || event.date!.isAfter(latest))) {
-        latest = event.date;
-      }
-    }
-    return _LedgerEvent(
-      row: cluster.first.row,
-      isSale: false,
-      amount: amount,
-      billTotal: amount,
-      invoiceBalance: cluster.last.invoiceBalance,
-      date: latest,
-      sequence: cluster.last.sequence,
-      paymentMode: cluster.first.paymentMode,
-      lines: lines,
-    );
   }
 
   static bool _payEventCovered(
@@ -793,28 +749,23 @@ class AmountBookLedgerBuilder {
     for (final payment in payments) {
       if (!_paymentMatchesCustomer(payment, customerName)) continue;
       if (!_paymentInFilter(payment, filter)) continue;
+      if (payment.amount <= 0.0001) continue;
       customerHasApiPayments = true;
       for (final inv in payment.invoices) {
+        final amt = CustomerPaymentRecord.effectiveAllocation(inv, payment);
+        if (amt <= 0.0001) continue;
         final key = _allocationKey(inv);
-        final amt = inv.allocatedAmount > 0
-            ? inv.allocatedAmount
-            : (payment.invoices.length == 1 ? payment.amount : 0.0);
         covered[key] = (covered[key] ?? 0) + amt;
-      }
-      // Also cover by payment total when lines are missing — suppress
-      // fragmented invoice-paid leftovers for this customer.
-      if (payment.invoices.isEmpty && payment.amount > 0) {
-        covered['__unallocated__'] =
-            (covered['__unallocated__'] ?? 0) + payment.amount;
       }
     }
 
-    final leftoverPay = <_LedgerEvent>[];
-    // When website payments are loaded for this customer, YOU GOT comes only
-    // from partner.payment (one row per payment with nested bills). Do not
-    // invent fragmented per-invoice "paid delta" rows that break the 500rs
-    // grouping and throw the running balance off.
+    // Each payment voucher is already its own YOU GOT row (apiPayEvents).
+    // Invoice "paid so far" is a running total (₹300 then ₹500 becomes ₹800),
+    // so once real vouchers exist it must not be added again — that is what
+    // folded the new payment into the old one. Customers with no vouchers
+    // still fall back to the invoice paid amount, one row per invoice.
     if (!customerHasApiPayments) {
+      final leftoverPay = <_LedgerEvent>[];
       for (final snapshots in byInvoice.values) {
         leftoverPay.addAll(
           _eventsFromInvoiceSnapshots(
@@ -827,40 +778,7 @@ class AmountBookLedgerBuilder {
         );
       }
       leftoverPay.removeWhere((event) => _payEventCovered(event, covered));
-      events.addAll(_groupTimedPayEvents(leftoverPay));
-    } else {
-      // Still allow brand-new live payments not yet in partner.payment.
-      for (final snapshots in byInvoice.values) {
-        leftoverPay.addAll(
-          _eventsFromInvoiceSnapshots(
-            snapshots,
-            paymentEventsFor,
-            saleEventsFor,
-            false,
-            true,
-          ),
-        );
-      }
-      leftoverPay.removeWhere((event) => _payEventCovered(event, covered));
-      leftoverPay.removeWhere((event) {
-        final date = event.date;
-        if (date == null || !CalendarDate.hasClockTime(date)) return true;
-        return DateTime.now().difference(date).abs() >
-            const Duration(minutes: 2);
-      });
-      var unallocatedApi = covered['__unallocated__'] ?? 0;
-      leftoverPay.sort((a, b) {
-        return (a.date ?? DateTime(1970)).compareTo(b.date ?? DateTime(1970));
-      });
-      leftoverPay.removeWhere((event) {
-        if (unallocatedApi <= 0.0001) return false;
-        if (event.amount <= unallocatedApi + 0.0001) {
-          unallocatedApi -= event.amount;
-          return true;
-        }
-        return false;
-      });
-      events.addAll(_groupTimedPayEvents(leftoverPay));
+      events.addAll(leftoverPay);
     }
 
     events.sort((a, b) {
@@ -901,12 +819,16 @@ class AmountBookLedgerBuilder {
       );
     }
 
-    // Align running Bal. with website residual sum (You will get).
-    // Cash-flow running can drift when invoice list residuals lag payments.
+    // Align Bal. only to a trustworthy outstanding. Invoice-list residuals
+    // often lag payments (ROBIN: list still 1950 while cash-flow is 1150) —
+    // that used to inflate every Bal. by the delta. Prefer payment-line
+    // residuals; when vouchers exist but lines lack residuals, keep cash-flow.
     if (chronological.isNotEmpty) {
-      final target = outstandingFromInvoices(
+      final target = outstandingForCustomer(
         customerName: customerName,
         invoiceRows: youGotRows,
+        payments: payments,
+        cashFlowRunning: running,
       );
       final delta = target - running;
       if (delta.abs() > 0.0001) {
@@ -931,6 +853,125 @@ class AmountBookLedgerBuilder {
     return chronological.reversed.toList(growable: false);
   }
 
+  /// Normalize invoice / payment-line keys so id: and no: match across sources.
+  static String _normBalanceKey(String key) {
+    if (key.startsWith('no:')) {
+      return 'no:${key.substring(3).trim().toLowerCase()}';
+    }
+    return key;
+  }
+
+  /// Outstanding when payment vouchers carry allocated lines (Balance after pay).
+  /// Returns null when no allocation lines exist (list payload often omits them).
+  static double? outstandingFromPaymentAllocations({
+    required String customerName,
+    required List<NetAmountRow> invoiceRows,
+    required List<CustomerPaymentRecord> payments,
+  }) {
+    final allocated = <String, double>{};
+    final residualHint = <String, double>{};
+    var anyAlloc = false;
+
+    for (final payment in payments) {
+      if (!_paymentMatchesCustomer(payment, customerName)) continue;
+      for (final inv in payment.invoices) {
+        final amt = CustomerPaymentRecord.effectiveAllocation(inv, payment);
+        if (amt <= 0.0001) continue;
+        anyAlloc = true;
+        final key = _normBalanceKey(_allocationKey(inv));
+        allocated[key] = (allocated[key] ?? 0) + amt;
+        final bal = inv.balanceAfter ?? inv.balance;
+        if (bal != null) {
+          final prev = residualHint[key];
+          residualHint[key] = prev == null ? bal : (bal < prev ? bal : prev);
+        }
+      }
+    }
+    if (!anyAlloc) return null;
+
+    final matched = _matchingInvoiceRows(
+      customerName: customerName,
+      invoiceRows: invoiceRows,
+    );
+    final seen = <String>{};
+    var sum = 0.0;
+
+    for (final row in matched) {
+      if (row.sectionKey == 'cancel') continue;
+      final key = _normBalanceKey(_invoiceKey(row));
+      if (!seen.add(key)) continue;
+
+      final hint = residualHint[key];
+      if (hint != null) {
+        if (hint > 0.0001) sum += hint;
+        continue;
+      }
+
+      final paid = allocated[key] ?? 0;
+      final total = row.total;
+      if (total != null && paid > 0.0001) {
+        final remaining = total - paid;
+        if (remaining > 0.0001) sum += remaining;
+        continue;
+      }
+
+      final bal = row.balance;
+      if (bal != null) {
+        if (bal > 0.0001) sum += bal;
+        continue;
+      }
+      if (!row.isPaid && !row.invoicePaidFlag) {
+        final t = total ?? 0;
+        if (t > 0.0001) sum += t;
+      }
+    }
+
+    // Payment lines for invoices not in the list (still open residual).
+    for (final entry in residualHint.entries) {
+      if (seen.contains(entry.key)) continue;
+      if (entry.value > 0.0001) sum += entry.value;
+    }
+
+    return sum;
+  }
+
+  /// Best outstanding for Cash Book Bal. / footer / You will get.
+  static double outstandingForCustomer({
+    required String customerName,
+    required List<NetAmountRow> invoiceRows,
+    List<CustomerPaymentRecord> payments = const [],
+    double? cashFlowRunning,
+  }) {
+    final fromPays = outstandingFromPaymentAllocations(
+      customerName: customerName,
+      invoiceRows: invoiceRows,
+      payments: payments,
+    );
+    if (fromPays != null) return fromPays;
+
+    final fromList = outstandingFromInvoices(
+      customerName: customerName,
+      invoiceRows: invoiceRows,
+    );
+
+    // API payment vouchers exist but nested bills/residuals are missing —
+    // invoice list still shows full open totals. Trust cash-flow running.
+    var hasVoucher = false;
+    for (final payment in payments) {
+      if (!_paymentMatchesCustomer(payment, customerName)) continue;
+      if (payment.amount > 0.0001) {
+        hasVoucher = true;
+        break;
+      }
+    }
+    if (hasVoucher &&
+        cashFlowRunning != null &&
+        (fromList - cashFlowRunning).abs() > 0.0001) {
+      return cashFlowRunning;
+    }
+    return fromList;
+  }
+
   /// Website "Balance Amount" / "You will get" = sum of open invoice residuals.
   static double outstandingFromInvoices({
     required String customerName,
@@ -943,6 +984,8 @@ class AmountBookLedgerBuilder {
     final seen = <String>{};
     var sum = 0.0;
     for (final row in matched) {
+      // matched already drops cancel; keep guard for direct callers.
+      if (row.sectionKey == 'cancel') continue;
       final key = _invoiceKey(row);
       if (!seen.add(key)) continue;
       final bal = row.balance;
@@ -1025,10 +1068,12 @@ class AmountBookLedgerBuilder {
       apiOld = opening;
     }
 
-    // Match website balance (sum of invoice residuals), e.g. 239.20 for Ajith.
-    final balance = outstandingFromInvoices(
+    // Prefer payment-aware outstanding (same as Bal. / You will get).
+    final balance = outstandingForCustomer(
       customerName: customerName,
       invoiceRows: invoiceRows,
+      payments: payments,
+      cashFlowRunning: lastEntryBalance(allEntries),
     );
 
     return AmountBookCustomerFooter(
@@ -1074,7 +1119,15 @@ class AmountBookLedgerBuilder {
   }) {
     final names = <String>{};
     for (final row in youGotRows) {
+      if (row.sectionKey == 'cancel') continue;
       final name = (row.customer ?? '').trim();
+      if (name.isEmpty) continue;
+      if (isWalkInOrNamelessName(name)) continue;
+      names.add(name);
+    }
+    // Website Cash Book also lists customers who only have payments.
+    for (final payment in payments) {
+      final name = (payment.customerName ?? '').trim();
       if (name.isEmpty) continue;
       if (isWalkInOrNamelessName(name)) continue;
       names.add(name);
@@ -1100,9 +1153,11 @@ class AmountBookLedgerBuilder {
         _summaryFor(
           customerName: name,
           entries: entries,
-          outstanding: outstandingFromInvoices(
+          outstanding: outstandingForCustomer(
             customerName: name,
             invoiceRows: youGotRows,
+            payments: payments,
+            cashFlowRunning: lastEntryBalance(entries),
           ),
         ),
       );
@@ -1124,9 +1179,11 @@ class AmountBookLedgerBuilder {
           _summaryFor(
             customerName: noneCustomerLabel,
             entries: noneEntries,
-            outstanding: outstandingFromInvoices(
+            outstanding: outstandingForCustomer(
               customerName: noneCustomerLabel,
               invoiceRows: youGotRows,
+              payments: payments,
+              cashFlowRunning: lastEntryBalance(noneEntries),
             ),
           ),
         );

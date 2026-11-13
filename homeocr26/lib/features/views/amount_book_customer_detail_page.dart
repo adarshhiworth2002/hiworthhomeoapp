@@ -50,14 +50,15 @@ class _AmountBookCustomerDetailPageState
           headOnly: true,
         );
         if (!mounted) return;
-        // Re-read advance/old from Odoo so website edits show live.
-        await model.ensureBalancesForCustomer(
-          context,
-          widget.summary.customerName,
-          force: true,
+        // Soft masters list refresh (Old Balance) — no cache wipe / no form.
+        unawaited(
+          model.ensureBalancesForCustomer(
+            context,
+            widget.summary.customerName,
+          ),
         );
       },
-      interval: const Duration(seconds: 8),
+      interval: const Duration(seconds: 3),
       immediate: false,
     );
   }

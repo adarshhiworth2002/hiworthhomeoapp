@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/invoice_summary_model.dart';
 import '../../models/stock_item_model.dart';
+import '../../viewModels/amount_book_viewmodel.dart';
 import '../../viewModels/customer_invoice_viewmodel.dart';
 import '../../viewModels/customer_med_viewModel.dart';
 import '../../viewModels/login_viewmodel.dart';
@@ -570,16 +571,50 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         seed: seed,
       );
       if (!mounted) return;
+      var responsible = (loaded.responsiblePerson ?? '').trim();
+      int? responsibleId;
+      // Laravel get_customer_invoice often omits responsible — scrape edit form.
+      if (responsible.isEmpty && !AppConfig.odooRpcEnabled) {
+        final login = context.read<LoginViewmodel>();
+        var email = (login.loginEmail ?? '').trim();
+        var pass = login.loginPassword ?? '';
+        if (email.isEmpty || pass.isEmpty) {
+          final saved = await AuthSessionStore.load();
+          email = (saved?.email ?? '').trim();
+          pass = saved?.password ?? '';
+        }
+        final invId = seed.id ?? _serverInvoiceId;
+        if (email.isNotEmpty && pass.isNotEmpty && invId != null) {
+          final web = await FlutterCustomerInvoiceWebApi.fetchSelectedResponsible(
+            invoiceId: invId,
+            email: email,
+            password: pass,
+            apiToken: AuthSessionStore.currentApiToken,
+          );
+          if (web != null && web.name.trim().isNotEmpty) {
+            responsible = web.name.trim();
+            responsibleId = web.id;
+          }
+        }
+      }
+      if (!mounted) return;
       setState(() {
-        final responsible = (loaded.responsiblePerson ?? '').trim();
         if (responsible.isNotEmpty) {
-          _responsible = _NamedOption(name: responsible);
+          _responsible = _NamedOption(name: responsible, id: responsibleId);
           final lower = responsible.toLowerCase();
           if (!_responsiblePeople.any((r) => r.name.toLowerCase() == lower)) {
             _responsiblePeople = [..._responsiblePeople, _responsible!]
               ..sort(
                 (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
               );
+          } else if (responsibleId != null) {
+            _responsiblePeople = _responsiblePeople
+                .map(
+                  (r) => r.name.toLowerCase() == lower
+                      ? r.copyWith(id: responsibleId)
+                      : r,
+                )
+                .toList();
           }
         }
         _applyBilledByFromServer(loaded.billedBy);
@@ -1037,36 +1072,88 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
   Future<void> _loadResponsiblePeople() async {
     try {
-      final byName = <String, _NamedOption>{
-        for (final r in _responsiblePeople) r.name.toLowerCase(): r,
-      };
+      final login = context.read<LoginViewmodel>();
+      var email = (login.loginEmail ?? '').trim();
+      var pass = login.loginPassword ?? '';
+
+      final byName = <String, _NamedOption>{};
+
+      void putPerson({required String name, int? id}) {
+        final t = name.trim();
+        if (t.isEmpty) return;
+        final key = t.toLowerCase();
+        final existing = byName[key];
+        if (existing == null) {
+          byName[key] = _NamedOption(name: t, id: id);
+        } else if (id != null && existing.id == null) {
+          byName[key] = existing.copyWith(id: id);
+        }
+      }
+
       // Keep the value already applied from a saved invoice in the list.
       final selected = (_responsible?.name ?? '').trim();
       if (selected.isNotEmpty) {
-        byName.putIfAbsent(
-          selected.toLowerCase(),
-          () => _responsible!,
-        );
-      }
-      for (final name in await BillNameStore.loadResponsible()) {
-        final t = name.trim();
-        if (t.isEmpty) continue;
-        byName.putIfAbsent(t.toLowerCase(), () => _NamedOption(name: t));
+        putPerson(name: selected, id: _responsible?.id);
       }
 
-      final sid = await _odooSessionId();
-      if (sid.isNotEmpty) {
-        final rows = await OdooRpcHelper.searchResponsiblePersons(sid);
-        for (final row in rows) {
-          final id = row['id'];
-          final name = (row['name'] ?? row['display_name'] ?? '')
-              .toString()
-              .trim();
-          if (name.isEmpty) continue;
-          byName[name.toLowerCase()] = _NamedOption(
-            name: name,
-            id: id is num ? id.toInt() : int.tryParse('$id'),
-          );
+      if (AppConfig.odooRpcEnabled) {
+        final sid = await _odooSessionId();
+        if (sid.isNotEmpty) {
+          final rows = await OdooRpcHelper.searchResponsiblePersons(sid);
+          for (final row in rows) {
+            final id = row['id'];
+            final name = (row['name'] ?? row['display_name'] ?? '')
+                .toString()
+                .trim();
+            putPerson(
+              name: name,
+              id: id is num ? id.toInt() : int.tryParse('$id'),
+            );
+          }
+        }
+      }
+
+      // Laravel path: website Responsible master
+      // (`/masters/options/responsibles` / #invoice-responsible) — NOT
+      // employee-performance workers (those are billed-by / KPI people).
+      if (!AppConfig.odooRpcEnabled || byName.length <= 1) {
+        if (email.isEmpty || pass.isEmpty) {
+          final saved = await AuthSessionStore.load();
+          email = (saved?.email ?? '').trim();
+          pass = saved?.password ?? '';
+        }
+        if (email.isNotEmpty && pass.isNotEmpty) {
+          try {
+            final formRows =
+                await FlutterCustomerInvoiceWebApi.fetchResponsiblePeople(
+              email: email,
+              password: pass,
+              invoiceId: _serverInvoiceId ?? widget.editInvoice?.id,
+              apiToken: AuthSessionStore.currentApiToken,
+            );
+            // Website master wins — drop stale local/worker names.
+            if (formRows.isNotEmpty) {
+              byName.clear();
+              if (selected.isNotEmpty) {
+                putPerson(name: selected, id: _responsible?.id);
+              }
+              for (final row in formRows) {
+                putPerson(name: row.name, id: row.id);
+              }
+            }
+          } catch (e) {
+            if (kDebugMode) debugPrint('responsible form options: $e');
+          }
+        }
+      }
+
+      // Local remembered names only if website/Odoo returned nothing.
+      if (byName.isEmpty ||
+          (byName.length == 1 && selected.isNotEmpty)) {
+        for (final name in await BillNameStore.loadResponsible()) {
+          final t = name.trim();
+          if (t.isEmpty) continue;
+          putPerson(name: t);
         }
       }
 
@@ -1077,6 +1164,12 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
             (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
           );
       });
+      if (kDebugMode) {
+        debugPrint(
+          'responsible people loaded=${_responsiblePeople.length} '
+          '[${_responsiblePeople.map((e) => e.name).join(', ')}]',
+        );
+      }
     } catch (e) {
       if (kDebugMode) debugPrint('responsible people load: $e');
     }
@@ -1408,25 +1501,105 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
     final name = customer.name.trim();
     if (name.isEmpty) return;
     try {
-      final sid = await _odooSessionId();
-      if (sid.isEmpty) return;
-      final hit = await OdooRpcHelper.readCustomerFormBalances(
-        sid,
-        customerName: name,
-        moveIds: [
-          if (_serverInvoiceId != null) _serverInvoiceId!,
-          if (widget.editInvoice?.id != null) widget.editInvoice!.id!,
-        ],
-      );
+      final login = context.read<LoginViewmodel>();
+      final flutterSid = (login.sessionId ?? '').trim();
+
+      int? moveId = _serverInvoiceId ?? widget.editInvoice?.id;
+      if (moveId == null || moveId <= 0) {
+        final cached = PaymentHistoryService.cachedInvoices;
+        if (cached != null) {
+          final want = name.toLowerCase();
+          for (final inv in cached) {
+            if ((inv.displayCustomer ?? '').trim().toLowerCase() != want) {
+              continue;
+            }
+            if (inv.id != null &&
+                (moveId == null || inv.id! > moveId)) {
+              moveId = inv.id;
+            }
+          }
+        }
+      }
+
+      ({double? advance, double? oldBalance})? hit;
+
+      bool useful(({double? advance, double? oldBalance})? h) =>
+          h != null &&
+          ((h.advance != null && h.advance != 0) ||
+              (h.oldBalance != null && h.oldBalance != 0));
+
+      if (!AppConfig.odooRpcEnabled) {
+        var email = (login.loginEmail ?? '').trim();
+        var pass = login.loginPassword ?? '';
+        if (email.isEmpty || pass.isEmpty) {
+          final saved = await AuthSessionStore.load();
+          email = (saved?.email ?? '').trim();
+          pass = saved?.password ?? '';
+        }
+        // Masters → Customers is the website source for Old Balance / Advance.
+        if (email.isNotEmpty && pass.isNotEmpty) {
+          final master =
+              await FlutterCustomerInvoiceWebApi.fetchCustomerMasterBalances(
+            customerName: name,
+            customerId: customer.id,
+            email: email,
+            password: pass,
+            apiToken: AuthSessionStore.currentApiToken,
+          );
+          if (master != null) {
+            hit = (advance: master.advance, oldBalance: master.oldBalance);
+          }
+        }
+        if (!useful(hit) &&
+            flutterSid.isNotEmpty &&
+            moveId != null &&
+            moveId > 0) {
+          hit = await InvoiceDetailService.fetchCustomerBalances(
+            sessionId: flutterSid,
+            invoiceId: moveId,
+          );
+        }
+        if (!useful(hit) &&
+            email.isNotEmpty &&
+            pass.isNotEmpty &&
+            moveId != null &&
+            moveId > 0) {
+          final web =
+              await FlutterCustomerInvoiceWebApi.fetchCustomerFormBalances(
+            invoiceId: moveId,
+            email: email,
+            password: pass,
+            apiToken: AuthSessionStore.currentApiToken,
+          );
+          if (web != null) hit = web;
+        }
+      } else {
+        final sid = await _odooSessionId();
+        if (sid.isEmpty) return;
+        hit = await OdooRpcHelper.readCustomerFormBalances(
+          sid,
+          customerName: name,
+          moveIds: [
+            if (_serverInvoiceId != null) _serverInvoiceId!,
+            if (widget.editInvoice?.id != null) widget.editInvoice!.id!,
+          ],
+        );
+      }
       if (!mounted) return;
 
-      // Refresh credit limit from pharmacy.customer (API).
-      final credit = await OdooRpcHelper.readCustomerCreditLimitInfo(
-        sid,
-        customerId: customer.id,
-        customerName: name,
-        oldBalance: hit?.oldBalance ?? _customerOldBalance,
-      );
+      // Refresh credit limit from pharmacy.customer (API) when Odoo is on.
+      CustomerCreditLimitInfo? credit;
+      if (AppConfig.odooRpcEnabled) {
+        final sid = await _odooSessionId();
+        if (sid.isNotEmpty) {
+          credit = await OdooRpcHelper.readCustomerCreditLimitInfo(
+            sid,
+            customerId: customer.id,
+            customerName: name,
+            oldBalance: hit?.oldBalance ?? _customerOldBalance,
+          );
+        }
+      }
       if (!mounted) return;
 
       setState(() {
@@ -1443,6 +1616,13 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           );
         }
       });
+      if (hit != null) {
+        AmountBookViewModel.rememberCustomerBalances(
+          name,
+          advance: hit.advance,
+          oldBalance: hit.oldBalance,
+        );
+      }
       _recalculate();
     } catch (e) {
       if (kDebugMode) debugPrint('load customer balances: $e');
@@ -3655,20 +3835,23 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
               }
             }
           }
-          // add_to_invoice often ignores Dis% — write it onto the new line now.
-          await _ensureOdooLineId(line, odooSid);
-          if (line.odooLineId != null && line.odooLineId! > 0) {
-            await OdooRpcHelper.updateCustomerInvoiceLine(
-              odooSid,
-              lineId: line.odooLineId!,
-              quantity: qty,
-              priceUnit: mrp > 0 ? mrp : null,
-              discount: disc,
-              batch: line.batch,
-              hsn: line.hsn.trim().isEmpty ? null : line.hsn.trim(),
-              rack: line.rack.trim().isEmpty ? null : line.rack.trim(),
-              taxPercent: taxPct,
-            );
+          // Odoo only: add_to_invoice often ignores Dis% — write onto the line.
+          // Laravel path already sent discount/tax in add_to_invoice params.
+          if (AppConfig.odooRpcEnabled) {
+            await _ensureOdooLineId(line, odooSid);
+            if (line.odooLineId != null && line.odooLineId! > 0) {
+              await OdooRpcHelper.updateCustomerInvoiceLine(
+                odooSid,
+                lineId: line.odooLineId!,
+                quantity: qty,
+                priceUnit: mrp > 0 ? mrp : null,
+                discount: disc,
+                batch: line.batch,
+                hsn: line.hsn.trim().isEmpty ? null : line.hsn.trim(),
+                rack: line.rack.trim().isEmpty ? null : line.rack.trim(),
+                taxPercent: taxPct,
+              );
+            }
           }
           continue;
         } catch (e) {
@@ -4368,13 +4551,25 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
   /// Push edits on lines that already exist on the server (edit bill / QR).
   Future<bool> _syncCommittedLines(LoginViewmodel login) async {
-    final sid = await _odooSessionId();
     final flutterSid = login.sessionId ?? '';
-    if (sid.isEmpty && flutterSid.isEmpty) return false;
+    if (flutterSid.isEmpty) return false;
+
+    // Fast exit: nothing changed on already-committed lines.
+    final needsQtySync = _deferredServerRemovals.isNotEmpty ||
+        _lines.any((l) {
+          if (!l.serverCommitted || !l.hasRequiredLineFields) return false;
+          final qty = InvoiceCalcHelper.parseNum(l.qty);
+          return (qty - l.serverCommittedQty).abs() > 0.0001;
+        });
+    if (!needsQtySync) return true;
+
+    final sid = AppConfig.odooRpcEnabled ? await _odooSessionId() : '';
     final session = sid.isNotEmpty ? sid : flutterSid;
 
     final moveId = _serverInvoiceId ?? widget.editInvoice?.id;
-    if (moveId != null && moveId > 0) {
+    // Odoo line-id resolve is useless when RPC is off (Laravel uses
+    // get_customer_invoice / website form only when qty actually decreases).
+    if (AppConfig.odooRpcEnabled && moveId != null && moveId > 0) {
       await _resolveAllOdooLineIds(session, moveId);
     }
 
@@ -4464,6 +4659,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       // Laravel path: website PUT (Odoo write no-ops when RPC is off).
       if (!AppConfig.odooRpcEnabled) {
         if (email.isEmpty || pass.isEmpty) return false;
+        final responsibleName = (_responsible?.name ?? '').trim();
         final ok = await FlutterCustomerInvoiceWebApi.updateInvoiceHeader(
           invoiceId: moveId,
           email: email,
@@ -4472,6 +4668,9 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           customerId: clearCustomer ? null : _customer?.id,
           clearCustomer: clearCustomer,
           billedBy: billed,
+          responsiblePerson:
+              responsibleName.isEmpty ? null : responsibleName,
+          responsiblePersonId: _responsible?.id,
           address: _addressCtrl.text.trim(),
           phone: _phoneCtrl.text.trim(),
           paymentMode: _paymentMode,
@@ -4482,7 +4681,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
           debugPrint(
             'syncHeader Laravel #$moveId ok=$ok '
             'customer=${clearCustomer ? '(walk-in)' : customerName} '
-            'billedBy=$billed',
+            'billedBy=$billed responsible=$responsibleName',
           );
         }
         return ok;
@@ -4601,14 +4800,15 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
 
       final customerName = (_customer?.name ?? '').trim();
       final doctorName = (_doctor?.name ?? '').trim();
+      // Don't block Save on local name prefs.
       if (customerName.isNotEmpty) {
-        await BillNameStore.rememberCustomer(customerName);
+        unawaited(BillNameStore.rememberCustomer(customerName));
       }
       if (doctorName.isNotEmpty) {
-        await BillNameStore.rememberDoctor(doctorName);
+        unawaited(BillNameStore.rememberDoctor(doctorName));
       }
       if (responsibleName.isNotEmpty) {
-        await BillNameStore.rememberResponsible(responsibleName);
+        unawaited(BillNameStore.rememberResponsible(responsibleName));
       }
 
       // Local preview number is not a real bill until create / first add.
@@ -4623,10 +4823,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
       final hasServerId =
           (_serverInvoiceId ?? widget.editInvoice?.id ?? 0) > 0;
 
-      // When the bill already exists, sync header first. On a brand-new
-      // Laravel bill there is no id yet — commit lines first (add_to_invoice
-      // creates the draft), then push header.
-      if (hasServerId) {
+      // Odoo path: sync header before lines when the bill already exists.
+      // Laravel path: skip — website header sync is expensive (login + edit
+      // HTML); one write after lines is enough.
+      if (hasServerId && AppConfig.odooRpcEnabled) {
         final headerBeforeLines = await _syncHeaderToOdoo(login);
         if (!headerBeforeLines) {
           _toast(
@@ -4653,61 +4853,49 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
         );
       }
 
-      // Website TOTAL/DIS: push app Dis% (not stale Odoo 0) via parent onchange.
-      final moveId = _serverInvoiceId ?? widget.editInvoice?.id;
-      if (moveId != null && moveId > 0) {
-        final sid = await _odooSessionId();
-        if (sid.isNotEmpty) {
-          // Resolve line ids for QR lines before website Dis% sync.
-          // Stock-entry match often fails after add_to_invoice — use product.
-          await _resolveAllOdooLineIds(sid, moveId);
-          final appLines = <Map<String, dynamic>>[];
-          for (final line in _lines) {
-            if (!line.hasRequiredLineFields) continue;
-            var lineId = line.odooLineId;
-            if (lineId == null || lineId <= 0) {
-              await _ensureOdooLineId(line, sid);
-              lineId = line.odooLineId;
-            }
-            final mrp = InvoiceCalcHelper.parseNum(line.mrp);
-            final disc = InvoiceCalcHelper.parseNum(line.discount);
-            if (lineId == null || lineId <= 0 || mrp <= 0) {
-              if (kDebugMode && disc > 0.01) {
-                debugPrint(
-                  'save sync skip Dis=$disc — no line id for ${line.product}',
-                );
+      // Odoo-only: push Dis% via website parent onchange. Laravel add_to_invoice
+      // already carries tax/discount params — skip this multi-RPC block.
+      if (AppConfig.odooRpcEnabled) {
+        final moveId = _serverInvoiceId ?? widget.editInvoice?.id;
+        if (moveId != null && moveId > 0) {
+          final sid = await _odooSessionId();
+          if (sid.isNotEmpty) {
+            await _resolveAllOdooLineIds(sid, moveId);
+            final appLines = <Map<String, dynamic>>[];
+            for (final line in _lines) {
+              if (!line.hasRequiredLineFields) continue;
+              var lineId = line.odooLineId;
+              if (lineId == null || lineId <= 0) {
+                await _ensureOdooLineId(line, sid);
+                lineId = line.odooLineId;
               }
-              continue;
-            }
-            appLines.add(
-              OdooRpcHelper.pharmacyLineDiscountSpec(
-                lineId: lineId,
-                mrp: mrp,
-                discount: disc,
-                quantity: InvoiceCalcHelper.parseNum(line.qty),
-                taxPercent: InvoiceCalcHelper.normalizeCustomerTaxPercent(
-                  InvoiceCalcHelper.parseNum(line.tax),
+              final mrp = InvoiceCalcHelper.parseNum(line.mrp);
+              final disc = InvoiceCalcHelper.parseNum(line.discount);
+              if (lineId == null || lineId <= 0 || mrp <= 0) continue;
+              appLines.add(
+                OdooRpcHelper.pharmacyLineDiscountSpec(
+                  lineId: lineId,
+                  mrp: mrp,
+                  discount: disc,
+                  quantity: InvoiceCalcHelper.parseNum(line.qty),
+                  taxPercent: InvoiceCalcHelper.normalizeCustomerTaxPercent(
+                    InvoiceCalcHelper.parseNum(line.tax),
+                  ),
                 ),
-              ),
+              );
+            }
+            await OdooRpcHelper.syncPharmacyWebsiteTotals(
+              sid,
+              invoiceId: moveId,
+              total: _totals.total,
+              balance: _totals.balance,
+              untaxed:
+                  _totals.untaxed > 0 ? _totals.untaxed : _totals.subtotal,
+              taxAmount: _totals.taxAmount,
+              discountTotal: _totals.discountTotal,
+              appLines: appLines,
             );
           }
-          if (kDebugMode) {
-            debugPrint(
-              'save sync website Dis% move=$moveId lines=${appLines.length} '
-              'total=${_totals.total} '
-              'dis=${appLines.map((e) => e['discount']).join(",")}',
-            );
-          }
-          await OdooRpcHelper.syncPharmacyWebsiteTotals(
-            sid,
-            invoiceId: moveId,
-            total: _totals.total,
-            balance: _totals.balance,
-            untaxed: _totals.untaxed > 0 ? _totals.untaxed : _totals.subtotal,
-            taxAmount: _totals.taxAmount,
-            discountTotal: _totals.discountTotal,
-            appLines: appLines,
-          );
         }
       }
 

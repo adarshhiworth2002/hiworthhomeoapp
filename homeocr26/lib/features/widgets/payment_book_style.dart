@@ -145,18 +145,37 @@ class InvoiceBillStatusBadge extends StatelessWidget {
 class InvoiceStatusFilterChips extends StatelessWidget {
   const InvoiceStatusFilterChips({
     super.key,
-    required this.selected,
+    this.selected,
+    this.selectedKeys,
     required this.onSelected,
     this.hideKeys = const {},
     this.labelOverrides = const {},
-  });
+  }) : assert(
+          selected != null || selectedKeys != null,
+          'Provide selected or selectedKeys',
+        );
 
-  final String selected;
+  /// Single-select mode (Payment Book, history, …).
+  final String? selected;
+  /// Multi-select mode (Net Amount You Got: draft+open).
+  final Set<String>? selectedKeys;
   final ValueChanged<String> onSelected;
   /// Status keys to omit (e.g. hide `open` on You Gave).
   final Set<String> hideKeys;
   /// Per-screen chip label overrides (e.g. draft -> Pending).
   final Map<String, String> labelOverrides;
+
+  bool _isSelected(String key) {
+    final multi = selectedKeys;
+    if (multi != null) {
+      if (key == 'all') {
+        return multi.isEmpty || multi.contains('all');
+      }
+      if (multi.isEmpty || multi.contains('all')) return false;
+      return multi.contains(key);
+    }
+    return selected == key;
+  }
 
   static const tabs = <(String, String)>[
     ('all', 'All'),
@@ -193,9 +212,9 @@ class InvoiceStatusFilterChips extends StatelessWidget {
                   label: _ChipLabel(
                     title: labelOverrides[tab.$1] ?? tab.$2,
                     subtitle: _subtitleFor(tab.$1),
-                    selected: selected == tab.$1,
+                    selected: _isSelected(tab.$1),
                   ),
-                  selected: selected == tab.$1,
+                  selected: _isSelected(tab.$1),
                   showCheckmark: true,
                   checkmarkColor: const Color(0xFFE07A2F),
                   onSelected: (_) => onSelected(tab.$1),
@@ -204,12 +223,12 @@ class InvoiceStatusFilterChips extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                   labelPadding: const EdgeInsets.symmetric(horizontal: 6),
                   side: BorderSide(
-                    color: selected == tab.$1
+                    color: _isSelected(tab.$1)
                         ? const Color(0xFFE07A2F)
                         : Colors.black.withValues(alpha: 0.2),
                   ),
                   labelStyle: TextStyle(
-                    color: selected == tab.$1
+                    color: _isSelected(tab.$1)
                         ? const Color(0xFFE07A2F)
                         : Colors.black,
                     fontWeight: FontWeight.w700,

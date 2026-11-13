@@ -52,6 +52,12 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
   }
 
   void _openSection(NetAmountSection section) {
+    // You Got: Draft + Open together. You Gave: All (no Open chip).
+    if (section == NetAmountSection.youGot) {
+      _viewModel.setStatusFilters(const {'draft', 'open'});
+    } else {
+      _viewModel.setStatusFilters(const {'all'});
+    }
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ChangeNotifierProvider.value(
@@ -126,7 +132,10 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
                     amountLabel: NetAmountViewModel.formatAmount(
                       model.amountFor(NetAmountSection.youGot),
                     ),
-                    subtitle: 'Paid',
+                    subtitle: model.reportDate?.trim().isNotEmpty == true
+                        ? model.reportDate!.trim()
+                        : 'Yesterday',
+                    belowSubtitle: 'Pending',
                     color: const Color(0xFFE07A2F),
                     loading: model.detailLoading,
                     onTap: () => _openSection(NetAmountSection.youGot),
@@ -137,7 +146,9 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
                     amountLabel: NetAmountViewModel.formatAmount(
                       model.amountFor(NetAmountSection.youGave),
                     ),
-                    subtitle: 'Not paid',
+                    subtitle: model.reportDate?.trim().isNotEmpty == true
+                        ? model.reportDate!.trim()
+                        : 'Yesterday',
                     color: Colors.white,
                     loading: model.detailLoading,
                     onTap: () => _openSection(NetAmountSection.youGave),
@@ -161,11 +172,14 @@ class _AmountButton extends StatelessWidget {
     required this.color,
     required this.loading,
     required this.onTap,
+    this.belowSubtitle,
   });
 
   final String title;
   final String amountLabel;
   final String subtitle;
+  /// Optional label under the date (You Got only: Pending).
+  final String? belowSubtitle;
   final Color color;
   final bool loading;
   final VoidCallback onTap;
@@ -214,6 +228,18 @@ class _AmountButton extends StatelessWidget {
                         fontSize: 14,
                       ),
                     ),
+                    if (belowSubtitle != null &&
+                        belowSubtitle!.trim().isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        belowSubtitle!,
+                        style: TextStyle(
+                          color: onColor.withValues(alpha: 0.9),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -264,15 +290,6 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage>
   void initState() {
     super.initState();
     _searchController = TextEditingController();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final model = context.read<NetAmountViewModel>();
-      // You Gave has no Open chip — reset if left on Open from You Got.
-      if (widget.section == NetAmountSection.youGave &&
-          model.statusFilter == 'open') {
-        model.setStatusFilter('all');
-      }
-    });
     startLiveRefresh(() {
       if (!mounted) return Future.value();
       return context.read<NetAmountViewModel>().fetchBoth(
@@ -313,6 +330,15 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage>
       body: ResponsiveBody(
         child: Consumer<NetAmountViewModel>(
         builder: (context, model, _) {
+          // You Gave has no Open chip — drop open if carried over from You Got.
+          if (isGave && model.statusFilters.contains('open')) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              if (model.statusFilters.contains('open')) {
+                model.setStatusFilters(const {'all'});
+              }
+            });
+          }
           final rows = model.rowsFor(section).where((row) {
             return PrefixSearch.matchesAny(
               [
@@ -323,25 +349,26 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage>
               _searchQuery,
             );
           }).toList(growable: false);
-          final visibleTotal = model.statusFilter == 'all'
+          final filterAll = model.isStatusFilterAll;
+          final visibleTotal = filterAll
               ? rows.fold<double>(0, (sum, row) {
                   if (row.sectionKey == 'cancel') return sum;
                   return sum + (row.total ?? 0);
                 })
               : rows.fold<double>(0, (sum, row) => sum + (row.total ?? 0));
-          final visibleBalance = model.statusFilter == 'all'
+          final visibleBalance = filterAll
               ? rows.fold<double>(0, (sum, row) {
                   if (row.sectionKey == 'cancel') return sum;
                   return sum + (row.balance ?? 0);
                 })
               : rows.fold<double>(0, (sum, row) => sum + (row.balance ?? 0));
-          final visiblePaid = model.statusFilter == 'all'
+          final visiblePaid = filterAll
               ? rows.fold<double>(0, (sum, row) {
                   if (row.sectionKey == 'cancel') return sum;
                   return sum + row.paidAmount;
                 })
               : rows.fold<double>(0, (sum, row) => sum + row.paidAmount);
-          final visibleCount = model.statusFilter == 'all'
+          final visibleCount = filterAll
               ? rows.where((r) => r.sectionKey != 'cancel').length
               : rows.length;
 
@@ -351,8 +378,6 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage>
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                 child: PaymentBookColorLegend(
-                  // Supplier bills use only two states: paid (red) and
-                  // pending (grey). Customer/cash categories do not apply.
                   hideStyles: isGave
                       ? const {
                           PaymentBookRowStyle.creditOpen,
@@ -371,7 +396,7 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage>
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: InvoiceStatusFilterChips(
-                  selected: model.statusFilter,
+                  selectedKeys: model.statusFilters,
                   onSelected: model.setStatusFilter,
                   hideKeys: isGave ? const {'open', 'cancel'} : const {'cancel'},
                   labelOverrides: isGave
@@ -482,13 +507,19 @@ class _NetAmountListCard extends StatelessWidget {
     final invoice = row.toInvoiceSummary(asSupplier: isGave);
     final style = invoice.paymentBookRowStyle;
     final supplierPending = isGave && row.sectionKey == 'draft';
-    final color = isGave ? (supplierPending ? const Color(0xFF6B7280) : PaymentBookStyleColors.billRed) : PaymentBookStyleColors.of(style);
+    final color = isGave
+        ? (supplierPending
+            ? const Color(0xFF6B7280)
+            : PaymentBookStyleColors.billRed)
+        : PaymentBookStyleColors.of(style);
     final weight = PaymentBookStyleColors.weightOf(style);
     final status = supplierPending ? 'Pending' : row.displayBillStatus;
     final fields = <Widget>[
       _Cell(
         label: isGave ? 'Supplier' : 'Customer',
-        value: isGave ? NetAmountRow.text(row.supplier) : NetAmountRow.text(row.customer),
+        value: isGave
+            ? NetAmountRow.text(row.supplier)
+            : NetAmountRow.text(row.customer),
         emphasize: true,
         color: color,
         weight: FontWeight.w800,
@@ -649,6 +680,7 @@ class _Cell extends StatelessWidget {
     this.emphasize = false,
     this.color = sectionText,
     this.weight,
+    this.below,
   });
 
   final String label;
@@ -656,6 +688,7 @@ class _Cell extends StatelessWidget {
   final bool emphasize;
   final Color color;
   final FontWeight? weight;
+  final Widget? below;
 
   @override
   Widget build(BuildContext context) {
@@ -685,6 +718,10 @@ class _Cell extends StatelessWidget {
             fontSize: emphasize ? 14 : 13,
           ),
         ),
+        if (below != null) ...[
+          const SizedBox(height: 2),
+          below!,
+        ],
       ],
     );
   }

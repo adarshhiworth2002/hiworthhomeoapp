@@ -51,15 +51,10 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
     startLiveRefresh(
       () async {
         if (!mounted) return;
-        await context.read<AmountBookViewModel>().fetch(
-              context,
-              silent: true,
-              headOnly: true,
-            );
-        if (!mounted) return;
-        await _ensurePaymentLines(force: true);
+        // Soft refresh payment lines only — skip full Cash Book fetch.
+        await _ensurePaymentLines(force: true, silent: true);
       },
-      interval: const Duration(seconds: 6),
+      interval: const Duration(seconds: 5),
     );
   }
 
@@ -69,7 +64,10 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
     super.dispose();
   }
 
-  Future<void> _ensurePaymentLines({bool force = false}) async {
+  Future<void> _ensurePaymentLines({
+    bool force = false,
+    bool silent = false,
+  }) async {
     final paymentId = widget.paymentId;
     if (paymentId == null) return;
     if (!force &&
@@ -79,7 +77,11 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
       return;
     }
     if (_loadingPaymentLines) return;
-    setState(() => _loadingPaymentLines = true);
+    final showSpinner = !silent &&
+        (_paymentLines == null ||
+            _paymentLines!.isEmpty ||
+            _paymentLines!.every(_isPaymentNumberRow));
+    if (showSpinner) setState(() => _loadingPaymentLines = true);
     try {
       final model = context.read<AmountBookViewModel>();
       final loaded = await model.loadPaymentInvoiceLines(context, paymentId);
@@ -88,7 +90,11 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
         setState(() => _paymentLines = loaded);
       }
     } finally {
-      if (mounted) setState(() => _loadingPaymentLines = false);
+      if (mounted && showSpinner) {
+        setState(() => _loadingPaymentLines = false);
+      } else if (mounted && _loadingPaymentLines) {
+        setState(() => _loadingPaymentLines = false);
+      }
     }
   }
 
@@ -110,6 +116,11 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
   List<AmountBookInvoiceLine> _resolveRows(AmountBookViewModel model) {
     if (_paymentLines != null && _paymentLines!.isNotEmpty) {
       return _filterYouGotPayRows(_paymentLines!);
+    }
+    // Show nest lines from the ledger immediately while detail API loads.
+    final seed = _filterYouGotPayRows(widget.invoices);
+    if (seed.isNotEmpty && !seed.every(_isPaymentNumberRow)) {
+      return seed;
     }
     final live = model.invoicesForLedgerTap(
       customerName: widget.customerName,
@@ -144,8 +155,13 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
     AmountBookInvoiceLine line,
   ) {
     final model = context.read<AmountBookViewModel>();
+    // Prefer this payment's residual (balance_after) over list/API pre-pay balance.
     final invoice = model.invoiceSummaryForLine(line).mergedWith(
-          InvoiceSummaryModel(customer: widget.customerName),
+          InvoiceSummaryModel(
+            customer: widget.customerName,
+            balance: line.balance,
+            total: line.total,
+          ),
         );
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -155,6 +171,7 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
           partnerLabel: 'Customer',
           allowScan: true,
           supplierLayout: false,
+          balanceOverride: line.balance,
         ),
       ),
     );
@@ -171,6 +188,8 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
     await CustomerInvoicePdfService.shareInvoice(
       context,
       invoice: invoice,
+      payAmount: line.youGotAmount ?? line.youGaveAmount,
+      paymentName: widget.paymentName,
     );
   }
 
@@ -185,10 +204,17 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
     double totalSum = 0;
     double balanceSum = 0;
     double paySum = 0;
+    double previouslyPaidSum = 0;
     for (final row in rows) {
-      totalSum += row.total ?? 0;
-      balanceSum += row.balance ?? 0;
-      paySum += row.youGotAmount ?? row.youGaveAmount ?? 0;
+      final total = row.total ?? 0;
+      final balance = row.balance ?? 0;
+      final pay = row.youGotAmount ?? row.youGaveAmount ?? 0;
+      totalSum += total;
+      balanceSum += balance;
+      paySum += pay;
+      // Amount settled before this voucher: Total − this Pay − Balance after.
+      final prior = total - pay - balance;
+      if (prior > 0.0001) previouslyPaidSum += prior;
     }
 
     return Scaffold(
@@ -291,6 +317,7 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
               total: totalSum,
               balance: balanceSum,
               payAmount: paySum,
+              previouslyPaid: isPayment ? previouslyPaidSum : 0,
             ),
           ],
         ),
@@ -534,6 +561,7 @@ class _InvoiceTotals extends StatelessWidget {
     required this.total,
     required this.balance,
     required this.payAmount,
+    this.previouslyPaid = 0,
   });
 
   final int count;
@@ -541,9 +569,12 @@ class _InvoiceTotals extends StatelessWidget {
   final double total;
   final double balance;
   final double payAmount;
+  /// Sum of amounts paid on these bills before this payment voucher.
+  final double previouslyPaid;
 
   @override
   Widget build(BuildContext context) {
+    final showPrior = isPayment && previouslyPaid > 0.0001;
     return Container(
       width: double.infinity,
       padding: EdgeInsets.fromLTRB(
@@ -567,6 +598,40 @@ class _InvoiceTotals extends StatelessWidget {
               fontSize: 13,
             ),
           ),
+          if (showPrior) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: sectionCard,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: sectionCardBorder),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'PREVIOUSLY PAID',
+                      style: TextStyle(
+                        color: sectionTextMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    AmountBookViewModel.formatAmount(previouslyPaid),
+                    style: const TextStyle(
+                      color: sectionText,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           Row(
             children: [

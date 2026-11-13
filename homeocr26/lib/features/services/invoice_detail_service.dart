@@ -10,8 +10,12 @@ import '../../viewModels/login_viewmodel.dart';
 import 'WebApi/web_api_impl.dart';
 import 'api_request_helper.dart';
 import 'api_response_helper.dart';
+import 'appConfig.dart';
+import 'auth_session_store.dart';
 import 'endPoints.dart';
+import 'flutter_customer_invoice_web_api.dart';
 import 'payment_history_service.dart';
+import 'supplier_invoice_web_api.dart';
 
 /// Loads a full customer invoice (header + lines) for the detail screen.
 /// Uses Laravel Flutter APIs + local Flutter merge only (no Odoo).
@@ -27,9 +31,26 @@ class InvoiceDetailService {
   static Future<InvoiceSummaryModel> fetchCustomerInvoice(
     BuildContext context, {
     required InvoiceSummaryModel seed,
+    bool asSupplier = false,
   }) async {
     final login = Provider.of<LoginViewmodel>(context, listen: false);
     if (login.sessionId == null || login.sessionId!.isEmpty) return seed;
+
+    // Supplier bills share numeric ids with customer invoices — never call
+    // get_customer_invoice for You Gave or list totals get wiped to 0.
+    if (asSupplier) {
+      final id = seed.id;
+      if (id == null || id <= 0) return seed;
+      final loaded = await SupplierInvoiceWebApi.fetchDetail(
+        invoiceId: id,
+        seed: seed,
+        email: login.loginEmail,
+        password: login.loginPassword,
+        apiToken: login.sessionId,
+      );
+      if (loaded == null) return seed;
+      return loaded.withComputedSectionAmounts();
+    }
 
     final needsHistory = _needsPaymentHistory(seed);
     final needsLines = seed.id != null;
@@ -56,6 +77,41 @@ class InvoiceDetailService {
     if (results[0] != null) merged = merged.mergedWith(results[0]!);
     if (results[1] != null) merged = merged.mergedWith(results[1]!);
 
+    // Laravel detail/list often omit responsible_person — scrape edit form.
+    if (!AppConfig.odooRpcEnabled &&
+        (merged.responsiblePerson ?? '').trim().isEmpty &&
+        merged.id != null &&
+        merged.id! > 0) {
+      try {
+        var email = (login.loginEmail ?? '').trim();
+        var pass = login.loginPassword ?? '';
+        if (email.isEmpty || pass.isEmpty) {
+          final saved = await AuthSessionStore.load();
+          email = (saved?.email ?? '').trim();
+          pass = saved?.password ?? '';
+        }
+        if (email.isNotEmpty && pass.isNotEmpty) {
+          final web =
+              await FlutterCustomerInvoiceWebApi.fetchSelectedResponsible(
+            invoiceId: merged.id!,
+            email: email,
+            password: pass,
+            apiToken: AuthSessionStore.currentApiToken,
+          );
+          final name = web?.name.trim() ?? '';
+          if (name.isNotEmpty) {
+            merged = merged.mergedWith(
+              InvoiceSummaryModel(responsiblePerson: name),
+            );
+          }
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('InvoiceDetailService responsible web: $e');
+        }
+      }
+    }
+
     final sectioned = merged.withComputedSectionAmounts();
     if (sectioned.id != null &&
         sectioned.lines.isNotEmpty &&
@@ -73,6 +129,24 @@ class InvoiceDetailService {
         seed.taxAmount == null ||
         seed.subtotal == null ||
         seed.total == null;
+  }
+
+  /// Advance / old balance from `get_customer_invoice` (list often omits these).
+  static Future<({double? advance, double? oldBalance})?>
+      fetchCustomerBalances({
+    required String sessionId,
+    required int invoiceId,
+  }) async {
+    if (invoiceId <= 0 || sessionId.trim().isEmpty) return null;
+    final parsed = await _loadFlutterInvoice(
+      sessionId: sessionId,
+      invoiceId: invoiceId,
+    );
+    if (parsed == null) return null;
+    if (parsed.advanceAmount == null && parsed.oldBalance == null) {
+      return null;
+    }
+    return (advance: parsed.advanceAmount, oldBalance: parsed.oldBalance);
   }
 
   static Future<InvoiceSummaryModel?> _loadFlutterInvoice({

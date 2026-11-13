@@ -6,6 +6,7 @@ class NetAmountModel {
   const NetAmountModel({
     this.amount,
     this.youGot,
+    this.youGotPaidTotal,
     this.youGave,
     this.currency,
     this.date,
@@ -15,7 +16,10 @@ class NetAmountModel {
   });
 
   final double? amount;
+  /// Customer list outstanding (e.g. 7618) — You Got section card.
   final double? youGot;
+  /// Paid-only total for home tile (e.g. you_got_paid_total).
+  final double? youGotPaidTotal;
   final double? youGave;
   final String? currency;
   final String? date;
@@ -39,9 +43,13 @@ class NetAmountModel {
       return const NetAmountModel();
     }
 
+    // App Net Amount amounts (lists drive the cards):
+    //   You Got  = customer invoice outstanding for yesterday → you_got_paid (7618)
+    //   You Gave = supplier invoice outstanding for yesterday → summed from
+    //              get_supplier_invoice_list (API you_gave_paid is not used).
     final youGot = _pickDouble(data, const [
-      'you_got',
       'you_got_paid',
+      'you_got',
       'you_got_amount',
       'got',
       'got_amount',
@@ -52,7 +60,6 @@ class NetAmountModel {
     ]);
     final youGave = _pickDouble(data, const [
       'you_gave',
-      'you_gave_paid',
       'you_gave_amount',
       'gave',
       'gave_amount',
@@ -66,24 +73,39 @@ class NetAmountModel {
       'amount',
       'total',
       'total_amount',
-      'balance',
       'value',
     ]);
 
-    final gotRows = NetAmountRow.parseList(data, const [
+    // YOU GOT list = customer invoices. Laravel often leaves you_got_invoices
+    // empty and puts yesterday's customer rows under you_gave_bills.
+    var gotRows = NetAmountRow.parseList(data, const [
       'you_got_invoices',
-      'invoices',
       'customer_invoices',
       'you_got_list',
       'got_invoices',
+      'invoices',
     ]);
-    final gaveRows = NetAmountRow.parseList(data, const [
+    final customerRowsFromGaveKey = NetAmountRow.parseList(data, const [
       'you_gave_bills',
       'bills',
-      'supplier_bills',
-      'vendor_bills',
+      'customer_bills',
       'you_gave_list',
       'gave_bills',
+    ]);
+    if (gotRows.isEmpty && customerRowsFromGaveKey.isNotEmpty) {
+      gotRows = customerRowsFromGaveKey;
+    }
+    // Supplier bills for YOU GAVE come from get_supplier_invoice_list, not here.
+    final gaveRows = NetAmountRow.parseList(data, const [
+      'supplier_bills',
+      'vendor_bills',
+      'supplier_invoices',
+    ]);
+
+    final youGotPaidTotal = _pickDouble(data, const [
+      'you_got_paid_total',
+      'paid_total',
+      'you_got_received',
     ]);
 
     return NetAmountModel(
@@ -92,6 +114,7 @@ class NetAmountModel {
           youGot ??
           youGave,
       youGot: youGot ?? (section == 'all' || section == 'you_got' ? amount : null),
+      youGotPaidTotal: youGotPaidTotal,
       youGave: youGave ?? (section == 'you_gave' ? amount : null),
       currency: _pickString(data, const ['currency', 'currency_symbol']),
       date: _pickString(data, const [
@@ -218,7 +241,18 @@ class NetAmountRow {
   }
 
   /// Customer Invoice-style bucket: `draft` | `open` | `paid` | `cancel`.
-  String get sectionKey => toInvoiceSummary().sectionKey;
+  String get sectionKey {
+    final key = toInvoiceSummary().sectionKey;
+    if (key != 'unknown') return key;
+    // Sparse Laravel net-amount rows often omit state; infer from residual.
+    final bal = balance;
+    final tot = total ?? 0;
+    if (isPaid || invoicePaidFlag) return 'paid';
+    if (bal != null && bal.abs() <= 0.0001 && tot > 0.0001) return 'paid';
+    if (bal != null && bal > 0.0001) return 'open';
+    if (tot > 0.0001) return 'open';
+    return 'draft';
+  }
 
   String get displayBillStatus {
     switch (sectionKey) {
@@ -563,11 +597,6 @@ class NetAmountRow {
       'payment_status',
       'invoice_payment_state',
     ]);
-    final isPaid = flat['is_paid'] == true ||
-        flat['is_paid'] == 1 ||
-        paymentState?.toLowerCase().trim() == 'paid' ||
-        _bool(flat, const ['invoice_paid', 'paid']);
-
     final subtotal = _num(flat, const [
       'subtotal',
       'amount_untaxed',
@@ -582,6 +611,24 @@ class NetAmountRow {
       'amount_total_signed',
       'price_total',
     ]);
+    final balanceHint = _num(flat, const [
+      'balance',
+      'amount_residual',
+      'residual',
+      'amount_due',
+      'amount_residual_signed',
+    ]);
+    var isPaid = flat['is_paid'] == true ||
+        flat['is_paid'] == 1 ||
+        paymentState?.toLowerCase().trim() == 'paid' ||
+        _bool(flat, const ['invoice_paid', 'paid']);
+    // Laravel net-amount rows often omit payment_state; infer from residual.
+    if (!isPaid &&
+        balanceHint != null &&
+        balanceHint.abs() <= 0.0001 &&
+        (total ?? 0) > 0.0001) {
+      isPaid = true;
+    }
     var taxAmount = _num(flat, const [
       'tax_amount',
       'amount_tax',
@@ -721,13 +768,16 @@ class NetAmountRow {
         'payment_type',
         'journal_type',
       ]),
-      // Cash Book / website: only partner-level fields. Generic advance/old
-      // keys are often 0 on payment-history rows and would hide real values.
+      // Prefer partner-level fields; also accept payment-form aliases.
       advanceAmount: _num(flat, const [
         'customer_advance_amount',
+        'advance_amt',
+        'advance_amount',
       ]),
       oldBalance: _num(flat, const [
         'customer_old_balance',
+        'old_balance',
+        'previous_balance',
       ]),
       isCreditCustomer: flat['is_credit_customer'] == true ||
           flat['is_credit_customer'] == 1 ||

@@ -4,7 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../features/services/auth_session_store.dart';
+import '../features/services/base_api.dart';
+import '../features/services/cash_book_seen_at_store.dart';
 import '../features/services/endPoints.dart';
+import '../features/services/flutter_customer_invoice_web_api.dart';
+import '../features/services/flutter_customer_payment_api.dart';
+import '../features/services/invoice_detail_service.dart';
 import '../features/services/invoice_list_pager.dart';
 import '../features/services/odoo_rpc_helper.dart';
 import '../features/services/payment_history_service.dart';
@@ -42,14 +48,16 @@ class AmountBookViewModel extends ChangeNotifier {
     hydrateFromSharedCache();
   }
 
-  static const _cacheTtl = Duration(seconds: 8);
-  static const _advanceTtl = Duration(seconds: 45);
-  /// How long advance/old balance may stay without re-reading Odoo.
-  static const balanceTtl = Duration(seconds: 12);
+  static const _cacheTtl = Duration(seconds: 3);
+  static const _advanceTtl = Duration(seconds: 20);
+  /// Soft UI skip window; live form re-read still runs when master id is known.
+  static const balanceTtl = Duration(seconds: 3);
 
   static List<InvoiceSummaryModel>? _advanceCache;
   static DateTime? _advanceCachedAt;
   static final Map<String, _CustomerBalance> _balancesByCustomer = {};
+  /// Masters customer id so live refresh can hit the edit form directly.
+  static final Map<String, int> _masterCustomerIdByName = {};
 
   bool loading = false;
   String error = '';
@@ -95,9 +103,8 @@ class AmountBookViewModel extends ChangeNotifier {
         ];
       }
     } else if (totalPaid - lastKnown > 0.0001) {
-      // A new payment landed since we last looked — log it as its own
-      // entry, timestamped with this fetch batch so two invoices paid
-      // together (₹100 + ₹400 = ₹500) share one YOU GOT row.
+      // A new payment landed since we last looked — log only the increase
+      // as its own entry. Never replace the older payment with the sum.
       _lastKnownPaidByInvoice[invoiceId] = totalPaid;
       final log = _paymentLogByInvoice.putIfAbsent(invoiceId, () => []);
       log.add(
@@ -115,36 +122,63 @@ class AmountBookViewModel extends ChangeNotifier {
     return log;
   }
 
-  // Same problem, but for the bill itself: the website's invoice date has
-  // no time component, so a bill saved just now still sorts wherever its
-  // date puts it, not at the top. We track which invoice ids we already
-  // knew about — once that baseline is established (first successful
-  // load this session), any id that shows up afterwards for the first
-  // time is a bill that was genuinely just saved, and gets stamped with
-  // "now" instead of its own date.
+  // Laravel invoice/payment dates often have no clock. We persist the
+  // wall-clock when each id first appears in the app so order stays stable.
   static bool _hasEstablishedInvoiceBaseline = false;
   static final Set<int> _knownInvoiceIds = {};
   static final Map<int, DateTime> _saleSeenAt = {};
+
+  static bool _paymentBaselineReady = false;
+  static final Map<int, DateTime> _paymentSeenAt = {};
+  static bool _seenAtHydrated = false;
+
+  static Future<void> _ensureSeenAtHydrated() async {
+    if (_seenAtHydrated) return;
+    await CashBookSeenAtStore.ensureLoaded();
+    _saleSeenAt.addAll(CashBookSeenAtStore.sales);
+    _paymentSeenAt.addAll(CashBookSeenAtStore.payments);
+    _knownInvoiceIds.addAll(_saleSeenAt.keys);
+    if (_saleSeenAt.isNotEmpty) _hasEstablishedInvoiceBaseline = true;
+    if (_paymentSeenAt.isNotEmpty) _paymentBaselineReady = true;
+    _seenAtHydrated = true;
+  }
+
+  static void _rememberSaleSeen(int id, DateTime at) {
+    final kept = CashBookSeenAtStore.rememberSale(id, at);
+    _saleSeenAt[id] = kept;
+    unawaited(CashBookSeenAtStore.persist());
+  }
+
+  static void _rememberPaymentSeen(int id, DateTime at) {
+    final kept = CashBookSeenAtStore.rememberPayment(id, at);
+    _paymentSeenAt[id] = kept;
+    unawaited(CashBookSeenAtStore.persist());
+  }
 
   static void _trackNewlySeenInvoices(List<NetAmountRow> rows) {
     final currentIds = <int>{};
     for (final row in rows) {
       final id = row.id;
-      if (id != null) currentIds.add(id);
+      if (id == null || row.sectionKey == 'cancel') continue;
+      currentIds.add(id);
     }
 
     if (!_hasEstablishedInvoiceBaseline) {
-      // First successful load this session — these are bills that
-      // already existed on the website, not ones just saved. Record
-      // them as the known baseline without stamping a "just now" time.
       _knownInvoiceIds.addAll(currentIds);
       _hasEstablishedInvoiceBaseline = true;
-      for (final row in rows) {
-        final id = row.id;
-        if (id == null) continue;
-        final created = CalendarDate.parseDateTime(row.createdAt);
+      final ordered = [...rows]
+        ..removeWhere((r) => r.id == null || r.sectionKey == 'cancel')
+        ..sort((a, b) => (a.id ?? 0).compareTo(b.id ?? 0));
+      final base = DateTime.now().subtract(Duration(seconds: ordered.length + 1));
+      for (var i = 0; i < ordered.length; i++) {
+        final id = ordered[i].id!;
+        if (_saleSeenAt.containsKey(id)) continue;
+        final created = CalendarDate.parseDateTime(ordered[i].createdAt);
         if (created != null && CalendarDate.hasClockTime(created)) {
-          _saleSeenAt[id] = created;
+          _rememberSaleSeen(id, created);
+        } else {
+          // Stable synthetic clock so date-only Laravel rows do not reshuffle.
+          _rememberSaleSeen(id, base.add(Duration(seconds: i + 1)));
         }
       }
       return;
@@ -152,10 +186,8 @@ class AmountBookViewModel extends ChangeNotifier {
 
     final now = DateTime.now();
     for (final id in currentIds) {
-      if (_knownInvoiceIds.add(id)) {
-        // Wasn't known before, and the baseline is already established —
-        // this bill was genuinely just saved on the website.
-        _saleSeenAt[id] = now;
+      if (_knownInvoiceIds.add(id) && !_saleSeenAt.containsKey(id)) {
+        _rememberSaleSeen(id, now);
       }
     }
   }
@@ -168,16 +200,63 @@ class AmountBookViewModel extends ChangeNotifier {
     if (invoiceId == null) {
       return [PaymentLogEntry(amount: totalAmount, time: fallbackDate)];
     }
-    final seenAt = _saleSeenAt[invoiceId];
+    final seenAt = _saleSeenAt[invoiceId] ?? CashBookSeenAtStore.saleAt(invoiceId);
     if (seenAt != null) {
+      _saleSeenAt[invoiceId] = seenAt;
       return [PaymentLogEntry(amount: totalAmount, time: seenAt)];
     }
     if (CalendarDate.hasClockTime(fallbackDate)) {
-      _saleSeenAt[invoiceId] = fallbackDate;
+      _rememberSaleSeen(invoiceId, fallbackDate);
+      return [PaymentLogEntry(amount: totalAmount, time: fallbackDate)];
     }
+    final stamped = DateTime.now();
+    _rememberSaleSeen(invoiceId, stamped);
+    return [PaymentLogEntry(amount: totalAmount, time: stamped)];
+  }
+
+  static List<CustomerPaymentRecord> _stampPaymentTimes(
+    List<CustomerPaymentRecord> rows,
+  ) {
+    if (rows.isEmpty) return rows;
+
+    if (!_paymentBaselineReady) {
+      final ordered = [...rows]
+        ..removeWhere((p) => p.id == null)
+        ..sort((a, b) => (a.id ?? 0).compareTo(b.id ?? 0));
+      final base = DateTime.now().subtract(Duration(seconds: ordered.length + 1));
+      for (var i = 0; i < ordered.length; i++) {
+        final payment = ordered[i];
+        final id = payment.id!;
+        if (_paymentSeenAt.containsKey(id)) continue;
+        final apiTime = payment.dateTime;
+        if (apiTime != null && CalendarDate.hasClockTime(apiTime)) {
+          _rememberPaymentSeen(id, apiTime);
+        } else {
+          _rememberPaymentSeen(id, base.add(Duration(seconds: i + 1)));
+        }
+      }
+      _paymentBaselineReady = true;
+    }
+
+    final now = DateTime.now();
     return [
-      PaymentLogEntry(amount: totalAmount, time: fallbackDate),
+      for (final payment in rows) _withPaymentSeenTime(payment, now),
     ];
+  }
+
+  static CustomerPaymentRecord _withPaymentSeenTime(
+    CustomerPaymentRecord payment,
+    DateTime now,
+  ) {
+    final id = payment.id;
+    if (id == null) return payment;
+    final seen = _paymentSeenAt[id] ?? CashBookSeenAtStore.paymentAt(id);
+    if (seen == null) {
+      _rememberPaymentSeen(id, now);
+      return payment.copyWith(dateTime: now);
+    }
+    _paymentSeenAt[id] = seen;
+    return payment.copyWith(dateTime: seen);
   }
 
   List<NetAmountRow> youGotInvoices = [];
@@ -192,7 +271,8 @@ class AmountBookViewModel extends ChangeNotifier {
   bool _enrichBusy = false;
   bool _prefetchBalancesBusy = false;
 
-  bool get hasData => youGotInvoices.isNotEmpty;
+  bool get hasData =>
+      youGotInvoices.isNotEmpty || payments.isNotEmpty;
 
   bool get _hasFreshData =>
       _loadedAt != null &&
@@ -224,19 +304,53 @@ class AmountBookViewModel extends ChangeNotifier {
     return current;
   }
 
+  /// List/payment payloads often send `0` for unset advance/old — ignore those.
+  static bool _isUnsetBalance(double? advance, double? oldBalance) {
+    final advUnset = advance == null || advance == 0;
+    final oldUnset = oldBalance == null || oldBalance == 0;
+    return advUnset && oldUnset;
+  }
+
   static void _ingestCustomerBalances(Iterable<InvoiceSummaryModel> invoices) {
     for (final inv in invoices) {
       final name = _normName(inv.displayCustomer);
       if (name.isEmpty) continue;
       if (InvoiceSummaryModel.isWalkInCustomerName(name)) continue;
-      if (inv.advanceAmount == null && inv.oldBalance == null) continue;
-      // Weak list-API merge only fills gaps — never blocks a later Odoo overwrite.
+      if (_isUnsetBalance(inv.advanceAmount, inv.oldBalance)) continue;
+      // Weak list-API merge only fills gaps — never blocks a later overwrite.
       final existing = _balancesByCustomer[name];
       if (existing != null && existing.hasUseful && existing.isFresh) continue;
       _balancesByCustomer[name] = _CustomerBalance(
         advance: _preferAmount(existing?.advance, inv.advanceAmount),
         oldBalance: _preferAmount(existing?.oldBalance, inv.oldBalance),
         fetchedAt: existing?.fetchedAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+      );
+    }
+  }
+
+  /// Laravel payment list may carry per-customer `advance_amt` / `old_balance`.
+  /// Confirmed vouchers usually send `0` — do not treat that as authoritative.
+  static void _ingestBalancesFromPayments(
+    Iterable<CustomerPaymentRecord> payments,
+  ) {
+    final newest = <String, CustomerPaymentRecord>{};
+    for (final payment in payments) {
+      final name = _normName(payment.customerName);
+      if (name.isEmpty) continue;
+      if (InvoiceSummaryModel.isWalkInCustomerName(name)) continue;
+      if (_isUnsetBalance(payment.advanceAmount, payment.oldBalance)) continue;
+      final prev = newest[name];
+      if (prev == null || (payment.id ?? 0) >= (prev.id ?? 0)) {
+        newest[name] = payment;
+      }
+    }
+    for (final entry in newest.entries) {
+      final payment = entry.value;
+      final existing = _balancesByCustomer[entry.key];
+      _balancesByCustomer[entry.key] = _CustomerBalance(
+        advance: _preferAmount(existing?.advance, payment.advanceAmount),
+        oldBalance: _preferAmount(existing?.oldBalance, payment.oldBalance),
+        fetchedAt: DateTime.now(),
       );
     }
   }
@@ -274,8 +388,13 @@ class AmountBookViewModel extends ChangeNotifier {
     final byNumber = <String, double>{};
     for (final payment in payments) {
       for (final inv in payment.invoices) {
-        if (inv.balance == null) continue;
-        final bal = inv.balance!;
+        if (CustomerPaymentRecord.effectiveAllocation(inv, payment) <= 0.0001) {
+          continue;
+        }
+        // Prefer remaining-after-pay; balance_due is pre-allocation and
+        // must not replace a smaller live residual.
+        final bal = inv.balanceAfter ?? inv.balance;
+        if (bal == null) continue;
         if (inv.invoiceId != null) {
           final prev = byId[inv.invoiceId!];
           // Keep the smallest residual (most settled) when sources disagree.
@@ -337,25 +456,20 @@ class AmountBookViewModel extends ChangeNotifier {
         }
         enriched++;
         out.add(
-          CustomerPaymentRecord(
-            id: payment.id,
-            name: payment.name,
-            customerName: payment.customerName,
-            amount: payment.amount,
-            dateTime: payment.dateTime,
-            paymentMode: payment.paymentMode,
+          payment.copyWith(
             invoices: [
               for (final inv in linked)
-                CustomerPaymentInvoice(
-                  invoiceId: inv.moveId,
-                  number: inv.number ?? '',
-                  allocatedAmount: inv.payAmount ?? 0,
-                  total: inv.total,
-                  balance: inv.balance,
-                  status: inv.status ?? '',
-                  responsiblePerson: inv.responsiblePerson,
-                  invoiceDate: inv.invoiceDate,
-                ),
+                if ((inv.payAmount ?? 0) > 0.0001)
+                  CustomerPaymentInvoice(
+                    invoiceId: inv.moveId,
+                    number: inv.number ?? '',
+                    allocatedAmount: inv.payAmount ?? 0,
+                    total: inv.total,
+                    balance: inv.balance,
+                    status: inv.status ?? '',
+                    responsiblePerson: inv.responsiblePerson,
+                    invoiceDate: inv.invoiceDate,
+                  ),
             ],
           ),
         );
@@ -372,14 +486,24 @@ class AmountBookViewModel extends ChangeNotifier {
     if (cached == null || cached.isEmpty) return;
     if (youGotInvoices.isNotEmpty) return;
     youGotInvoices = cached.map(NetAmountRow.fromInvoice).toList(growable: false);
-    payments = CustomerPaymentListService.cached;
-    _trackNewlySeenInvoices(youGotInvoices);
+    final cachedPays = CustomerPaymentListService.cached;
+    _ingestBalancesFromPayments(cachedPays);
+    payments = cachedPays;
     if (_advanceCache != null && _advanceCache!.isNotEmpty) {
       _ingestCustomerBalances(_advanceCache!);
     }
     youGotInvoices = _applyCustomerBalances(youGotInvoices);
     _loadedAt = PaymentHistoryService.cachedAt ?? DateTime.now();
     error = '';
+    unawaited(_applyPersistedSeenTimes());
+  }
+
+  Future<void> _applyPersistedSeenTimes() async {
+    await _ensureSeenAtHydrated();
+    if (_disposed) return;
+    payments = _stampPaymentTimes(payments);
+    _trackNewlySeenInvoices(youGotInvoices);
+    _safeNotify();
   }
 
   List<AmountBookCustomerSummary> get allCustomerSummaries =>
@@ -409,10 +533,11 @@ class AmountBookViewModel extends ChangeNotifier {
     return sum;
   }
 
+  /// YOU GAVE = bill/sales totals (same as filteredYouGave), not outstanding.
   double get allYouGave {
     var sum = 0.0;
     for (final s in allCustomerSummaries) {
-      sum += s.lastBalance ?? 0;
+      sum += s.youGaveTotal ?? 0;
     }
     return sum;
   }
@@ -432,6 +557,13 @@ class AmountBookViewModel extends ChangeNotifier {
     }
     return sum;
   }
+
+  /// Header card totals — respect active Cash Book filter like the website.
+  double get summaryYouGot =>
+      filter.isActive ? filteredYouGot : allYouGot;
+
+  double get summaryYouGave =>
+      filter.isActive ? filteredYouGave : allYouGave;
 
   double get filteredBalance {
     var sum = 0.0;
@@ -459,8 +591,7 @@ class AmountBookViewModel extends ChangeNotifier {
     hydrateFromSharedCache();
 
     if (forceRefresh) {
-      // Pull-to-refresh / force: drop sticky balances so website edits apply.
-      _balancesByCustomer.clear();
+      // Keep sticky advance/old on screen; ensureBalances overwrites when ready.
       CustomerPaymentListService.clearCache();
     }
 
@@ -498,75 +629,89 @@ class AmountBookViewModel extends ChangeNotifier {
       }
       final sessionId = loginModel.sessionId!;
 
-      // Prefer fast head refresh when we already have a full list.
+      // Prefer head merge whenever a catalog already exists. Laravel
+      // get_payment_history is today-only after save — a full replace wipes Cash Book.
       final useHead = headOnly ||
-          (silent && youGotInvoices.isNotEmpty && !forceRefresh) ||
-          (silent && forceRefresh && youGotInvoices.isNotEmpty);
-
-      final invoices = useHead
-          ? await PaymentHistoryService.refreshHead(sessionId: sessionId)
-          : await PaymentHistoryService.fetchInvoices(
-        sessionId: sessionId,
-        forceRefresh: forceRefresh && !PaymentHistoryService.hasAnyCache
-            ? true
-            : forceRefresh,
-      );
-
-      if (_disposed) return;
-
-      CustomerInvoiceViewModel.seedFromPaymentHistory();
+          youGotInvoices.isNotEmpty ||
+          PaymentHistoryService.hasAnyCache;
 
       _paymentBatchTime = DateTime.now();
+
+      // Start both at once — website edits show after one RTT, not two.
+      final invoicesFuture = useHead
+          ? PaymentHistoryService.refreshHead(sessionId: sessionId)
+          : PaymentHistoryService.fetchInvoices(
+              sessionId: sessionId,
+              forceRefresh: forceRefresh,
+            );
+      final paymentsFuture = CustomerPaymentListService.fetch(
+        sessionId: sessionId,
+        forceRefresh: forceRefresh,
+        headOnly: useHead && !forceRefresh,
+      );
+
+      final invoices = await invoicesFuture;
       List<CustomerPaymentRecord> paymentRows = payments;
-      String? webSid;
       try {
-        webSid = await _webSession(loginModel);
-        paymentRows = await CustomerPaymentListService.fetch(
-          sessionId: sessionId,
-          webSessionId: webSid,
-          forceRefresh: forceRefresh,
-          headOnly: useHead && !forceRefresh,
-        );
-        if (webSid != null && webSid.isNotEmpty) {
-          paymentRows = await _enrichMissingPaymentInvoices(
-            webSid,
-            paymentRows,
-          );
-        }
+        paymentRows = await paymentsFuture;
       } catch (e) {
         if (kDebugMode) {
           debugPrint('AmountBookViewModel payments: $e');
         }
       }
 
-      var rows = invoices.map(NetAmountRow.fromInvoice).toList(growable: false);
-      if (_advanceCache != null && _advanceCache!.isNotEmpty) {
-        _ingestCustomerBalances(_advanceCache!);
+      if (_disposed) return;
+
+      await _ensureSeenAtHydrated();
+      if (_disposed) return;
+
+      CustomerInvoiceViewModel.seedFromPaymentHistory();
+
+      if (enableOdooRpc && !silent) {
+        final webSid = await _webSession(loginModel);
+        if (webSid != null && webSid.isNotEmpty) {
+          paymentRows = await _enrichMissingPaymentInvoices(
+            webSid,
+            paymentRows,
+          );
+        }
       }
+
+      // Fresh head already carries advance/old — avoid a second invoice list call.
+      _ingestCustomerBalances(invoices);
+      // Payment vouchers expose advance_amt / old_balance per customer.
+      _ingestBalancesFromPayments(paymentRows);
+      if (_advanceCache == null || _advanceCache!.isEmpty || forceRefresh) {
+        _advanceCache = invoices;
+        _advanceCachedAt = DateTime.now();
+      }
+
+      var rows = invoices.map(NetAmountRow.fromInvoice).toList(growable: false);
       rows = _applyCustomerBalances(rows);
 
       youGotInvoices = rows;
       _trackNewlySeenInvoices(youGotInvoices);
       youGaveBills = const [];
-      payments = paymentRows;
+      payments = _stampPaymentTimes(paymentRows);
       youGotInvoices = _applyPaymentInvoiceResiduals(youGotInvoices, payments);
       reportDate = null;
-      error = invoices.isEmpty ? 'No customer invoices found' : '';
+      error = invoices.isEmpty && paymentRows.isEmpty
+          ? 'No customer invoices found'
+          : '';
       _loadedAt = DateTime.now();
       loading = false;
       _safeNotify();
 
-      // Warm / refresh advance/old so website edits show up on live sync.
-      // Use login captured before awaits — page context may be deactivated.
-      unawaited(
-        prefetchBalancesForLogin(loginModel, refreshStale: true),
-      );
-
-      // List API does not reliably carry advance/old; enrich only on cold
-      // loads (not every head refresh) so Cash Book stays responsive.
-      if (!useHead) {
+      // Full/cold load only — live head polls already ingested balances above.
+      if (!useHead || forceRefresh) {
         unawaited(_enrichAdvanceInBackground(sessionId));
       }
+      unawaited(
+        prefetchBalancesForLogin(
+          loginModel,
+          refreshStale: forceRefresh || !useHead,
+        ),
+      );
     } catch (e, s) {
       if (kDebugMode) debugPrint('AmountBookViewModel.fetch: $e\n$s');
       if (_disposed) return;
@@ -582,8 +727,8 @@ class AmountBookViewModel extends ChangeNotifier {
 
   /// Load advance/old balance for one customer (e.g. opening ledger detail).
   ///
-  /// Pass [force] to re-read Odoo even when a cached value exists (live sync /
-  /// pull-to-refresh after website edits).
+  /// Pass [force] to re-read even when a cached value exists (pull-to-refresh).
+  /// Useful cached values stay on screen while a refresh runs (no zero flash).
   Future<void> ensureBalancesForCustomer(
       BuildContext context,
       String customerName, {
@@ -594,15 +739,25 @@ class AmountBookViewModel extends ChangeNotifier {
     if (key.isEmpty) return;
 
     final existing = _balancesByCustomer[key];
-    if (!force &&
-        existing != null &&
-        existing.hasUseful &&
-        existing.isFresh) {
+    final hasMasterId = _masterCustomerIdByName[key] != null;
+
+    // Keep sticky values on screen (avoid 0 flash).
+    if (existing != null && existing.hasUseful) {
       final merged = _applyCustomerBalances(youGotInvoices);
       if (!identical(merged, youGotInvoices)) {
         youGotInvoices = merged;
         _safeNotify();
       }
+    }
+
+    // Skip network only when fresh AND we cannot fast-hit the masters form.
+    // With a cached customer id, always re-read the form so Advance live-updates
+    // the same way Old Balance does.
+    if (!force &&
+        !hasMasterId &&
+        existing != null &&
+        existing.hasUseful &&
+        existing.isFresh) {
       return;
     }
 
@@ -611,11 +766,44 @@ class AmountBookViewModel extends ChangeNotifier {
     if (flutterSid == null || flutterSid.isEmpty) return;
 
     try {
-      final webSid = await _webSession(loginModel);
-      if (webSid == null || webSid.isEmpty) {
-        await _enrichAdvanceInBackground(flutterSid);
+      // Never let weak invoice/payment zeros block a masters form re-read.
+      // Masters form has Advance + Old Balance (live + force).
+      final fromLaravel = await _resolveLaravelCustomerBalances(
+        loginModel,
+        customerName: customerName,
+        key: key,
+        allowWebsiteScrape: true,
+        listOnly: false,
+      );
+      if (_disposed) return;
+      if (fromLaravel != null &&
+          (fromLaravel.advance != null || fromLaravel.oldBalance != null)) {
+        final prev = _balancesByCustomer[key];
+        // Trust masters form as a whole (null advance → 0) so live Advance
+        // updates replace sticky values instead of keeping a stale amount.
+        final fromForm = fromLaravel.advance != null ||
+            fromLaravel.oldBalance != null;
+        final adv = fromForm
+            ? (fromLaravel.advance ?? 0)
+            : prev?.advance;
+        final old = fromLaravel.oldBalance ?? prev?.oldBalance;
+        _storeBalance(key, adv, old, overwrite: true);
+        youGotInvoices = _applyCustomerBalances(youGotInvoices);
+        _safeNotify();
+        if (kDebugMode) {
+          debugPrint(
+            'cash book balances $customerName '
+            'advance=$adv old=$old'
+            '${force ? ' (forced)' : ' (live)'}',
+          );
+        }
+        if (!enableOdooRpc) return;
+      } else if (!enableOdooRpc) {
         return;
       }
+
+      final webSid = await _webSession(loginModel);
+      if (webSid == null || webSid.isEmpty) return;
 
       // Prefer newest move id only — one fast read, no fields_get.
       final moveIds = youGotInvoices
@@ -662,15 +850,125 @@ class AmountBookViewModel extends ChangeNotifier {
                 '${force ? ' (forced)' : ''}',
           );
         }
-        return;
       }
-
-      await _enrichAdvanceInBackground(flutterSid);
     } catch (e) {
       if (kDebugMode) {
         debugPrint('cash book ensureBalancesForCustomer($customerName): $e');
       }
     }
+  }
+
+  int? _newestInvoiceIdForCustomer(String key) {
+    int? newest;
+    for (final row in youGotInvoices) {
+      if (_normName(row.customer) != key || row.id == null) continue;
+      if (newest == null || row.id! > newest) newest = row.id;
+    }
+    if (newest != null) return newest;
+    final cached = PaymentHistoryService.cachedInvoices;
+    if (cached == null) return null;
+    for (final inv in cached) {
+      if (_normName(inv.displayCustomer) != key || inv.id == null) continue;
+      if (newest == null || inv.id! > newest) newest = inv.id;
+    }
+    return newest;
+  }
+
+  Future<({double? advance, double? oldBalance})?>
+      _resolveLaravelCustomerBalances(
+    LoginViewmodel loginModel, {
+    required String customerName,
+    required String key,
+    bool allowWebsiteScrape = true,
+    bool listOnly = false,
+  }) async {
+    final flutterSid = (loginModel.sessionId ?? '').trim();
+    if (flutterSid.isEmpty) return null;
+
+    var email = (loginModel.loginEmail ?? '').trim();
+    var pass = loginModel.loginPassword ?? '';
+    if (email.isEmpty || pass.isEmpty) {
+      final saved = await AuthSessionStore.load();
+      email = (saved?.email ?? '').trim();
+      pass = saved?.password ?? '';
+    }
+
+    // 1) Masters → Customers (website Old Balance / Advance source of truth).
+    if (allowWebsiteScrape && email.isNotEmpty && pass.isNotEmpty) {
+      final cachedId = _masterCustomerIdByName[key];
+      final fromMaster =
+          await FlutterCustomerInvoiceWebApi.fetchCustomerMasterBalances(
+        customerName: customerName,
+        email: email,
+        password: pass,
+        customerId: cachedId,
+        apiToken: AuthSessionStore.currentApiToken,
+        listOnly: listOnly,
+      );
+      if (fromMaster?.customerId != null && fromMaster!.customerId! > 0) {
+        _masterCustomerIdByName[key] = fromMaster.customerId!;
+      }
+      if (fromMaster != null &&
+          (fromMaster.advance != null || fromMaster.oldBalance != null)) {
+        return (
+          advance: fromMaster.advance,
+          oldBalance: fromMaster.oldBalance,
+        );
+      }
+      if (listOnly) return null;
+    }
+
+    final invoiceId = _newestInvoiceIdForCustomer(key);
+
+    if (invoiceId != null && invoiceId > 0) {
+      final fromDetail = await InvoiceDetailService.fetchCustomerBalances(
+        sessionId: flutterSid,
+        invoiceId: invoiceId,
+      );
+      if (fromDetail != null &&
+          !_isUnsetBalance(fromDetail.advance, fromDetail.oldBalance)) {
+        return fromDetail;
+      }
+
+      if (allowWebsiteScrape && email.isNotEmpty && pass.isNotEmpty) {
+        final fromWeb =
+            await FlutterCustomerInvoiceWebApi.fetchCustomerFormBalances(
+          invoiceId: invoiceId,
+          email: email,
+          password: pass,
+          apiToken: AuthSessionStore.currentApiToken,
+        );
+        if (fromWeb != null &&
+            !_isUnsetBalance(fromWeb.advance, fromWeb.oldBalance)) {
+          return fromWeb;
+        }
+      }
+    }
+
+    // Newest payment detail for this customer (form fields when present).
+    CustomerPaymentRecord? newestPay;
+    for (final p in payments) {
+      if (_normName(p.customerName) != key) continue;
+      if (newestPay == null || (p.id ?? 0) > (newestPay.id ?? 0)) {
+        newestPay = p;
+      }
+    }
+    final payId = newestPay?.id;
+    if (payId != null && payId > 0) {
+      final detailed = await FlutterCustomerPaymentApi.getPayment(
+        sessionId: flutterSid,
+        paymentId: payId,
+      );
+      if (detailed != null &&
+          !_isUnsetBalance(detailed.advanceAmount, detailed.oldBalance)) {
+        return (
+          advance: detailed.advanceAmount,
+          oldBalance: detailed.oldBalance,
+        );
+      }
+    }
+
+    return null;
   }
 
   /// Prefetch advance/old for list customers so detail opens instantly.
@@ -693,13 +991,55 @@ class AmountBookViewModel extends ChangeNotifier {
     bool refreshStale = false,
   }) async {
     if (_disposed || _prefetchBalancesBusy) return;
+    // Weak payment-list fields (non-zero only).
+    _ingestBalancesFromPayments(payments);
+    if (_balancesByCustomer.isNotEmpty) {
+      final merged = _applyCustomerBalances(youGotInvoices);
+      if (!identical(merged, youGotInvoices) && !_disposed) {
+        youGotInvoices = merged;
+        _safeNotify();
+      }
+    }
+
     final missing = _customersNeedingBalances(includeStale: refreshStale);
     if (missing.isEmpty) return;
-
     if (loginModel.sessionId == null || loginModel.sessionId!.isEmpty) return;
 
     _prefetchBalancesBusy = true;
     try {
+      if (!enableOdooRpc) {
+        // Masters/customers scrape for a few missing (Old Balance source).
+        var changed = false;
+        var n = 0;
+        for (final key in missing) {
+          if (_disposed || n >= 6) break;
+          n++;
+          var displayName = key;
+          for (final row in youGotInvoices) {
+            if (_normName(row.customer) == key) {
+              displayName = (row.customer ?? key).trim();
+              break;
+            }
+          }
+          final hit = await _resolveLaravelCustomerBalances(
+            loginModel,
+            customerName: displayName,
+            key: key,
+            allowWebsiteScrape: true,
+            listOnly: false,
+          );
+          if (hit == null) continue;
+          if (hit.advance == null && hit.oldBalance == null) continue;
+          _storeBalance(key, hit.advance, hit.oldBalance, overwrite: true);
+          changed = true;
+        }
+        if (changed && !_disposed) {
+          youGotInvoices = _applyCustomerBalances(youGotInvoices);
+          _safeNotify();
+        }
+        return;
+      }
+
       final webSid = await _webSession(loginModel);
       if (webSid == null || webSid.isEmpty) return;
 
@@ -755,6 +1095,22 @@ class AmountBookViewModel extends ChangeNotifier {
     } finally {
       _prefetchBalancesBusy = false;
     }
+  }
+
+  /// Push balances from invoice/payment screens into Cash Book cache.
+  static void rememberCustomerBalances(
+    String customerName, {
+    double? advance,
+    double? oldBalance,
+  }) {
+    final key = _normName(customerName);
+    if (key.isEmpty) return;
+    if (advance == null && oldBalance == null) return;
+    _balancesByCustomer[key] = _CustomerBalance(
+      advance: advance,
+      oldBalance: oldBalance,
+      fetchedAt: DateTime.now(),
+    );
   }
 
   void _storeBalance(
@@ -907,16 +1263,76 @@ class AmountBookViewModel extends ChangeNotifier {
     return n.startsWith('PAY/') || n.startsWith('PMT/');
   }
 
+  AmountBookInvoiceLine _paymentBillLine(
+    CustomerPaymentRecord payment,
+    CustomerPaymentInvoice inv,
+  ) {
+    NetAmountRow? match;
+    if (inv.invoiceId != null) {
+      for (final row in youGotInvoices) {
+        if (row.id == inv.invoiceId) {
+          match = row;
+          break;
+        }
+      }
+    }
+    if (match == null) {
+      final want = inv.number.trim().toLowerCase();
+      if (want.isNotEmpty) {
+        for (final row in youGotInvoices) {
+          if (row.displayNumber.trim().toLowerCase() == want) {
+            match = row;
+            break;
+          }
+        }
+      }
+    }
+
+    final pay = CustomerPaymentRecord.effectiveAllocation(inv, payment);
+    final total = inv.total ?? match?.total;
+    // Remaining after this payment — never reuse bill total as balance.
+    double? balance = inv.balanceAfter ?? inv.balance;
+    if (balance == null && inv.balanceDue != null) {
+      balance = inv.balanceDue! - pay;
+      if (balance < 0) balance = 0;
+    }
+    balance ??= match?.balance;
+    if (balance != null &&
+        total != null &&
+        pay > 0.0001 &&
+        (balance - total).abs() < 0.0001) {
+      final remaining = (inv.balanceDue ?? total) - pay;
+      balance = remaining < 0 ? 0 : remaining;
+    }
+
+    return AmountBookInvoiceLine(
+      number: inv.number.trim().isNotEmpty
+          ? inv.number
+          : (match?.displayNumber ?? '—'),
+      isYouGave: false,
+      invoiceId: inv.invoiceId ?? match?.id,
+      sortDate: CalendarDate.parseDateTime(inv.invoiceDate) ??
+          (match == null
+              ? null
+              : AmountBookLedgerBuilder.parseRowDateTime(match)) ??
+          payment.dateTime,
+      total: total,
+      balance: balance,
+      youGotAmount: pay,
+      status: inv.status.isNotEmpty
+          ? inv.status
+          : (match?.toInvoiceSummary().displayStatus ?? ''),
+      responsiblePerson: inv.responsiblePerson ?? match?.billedBy,
+      paymentMode: payment.paymentMode ?? match?.paymentMode,
+    );
+  }
+
   /// Lazy-load website invoice table for a payment (bill icon).
   Future<List<AmountBookInvoiceLine>> loadPaymentInvoiceLines(
     BuildContext context,
     int paymentId,
   ) async {
     try {
-      final login = Provider.of<LoginViewmodel>(context, listen: false);
-      final webSid = await _webSession(login);
-      if (webSid == null || webSid.isEmpty) return const [];
-
       CustomerPaymentRecord? payment;
       for (final p in payments) {
         if (p.id == paymentId) {
@@ -924,6 +1340,58 @@ class AmountBookViewModel extends ChangeNotifier {
           break;
         }
       }
+
+      // List API often omits lines — pull detail so share/open bill have ids.
+      if (payment == null || payment.invoices.isEmpty) {
+        final login = Provider.of<LoginViewmodel>(context, listen: false);
+        final sid = login.sessionId;
+        if (sid != null && sid.isNotEmpty) {
+          final detailed = await FlutterCustomerPaymentApi.getPayment(
+            sessionId: sid,
+            paymentId: paymentId,
+          );
+          if (_disposed) return const [];
+          if (detailed != null && detailed.invoices.isNotEmpty) {
+            final allocated =
+                CustomerPaymentRecord.onlyAllocatedInvoices(detailed);
+            payment = detailed.copyWith(
+              invoices: allocated.isNotEmpty ? allocated : detailed.invoices,
+            );
+            final idx = payments.indexWhere((p) => p.id == paymentId);
+            if (idx >= 0) {
+              payments = [
+                for (var i = 0; i < payments.length; i++)
+                  if (i == idx)
+                    payments[i].copyWith(invoices: payment.invoices)
+                  else
+                    payments[i],
+              ];
+            }
+          }
+        }
+      }
+
+      // Laravel payments already carry nested invoices when available.
+      if (payment != null && payment.invoices.isNotEmpty) {
+        final allocatedOnly = CustomerPaymentRecord.onlyAllocatedInvoices(
+          payment,
+        );
+        // Prefer filtered lines; fall back only if helper kept none.
+        final source =
+            allocatedOnly.isNotEmpty ? allocatedOnly : payment.invoices;
+        return [
+          for (final inv in source)
+            if (CustomerPaymentRecord.effectiveAllocation(inv, payment) >
+                0.0001)
+              _paymentBillLine(payment, inv),
+        ];
+      }
+
+      if (!enableOdooRpc) return const [];
+
+      final login = Provider.of<LoginViewmodel>(context, listen: false);
+      final webSid = await _webSession(login);
+      if (webSid == null || webSid.isEmpty) return const [];
 
       final linked = await OdooRpcHelper.invoicesFromPartnerPayment(
         webSid,
@@ -1010,6 +1478,14 @@ class AmountBookViewModel extends ChangeNotifier {
       payments: payments,
     );
     final bal = _balancesByCustomer[_normName(customerName)];
+    // Masters cache wins over invoice/payment zeros (avoids footer glitch).
+    if (bal != null && bal.hasUseful) {
+      return AmountBookCustomerFooter(
+        advance: bal.advance ?? 0,
+        oldBalance: bal.oldBalance ?? 0,
+        balance: base.balance,
+      );
+    }
     if (bal == null || !bal.hasAny) return base;
     return AmountBookCustomerFooter(
       advance: bal.advance ?? base.advance,
@@ -1041,7 +1517,17 @@ class AmountBookViewModel extends ChangeNotifier {
         }
       }
     }
-    if (match != null) return match.toInvoiceSummary();
+    // Prefer payment-line residual (balance_after) when present.
+    final lineBalance = line.balance != null
+        ? InvoiceSummaryModel(
+            balance: line.balance,
+            total: line.total,
+          )
+        : null;
+    if (match != null) {
+      final summary = match.toInvoiceSummary();
+      return lineBalance == null ? summary : summary.mergedWith(lineBalance);
+    }
 
     return InvoiceSummaryModel(
       id: line.invoiceId,

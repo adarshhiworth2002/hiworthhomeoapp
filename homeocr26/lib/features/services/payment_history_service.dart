@@ -13,7 +13,7 @@ class PaymentHistoryService {
   static List<Map<String, dynamic>>? _rawCache;
   static DateTime? _cachedAt;
   static Future<List<InvoiceSummaryModel>>? _inFlight;
-  static const _cacheTtl = Duration(seconds: 8);
+  static const _cacheTtl = Duration(seconds: 4);
   /// Totals computed on-device (Dis% + expense). Prefer these over Odoo list
   /// amounts when the API still returns MRP-only. Survives [clearCache];
   /// cleared only via [clearTrustedTotals] (logout).
@@ -25,6 +25,9 @@ class PaymentHistoryService {
   /// Bumped on trusted upsert so a stale in-flight full fetch cannot wipe
   /// corrected head rows without re-applying overrides.
   static int _trustedEpoch = 0;
+  /// Laravel `get_payment_history` is often today-only. Once we see that,
+  /// live head refresh goes straight to `get_customer_invoice_list`.
+  static bool _preferCustomerInvoiceListHead = false;
 
   static bool get hasFreshCache =>
       _invoiceCache != null &&
@@ -170,16 +173,42 @@ class PaymentHistoryService {
     required String sessionId,
   }) async {
     final epochAtStart = _trustedEpoch;
-    final result = await InvoiceListPager.fetchAll(
+    final priorCount = _invoiceCache?.length ?? 0;
+    // Laravel `get_payment_history` often defaults to today (empty or 1 bill).
+    // Cash Book / Net Amount / list screens need the full customer invoice set.
+    var result = await InvoiceListPager.fetchAll(
       endpointPath: EndPoint.paymentHistory.path,
       sessionId: sessionId,
     );
+    final historySparse = result.invoices.isEmpty ||
+        (priorCount > 0 && result.invoices.length < priorCount) ||
+        (result.invoices.length < 20 && priorCount == 0);
+    if (historySparse) {
+      _preferCustomerInvoiceListHead = true;
+      if (kDebugMode) {
+        debugPrint(
+          'PaymentHistoryService: payment_history sparse '
+          '(${result.invoices.length}, prior=$priorCount) → '
+          'fallback get_customer_invoice_list',
+        );
+      }
+      final full = await InvoiceListPager.fetchAll(
+        endpointPath: EndPoint.customerInvoiceList.path,
+        sessionId: sessionId,
+      );
+      if (full.invoices.length >= result.invoices.length) {
+        result = full;
+      }
+    }
     if (result.error != null && result.invoices.isEmpty) {
       return applyTrustedToList(_invoiceCache ?? const []);
     }
-    // Stale full-fetch finished after a newer trusted upsert / refreshHead —
-    // merge into existing cache instead of wiping corrected head rows.
-    if (epochAtStart != _trustedEpoch && _invoiceCache != null) {
+    // Never replace a larger catalog with a shorter API page after save —
+    // merge by id so the new bill updates without wiping prior rows.
+    final shouldMerge = _invoiceCache != null &&
+        (_invoiceCache!.length > result.invoices.length ||
+            epochAtStart != _trustedEpoch);
+    if (shouldMerge) {
       final byId = <int, InvoiceSummaryModel>{};
       for (final inv in result.invoices) {
         final id = inv.id;
@@ -194,12 +223,15 @@ class PaymentHistoryService {
           continue;
         }
         seen.add(id);
-        merged.add(byId[id] ?? inv);
+        final incoming = byId[id];
+        merged.add(
+          incoming == null ? inv : inv.mergedWith(incoming),
+        );
       }
       for (final inv in result.invoices) {
         final id = inv.id;
         if (id == null || seen.contains(id)) continue;
-        merged.add(inv);
+        merged.insert(0, inv);
       }
       _invoiceCache = applyTrustedToList(merged);
     } else {
@@ -216,12 +248,56 @@ class PaymentHistoryService {
     int limit = InvoiceListPager.pageSize,
   }) async {
     try {
-      final page = await InvoiceListPager.fetchPage(
-        endpointPath: EndPoint.paymentHistory.path,
-        sessionId: sessionId,
-        limit: limit,
-        offset: 0,
-      );
+      final priorCount = _invoiceCache?.length ?? 0;
+      // Skip the known-sparse payment_history hop when we already have a
+      // catalog — saves one full round-trip on every Cash Book live poll.
+      final skipHistory =
+          _preferCustomerInvoiceListHead || priorCount >= 20;
+      var usedCustomerList = false;
+      late InvoiceListPageResult page;
+      if (skipHistory) {
+        page = await InvoiceListPager.fetchPage(
+          endpointPath: EndPoint.customerInvoiceList.path,
+          sessionId: sessionId,
+          limit: limit,
+          offset: 0,
+        );
+        usedCustomerList = page.error == null && page.invoices.isNotEmpty;
+      } else {
+        page = await InvoiceListPager.fetchPage(
+          endpointPath: EndPoint.paymentHistory.path,
+          sessionId: sessionId,
+          limit: limit,
+          offset: 0,
+        );
+        // Laravel history often returns only today's slice (1–2 bills). Using
+        // that as the "head" would drop the rest of the Cash Book catalog.
+        final historySparse = page.error != null ||
+            page.invoices.isEmpty ||
+            (priorCount > page.invoices.length &&
+                page.invoices.length < (limit / 2).floor());
+        if (historySparse) {
+          _preferCustomerInvoiceListHead = true;
+          if (kDebugMode) {
+            debugPrint(
+              'PaymentHistoryService.refreshHead: history sparse '
+              '(${page.invoices.length}, prior=$priorCount) → '
+              'customer_invoice_list head',
+            );
+          }
+          final fullHead = await InvoiceListPager.fetchPage(
+            endpointPath: EndPoint.customerInvoiceList.path,
+            sessionId: sessionId,
+            limit: limit,
+            offset: 0,
+          );
+          if (fullHead.error == null &&
+              fullHead.invoices.length >= page.invoices.length) {
+            page = fullHead;
+            usedCustomerList = true;
+          }
+        }
+      }
       if (page.error != null || page.invoices.isEmpty) {
         return _invoiceCache ?? const [];
       }
@@ -238,12 +314,17 @@ class PaymentHistoryService {
           headIds.add(id);
         }
       }
-      // Drop IDs that used to sit in the head page but are gone now (deleted).
       final old = _invoiceCache ?? const <InvoiceSummaryModel>[];
+      // Only drop missing head IDs when the head page is a real catalog page
+      // (customer invoice list), not a today-only payment_history slice.
+      final dropMissingHead = usedCustomerList &&
+          page.invoices.length >= (limit / 2).floor();
       final oldHeadIds = <int>{};
-      for (var i = 0; i < old.length && i < limit; i++) {
-        final id = old[i].id;
-        if (id != null) oldHeadIds.add(id);
+      if (dropMissingHead) {
+        for (var i = 0; i < old.length && i < limit; i++) {
+          final id = old[i].id;
+          if (id != null) oldHeadIds.add(id);
+        }
       }
       for (final inv in old) {
         final id = inv.id;
@@ -251,7 +332,9 @@ class PaymentHistoryService {
           withoutId.add(inv);
           continue;
         }
-        if (oldHeadIds.contains(id) && !headIds.contains(id)) {
+        if (dropMissingHead &&
+            oldHeadIds.contains(id) &&
+            !headIds.contains(id)) {
           continue;
         }
         byId.putIfAbsent(id, () => inv);

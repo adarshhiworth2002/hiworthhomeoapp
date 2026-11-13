@@ -6,9 +6,15 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/cheque_clearance_model.dart';
+import '../../viewModels/amount_book_viewmodel.dart';
 import '../../viewModels/login_viewmodel.dart';
+import '../services/appConfig.dart';
+import '../services/auth_session_store.dart';
+import '../services/flutter_customer_invoice_web_api.dart';
 import '../services/flutter_customer_payment_api.dart';
+import '../services/invoice_detail_service.dart';
 import '../services/odoo_rpc_helper.dart';
+import '../services/payment_history_service.dart';
 import '../widgets/app_responsive.dart';
 import '../widgets/system_safe.dart';
 import '../theme.dart';
@@ -333,6 +339,119 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
     }
   }
 
+  Future<void> _loadCustomerBalances() async {
+    final customer = _customer;
+    if (customer == null) return;
+    final name = customer.name.trim();
+    if (name.isEmpty) return;
+
+    try {
+      final login = context.read<LoginViewmodel>();
+      final flutterSid = (login.sessionId ?? '').trim();
+
+      int? moveId;
+      final cached = PaymentHistoryService.cachedInvoices;
+      if (cached != null) {
+        final want = name.toLowerCase();
+        for (final inv in cached) {
+          if ((inv.displayCustomer ?? '').trim().toLowerCase() != want) {
+            continue;
+          }
+          if (inv.id != null && (moveId == null || inv.id! > moveId)) {
+            moveId = inv.id;
+          }
+        }
+      }
+
+      double? advance;
+      double? oldBal;
+
+      if (!AppConfig.odooRpcEnabled) {
+        var email = (login.loginEmail ?? '').trim();
+        var pass = login.loginPassword ?? '';
+        if (email.isEmpty || pass.isEmpty) {
+          final saved = await AuthSessionStore.load();
+          email = (saved?.email ?? '').trim();
+          pass = saved?.password ?? '';
+        }
+        if (email.isNotEmpty && pass.isNotEmpty) {
+          final master =
+              await FlutterCustomerInvoiceWebApi.fetchCustomerMasterBalances(
+            customerName: name,
+            customerId: customer.id,
+            email: email,
+            password: pass,
+            apiToken: AuthSessionStore.currentApiToken,
+          );
+          advance = master?.advance;
+          oldBal = master?.oldBalance;
+        }
+        final useful = (advance != null && advance != 0) ||
+            (oldBal != null && oldBal != 0);
+        if (!useful &&
+            flutterSid.isNotEmpty &&
+            moveId != null &&
+            moveId > 0) {
+          final hit = await InvoiceDetailService.fetchCustomerBalances(
+            sessionId: flutterSid,
+            invoiceId: moveId,
+          );
+          advance = hit?.advance ?? advance;
+          oldBal = hit?.oldBalance ?? oldBal;
+        }
+        final stillUnset = (advance == null || advance == 0) &&
+            (oldBal == null || oldBal == 0);
+        if (stillUnset &&
+            email.isNotEmpty &&
+            pass.isNotEmpty &&
+            moveId != null &&
+            moveId > 0) {
+          final web =
+              await FlutterCustomerInvoiceWebApi.fetchCustomerFormBalances(
+            invoiceId: moveId,
+            email: email,
+            password: pass,
+            apiToken: AuthSessionStore.currentApiToken,
+          );
+          advance = web?.advance ?? advance;
+          oldBal = web?.oldBalance ?? oldBal;
+        }
+      }
+
+      // After draft exists, payment detail may also expose form balances.
+      final payId = _paymentId;
+      if (flutterSid.isNotEmpty &&
+          payId != null &&
+          ((advance == null || advance == 0) &&
+              (oldBal == null || oldBal == 0))) {
+        final detailed = await FlutterCustomerPaymentApi.getPayment(
+          sessionId: flutterSid,
+          paymentId: payId,
+        );
+        if (detailed != null) {
+          advance = detailed.advanceAmount ?? advance;
+          oldBal = detailed.oldBalance ?? oldBal;
+        }
+      }
+
+      if (!mounted) return;
+      final adv = advance;
+      final old = oldBal;
+      if (adv == null && old == null) return;
+      setState(() {
+        if (adv != null) _advanceAmt = adv;
+        if (old != null) _oldBalance = old;
+      });
+      AmountBookViewModel.rememberCustomerBalances(
+        name,
+        advance: adv,
+        oldBalance: old,
+      );
+    } catch (e) {
+      if (kDebugMode) debugPrint('load payment customer balances: $e');
+    }
+  }
+
   Future<void> _loadInvoicesForCustomer() async {
     if (_customer == null) {
       if (mounted) setState(() => _invoices = []);
@@ -343,6 +462,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
 
     // Ensure draft exists so Odoo builds partner.payment.line rows.
     await _ensureDraft();
+    unawaited(_loadCustomerBalances());
     await _syncToOdoo();
 
     final id = _paymentId;
@@ -734,6 +854,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                                 );
                                 if (picked == null) return;
                                 setState(() => _customer = picked);
+                                unawaited(_loadCustomerBalances());
                                 await _loadInvoicesForCustomer();
                               },
                             ),
