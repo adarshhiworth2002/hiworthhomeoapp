@@ -74,7 +74,7 @@ class _PaymentHistoryDetailPageState extends State<PaymentHistoryDetailPage>
       ),
       body: ResponsiveBody(
         child: RefreshIndicator(
-        color: const Color(0xFFE07A2F),
+        color: const Color(0xFF00BCF8),
         onRefresh: () => _reload(),
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),

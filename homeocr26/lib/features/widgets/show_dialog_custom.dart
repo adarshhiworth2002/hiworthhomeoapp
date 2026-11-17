@@ -16,7 +16,7 @@ class StatusDialog {
     switch (type) {
       case StatusType.success:
         icon = Icons.check_circle;
-        color = Colors.green.shade500;
+        color = appGreen;
         break;
       case StatusType.error:
         icon = Icons.error;
@@ -24,7 +24,7 @@ class StatusDialog {
         break;
       case StatusType.info:
         icon = Icons.info;
-        color = appOrange;
+        color = appBlue;
         break;
     }
 
@@ -58,7 +58,7 @@ class StatusDialog {
             const SizedBox(height: 20),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: appOrange,
+                backgroundColor: color,
                 foregroundColor: Colors.white,
               ),
               onPressed: () => Navigator.pop(dialogContext),

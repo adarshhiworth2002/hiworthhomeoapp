@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -235,7 +235,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
           builder: (context, model, _) {
             if (model.loading && model.items.isEmpty && !_settledReady) {
               return const Center(
-                child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
+                child: CircularProgressIndicator(color: Color(0xFF00BCF8)),
               );
             }
             if (model.error.isNotEmpty &&
@@ -255,7 +255,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
               children: [
                 TabBar(
                   controller: _tabController,
-                  indicatorColor: const Color(0xFFE07A2F),
+                  indicatorColor: const Color(0xFF00BCF8),
                   labelColor: sectionAccent,
                   unselectedLabelColor: sectionTextMuted,
                   tabs: [
@@ -328,7 +328,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
     }
 
     return RefreshIndicator(
-      color: const Color(0xFFE07A2F),
+      color: const Color(0xFF00BCF8),
       displacement: 28,
       onRefresh: () async {
         await model.fetch(context, forceRefresh: true, silent: true);
@@ -394,7 +394,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
     }
 
     return RefreshIndicator(
-      color: const Color(0xFFE07A2F),
+      color: const Color(0xFF00BCF8),
       displacement: 28,
       onRefresh: () async {
         await model.fetch(context, forceRefresh: true, silent: true);
@@ -435,7 +435,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
                   },
                   background: _swipeBg(
                     alignEnd: false,
-                    color: const Color(0xFFE07A2F),
+                    color: const Color(0xFF00BCF8),
                     icon: Icons.undo,
                     label: 'Restore',
                   ),
@@ -492,7 +492,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage>
           Text(
             InvoiceSummaryModel.formatMoney(total),
             style: const TextStyle(
-              color: Color(0xFFE07A2F),
+              color: Color(0xFF00BCF8),
               fontSize: 18,
               fontWeight: FontWeight.w700,
             ),
@@ -570,7 +570,7 @@ class _HistoryFilterChips extends StatelessWidget {
           const Icon(
             Icons.filter_alt_outlined,
             size: 14,
-            color: Color(0xFFE07A2F),
+            color: Color(0xFF00BCF8),
           ),
           const SizedBox(width: 8),
           Expanded(

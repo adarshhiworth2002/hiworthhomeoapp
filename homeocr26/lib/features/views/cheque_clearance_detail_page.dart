@@ -116,7 +116,7 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage>
         child: Stack(
         children: [
           RefreshIndicator(
-            color: const Color(0xFFE07A2F),
+            color: const Color(0xFF00BCF8),
             onRefresh: () => _reload(),
             child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -258,7 +258,7 @@ class _ChequeClearanceDetailPageState extends State<ChequeClearanceDetailPage>
               left: 0,
               right: 0,
               child: LinearProgressIndicator(
-                color: Color(0xFFE07A2F),
+                color: Color(0xFF00BCF8),
                 backgroundColor: Colors.transparent,
                 minHeight: 2,
               ),
@@ -394,7 +394,7 @@ class _InfoCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(icon, color: const Color(0xFFE07A2F), size: 18),
+              Icon(icon, color: const Color(0xFF00BCF8), size: 18),
               const SizedBox(width: 8),
               Text(
                 title,

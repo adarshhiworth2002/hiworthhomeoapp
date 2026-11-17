@@ -51,6 +51,7 @@ class AmountBookLedgerEntry {
     this.paymentId,
     this.paymentName,
     this.entryPaymentMode,
+    this.createDateDisplay,
   });
 
   final NetAmountRow row;
@@ -63,6 +64,8 @@ class AmountBookLedgerEntry {
   final int? paymentId;
   final String? paymentName;
   final String? entryPaymentMode;
+  /// Laravel `create_date_display` — UI only, never used for sorting.
+  final String? createDateDisplay;
 
   String get displayNumber =>
       (paymentName ?? '').trim().isNotEmpty
@@ -72,7 +75,12 @@ class AmountBookLedgerEntry {
   String get displayDate =>
       AmountBookLedgerBuilder.formatDisplayDate(sortDate);
 
-  String get displayTime => CalendarDate.formatTime(sortDate);
+  /// Prefer Laravel display string time; else format from sortDate.
+  String get displayTime {
+    final fromDisplay = CalendarDate.formatTimeFromDisplay(createDateDisplay);
+    if (fromDisplay.isNotEmpty) return fromDisplay;
+    return CalendarDate.formatTime(sortDate);
+  }
 
   String get displayPaymentMode =>
       AmountBookLedgerBuilder.formatPaymentMode(
@@ -208,6 +216,7 @@ class _LedgerEvent {
     this.paymentId,
     this.paymentName,
     this.paymentMode,
+    this.createDateDisplay,
     this.lines = const [],
   });
 
@@ -221,6 +230,7 @@ class _LedgerEvent {
   final int? paymentId;
   final String? paymentName;
   final String? paymentMode;
+  final String? createDateDisplay;
   final List<AmountBookInvoiceLine> lines;
 }
 
@@ -271,13 +281,19 @@ class AmountBookLedgerBuilder {
     return CalendarDate.parse(row.invoiceDate);
   }
 
-  /// Bill date plus clock time from `create_date` when the API has it.
+  /// Prefer Laravel `create_date` (IST wall clock); else invoice date.
   static DateTime? parseRowDateTime(NetAmountRow row) {
-    final created = CalendarDate.parseDateTime(row.createdAt);
+    final created = CalendarDate.parseApiCreateDate(row.createdAt);
     if (created != null && CalendarDate.hasClockTime(created)) {
       return created;
     }
     return CalendarDate.parseDateTime(row.invoiceDate) ?? parseRowDate(row);
+  }
+
+  /// True when the row carries a real Laravel create clock.
+  static bool rowHasApiCreateClock(NetAmountRow row) {
+    final created = CalendarDate.parseApiCreateDate(row.createdAt);
+    return CalendarDate.hasClockTime(created);
   }
 
   static String formatDisplayDate(DateTime? date) {
@@ -443,6 +459,7 @@ class AmountBookLedgerBuilder {
               invoiceBalance: runningTotal - prevPaid,
               date: entry.time,
               sequence: sequence,
+              createDateDisplay: row.createDateDisplay,
             ),
           );
         }
@@ -467,6 +484,7 @@ class AmountBookLedgerBuilder {
               invoiceBalance: prevTotal - runningPaid,
               date: entry.time,
               sequence: sequence,
+              createDateDisplay: row.createDateDisplay,
             ),
           );
         }
@@ -681,6 +699,7 @@ class AmountBookLedgerBuilder {
           paymentId: payment.id,
           paymentName: payment.name,
           paymentMode: payment.paymentMode,
+          createDateDisplay: payment.createDateDisplay,
           lines: lines,
         ),
       );
@@ -781,6 +800,7 @@ class AmountBookLedgerBuilder {
       events.addAll(leftoverPay);
     }
 
+    // Laravel: create_date primary; same-second → id tie-break.
     events.sort((a, b) {
       final da = a.date ?? DateTime(1970);
       final db = b.date ?? DateTime(1970);
@@ -815,6 +835,8 @@ class AmountBookLedgerBuilder {
           paymentId: event.paymentId,
           paymentName: event.paymentName,
           entryPaymentMode: event.paymentMode,
+          createDateDisplay: event.createDateDisplay ??
+              event.row.createDateDisplay,
         ),
       );
     }
@@ -843,6 +865,7 @@ class AmountBookLedgerBuilder {
             balance: (e.balance ?? 0) + delta,
             invoices: e.invoices,
             paymentId: e.paymentId,
+            createDateDisplay: e.createDateDisplay,
             paymentName: e.paymentName,
             entryPaymentMode: e.entryPaymentMode,
           );

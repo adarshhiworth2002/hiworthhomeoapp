@@ -89,6 +89,7 @@ class _AmountBookCustomerDetailPageState
     final summary = widget.summary;
     final model = context.watch<AmountBookViewModel>();
     final entries = model.ledgerForCustomer(summary.customerName);
+    final footer = model.footerForCustomer(summary.customerName);
 
     return Scaffold(
       backgroundColor: sectionBg,
@@ -125,7 +126,7 @@ class _AmountBookCustomerDetailPageState
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
               child: _YouWillGetBox(
-                amount: model.footerForCustomer(summary.customerName).balance,
+                amount: footer.balance,
               ),
             ),
             Padding(
@@ -187,7 +188,7 @@ class _AmountBookCustomerDetailPageState
               ),
             ),
             _CustomerFooter(
-              footer: model.footerForCustomer(summary.customerName),
+              footer: footer,
             ),
           ],
         ),

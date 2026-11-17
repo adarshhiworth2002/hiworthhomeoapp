@@ -6,6 +6,7 @@ enum EndPoint {
   customerInvoice("api/flutter/get_customer_invoice"),
   customerInvoicePdf("api/flutter/get_customer_invoice_pdf"),
   customerInvoiceAutoPrint("api/pharmacy_mgmnt/auto_print_invoice"),
+  customerPaymentPdf("api/flutter/get_customer_payment_pdf"),
   supplierInvoiceList("api/flutter/get_supplier_invoice_list"),
   stockList("api/flutter/get_stock_list"),
   stockDetail("api/flutter/get_stock"),

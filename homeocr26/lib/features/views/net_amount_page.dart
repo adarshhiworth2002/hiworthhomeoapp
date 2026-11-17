@@ -94,12 +94,12 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
                 model.youGotAmount == null &&
                 model.youGaveAmount == null) {
               return const Center(
-                child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
+                child: CircularProgressIndicator(color: Color(0xFF00BCF8)),
               );
             }
 
             return RefreshIndicator(
-              color: const Color(0xFFE07A2F),
+              color: const Color(0xFF00BCF8),
               onRefresh: () =>
                   _viewModel.fetchBoth(context, forceRefresh: true),
               child: ListView(
@@ -136,7 +136,7 @@ class _NetAmountPageState extends State<NetAmountPage> with LiveRefreshMixin {
                         ? model.reportDate!.trim()
                         : 'Yesterday',
                     belowSubtitle: 'Pending',
-                    color: const Color(0xFFE07A2F),
+                    color: const Color(0xFF00BCF8),
                     loading: model.detailLoading,
                     onTap: () => _openSection(NetAmountSection.youGot),
                   ),
@@ -428,7 +428,7 @@ class _NetAmountSectionPageState extends State<NetAmountSectionPage>
               ),
               Expanded(
                 child: RefreshIndicator(
-                  color: const Color(0xFFE07A2F),
+                  color: const Color(0xFF00BCF8),
                   onRefresh: () => context
                       .read<NetAmountViewModel>()
                       .fetchBoth(context, forceRefresh: true),

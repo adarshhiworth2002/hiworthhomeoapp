@@ -887,6 +887,231 @@ class FlutterCustomerInvoiceWebApi {
     }
   }
 
+  /// Authenticated website HTML used by Print Invoice / Payment Receipt
+  /// (`/customer-invoices/{id}/print?html=1`, `/partner-payments/{id}/print?html=1`).
+  static Future<String?> fetchPrintHtml({
+    required String path,
+    required String email,
+    required String password,
+    String? apiToken,
+  }) async {
+    final login = email.trim();
+    final pass = password;
+    if (login.isEmpty || pass.isEmpty) return null;
+    final rel = path.trim();
+    if (rel.isEmpty) return null;
+
+    final base = AppConfig.webViewBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final uri = rel.startsWith('http')
+        ? Uri.parse(rel)
+        : Uri.parse('$base${rel.startsWith('/') ? '' : '/'}$rel');
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 25);
+    try {
+      final bearer = (apiToken ?? AuthSessionStore.currentApiToken).trim();
+      final cookies = await _obtainWebsiteCookies(
+        client: client,
+        base: base,
+        email: login,
+        password: pass,
+        bearerToken: bearer,
+      );
+      if (cookies == null || cookies.isEmpty) {
+        if (kDebugMode) {
+          debugPrint(
+            'FlutterCustomerInvoiceWebApi.fetchPrintHtml: web login failed',
+          );
+        }
+        return null;
+      }
+
+      final res = await _request(
+        client,
+        method: 'GET',
+        uri: uri,
+        cookies: cookies,
+        bearerToken: bearer,
+        followRedirects: false,
+        referer: base,
+      );
+      final body = await res.transform(utf8.decoder).join();
+      _storeCookies(cookies, res.cookies, res.headers);
+      final loc = _locationOf(res, body);
+
+      if (_isLoginRedirect(res.statusCode, loc, body)) {
+        clearWebsiteSessionCache();
+        if (kDebugMode) {
+          debugPrint(
+            'FlutterCustomerInvoiceWebApi.fetchPrintHtml: redirected to login '
+            'HTTP ${res.statusCode} loc=$loc',
+          );
+        }
+        return null;
+      }
+
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        if (kDebugMode) {
+          debugPrint(
+            'FlutterCustomerInvoiceWebApi.fetchPrintHtml: HTTP ${res.statusCode} '
+            'for $uri',
+          );
+        }
+        return null;
+      }
+
+      final lower = body.toLowerCase();
+      if (lower.contains('login-form') && lower.contains('name="password"')) {
+        if (kDebugMode) {
+          debugPrint(
+            'FlutterCustomerInvoiceWebApi.fetchPrintHtml: got login page',
+          );
+        }
+        return null;
+      }
+
+      if (kDebugMode) {
+        debugPrint(
+          'FlutterCustomerInvoiceWebApi.fetchPrintHtml: OK ${body.length} bytes '
+          'for $uri',
+        );
+      }
+      return body;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FlutterCustomerInvoiceWebApi.fetchPrintHtml: $e');
+      }
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// Website print route as raw PDF bytes (same download as Laravel admin print,
+  /// not `print?html=1` and not the Flutter DomPDF API).
+  ///
+  /// Tries `/…/print` and `/…/print?download=1` with `Accept: application/pdf`.
+  static Future<Uint8List?> fetchPrintPdf({
+    required String path,
+    required String email,
+    required String password,
+    String? apiToken,
+  }) async {
+    final login = email.trim();
+    final pass = password;
+    if (login.isEmpty || pass.isEmpty) return null;
+    var rel = path.trim();
+    if (rel.isEmpty) return null;
+    // Strip html=1 so the server returns PDF, not the browser preview HTML.
+    rel = rel
+        .replaceAll(RegExp(r'([?&])html=1&?'), r'$1')
+        .replaceAll(RegExp(r'[?&]$'), '');
+    if (!rel.contains('download=')) {
+      rel = rel.contains('?') ? '$rel&download=1' : '$rel?download=1';
+    }
+
+    final base = AppConfig.webViewBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final withoutDownload =
+        rel.replaceAll(RegExp(r'[?&]download=1'), '').replaceAll(RegExp(r'[?&]$'), '');
+    final candidates = <String>[
+      rel,
+      if (withoutDownload.isNotEmpty && withoutDownload != rel) withoutDownload,
+    ];
+    // Plain /print only when not a partner-payment invoice print — dropping
+    // partner_payment= would share a different (unpaid) tax invoice PDF.
+    final hasPartnerPayment = rel.contains('partner_payment=');
+    if (!hasPartnerPayment) {
+      final plain = rel.split('?').first;
+      if (!candidates.contains(plain)) candidates.add(plain);
+    }
+
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 45);
+    try {
+      final bearer = (apiToken ?? AuthSessionStore.currentApiToken).trim();
+      final cookies = await _obtainWebsiteCookies(
+        client: client,
+        base: base,
+        email: login,
+        password: pass,
+        bearerToken: bearer,
+      );
+      if (cookies == null || cookies.isEmpty) {
+        if (kDebugMode) {
+          debugPrint(
+            'FlutterCustomerInvoiceWebApi.fetchPrintPdf: web login failed',
+          );
+        }
+        return null;
+      }
+
+      for (final candidate in candidates) {
+        final cleaned = candidate
+            .replaceAll(RegExp(r'\?&'), '?')
+            .replaceAll(RegExp(r'[?&]$'), '');
+        final uri = cleaned.startsWith('http')
+            ? Uri.parse(cleaned)
+            : Uri.parse('$base${cleaned.startsWith('/') ? '' : '/'}$cleaned');
+        try {
+          final res = await _request(
+            client,
+            method: 'GET',
+            uri: uri,
+            cookies: cookies,
+            bearerToken: bearer,
+            followRedirects: true,
+            referer: base,
+            accept: 'application/pdf,application/octet-stream,*/*',
+          );
+          final bytes = await res.fold<List<int>>(
+            <int>[],
+            (prev, chunk) => prev..addAll(chunk),
+          );
+          _storeCookies(cookies, res.cookies, res.headers);
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            if (kDebugMode) {
+              debugPrint(
+                'FlutterCustomerInvoiceWebApi.fetchPrintPdf: HTTP '
+                '${res.statusCode} for $uri',
+              );
+            }
+            continue;
+          }
+          if (bytes.length < 500) continue;
+          if (bytes[0] == 0x25 &&
+              bytes[1] == 0x50 &&
+              bytes[2] == 0x44 &&
+              bytes[3] == 0x46) {
+            if (kDebugMode) {
+              debugPrint(
+                'FlutterCustomerInvoiceWebApi.fetchPrintPdf: OK '
+                '${bytes.length} bytes for $uri',
+              );
+            }
+            return Uint8List.fromList(bytes);
+          }
+          if (kDebugMode) {
+            debugPrint(
+              'FlutterCustomerInvoiceWebApi.fetchPrintPdf: not PDF for $uri '
+              '(${bytes.length} bytes)',
+            );
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint(
+              'FlutterCustomerInvoiceWebApi.fetchPrintPdf: $uri → $e',
+            );
+          }
+        }
+      }
+      return null;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FlutterCustomerInvoiceWebApi.fetchPrintPdf: $e');
+      }
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   static Future<Map<String, String>?> _obtainWebsiteCookies({
     required HttpClient client,
     required String base,
@@ -3201,11 +3426,17 @@ class FlutterCustomerInvoiceWebApi {
     String? bearerToken,
     String? referer,
     bool followRedirects = false,
+    String? accept,
   }) async {
     final req = await client.openUrl(method, uri);
     req.followRedirects = followRedirects;
     req.maxRedirects = 5;
-    req.headers.set(HttpHeaders.acceptHeader, 'text/html,application/xhtml+xml');
+    req.headers.set(
+      HttpHeaders.acceptHeader,
+      (accept != null && accept.trim().isNotEmpty)
+          ? accept.trim()
+          : 'text/html,application/xhtml+xml',
+    );
     req.headers.set(
       HttpHeaders.userAgentHeader,
       SessionHelper.jsonUserAgent,

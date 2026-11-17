@@ -1686,7 +1686,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
             child: const Text(
               'OK',
               style: TextStyle(
-                color: Color(0xFFE07A2F),
+                color: Color(0xFF00BCF8),
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -3196,11 +3196,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                       ),
                       if (canCreate)
                         ListTile(
-                          leading: const Icon(Icons.add, color: Color(0xFFE07A2F)),
+                          leading: const Icon(Icons.add, color: Color(0xFF00BCF8)),
                           title: Text(
                             'Create "$trimmed"',
                             style: const TextStyle(
-                              color: Color(0xFFE07A2F),
+                              color: Color(0xFF00BCF8),
                               fontWeight: FontWeight.w700,
                             ),
                           ),
@@ -3216,7 +3216,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                         const Padding(
                           padding: EdgeInsets.all(16),
                           child: CircularProgressIndicator(
-                            color: Color(0xFFE07A2F),
+                            color: Color(0xFF00BCF8),
                           ),
                         )
                       else if (hits.isEmpty)
@@ -3255,7 +3255,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                                 trailing: isSelected
                                     ? const Icon(
                                   Icons.check,
-                                  color: Color(0xFFE07A2F),
+                                  color: Color(0xFF00BCF8),
                                 )
                                     : null,
                                 onTap: () => Navigator.pop(ctx, item),
@@ -3375,11 +3375,11 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                       ),
                       if (canCreate)
                         ListTile(
-                          leading: const Icon(Icons.add, color: const Color(0xFFE07A2F)),
+                          leading: const Icon(Icons.add, color: const Color(0xFF00BCF8)),
                           title: Text(
                             'Create "${query.trim()}"',
                             style: const TextStyle(
-                              color: const Color(0xFFE07A2F),
+                              color: const Color(0xFF00BCF8),
                               fontWeight: FontWeight.w700,
                             ),
                           ),
@@ -3430,7 +3430,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                               trailing: isSelected
                                   ? const Icon(
                                 Icons.check,
-                                color: const Color(0xFFE07A2F),
+                                color: const Color(0xFF00BCF8),
                               )
                                   : null,
                               onTap: () => Navigator.pop(ctx, item),
@@ -5668,12 +5668,12 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                         ),
                         icon: const Icon(
                           Icons.add,
-                          color: Color(0xFFE07A2F),
+                          color: Color(0xFF00BCF8),
                         ),
                         label: const Text(
                           'Add a line',
                           style: TextStyle(
-                            color: Color(0xFFE07A2F),
+                            color: Color(0xFF00BCF8),
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -5795,10 +5795,10 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                         width: double.infinity,
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFFF3E0),
+                          color: const Color(0xFFE3F7FE),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                            color: const Color(0xFFE07A2F).withValues(alpha: 0.45),
+                            color: const Color(0xFF00BCF8).withValues(alpha: 0.45),
                           ),
                         ),
                         child: Text(
@@ -5840,7 +5840,7 @@ class _CustomerNewInvoicePageState extends State<CustomerNewInvoicePage> {
                 Expanded(
                   child: FilledButton(
                     style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFE07A2F),
+                      backgroundColor: const Color(0xFF00BCF8),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
                     onPressed: _saving ? null : _saveBill,
@@ -6215,7 +6215,7 @@ class _LineCardState extends State<_LineCard> {
               onPressed: widget.onDone,
               child: const Text(
                 'Done',
-                style: TextStyle(color: Color(0xFFE07A2F)),
+                style: TextStyle(color: Color(0xFF00BCF8)),
               ),
             ),
             IconButton(
@@ -6240,7 +6240,7 @@ class _LineCardState extends State<_LineCard> {
               ),
               Switch(
                 value: line.fromStock,
-                activeThumbColor: const Color(0xFFE07A2F),
+                activeThumbColor: const Color(0xFF00BCF8),
                 onChanged: line.serverCommitted
                     ? null
                     : widget.onFromStockChanged,
@@ -6744,7 +6744,7 @@ class _LineTextRow extends StatelessWidget {
                       borderSide: BorderSide(
                         color: showError
                             ? Colors.redAccent
-                            : const Color(0xFFE07A2F),
+                            : const Color(0xFF00BCF8),
                       ),
                     ),
                     border: OutlineInputBorder(

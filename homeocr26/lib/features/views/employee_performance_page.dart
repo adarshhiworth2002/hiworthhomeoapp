@@ -120,13 +120,13 @@ class _EmployeePerformancePageState extends State<EmployeePerformancePage>
             // Synthetic KPI placeholders must not hide the loading state.
             if (model.loading && !hasEmployees && !hasApiEmployees) {
               return const Center(
-                child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
+                child: CircularProgressIndicator(color: Color(0xFF00BCF8)),
               );
             }
 
             if (!hasEmployees && !hasApiEmployees && !hasRealKpis) {
               return RefreshIndicator(
-                color: const Color(0xFFE07A2F),
+                color: const Color(0xFF00BCF8),
                 onRefresh: () => model.fetch(
                   context,
                   forceRefresh: true,
@@ -469,7 +469,7 @@ class _EmployeeKpiDashboardPageState extends State<EmployeeKpiDashboardPage>
         child: Consumer<EmployeePerformanceViewModel>(
         builder: (context, model, _) {
           return RefreshIndicator(
-            color: const Color(0xFFE07A2F),
+            color: const Color(0xFF00BCF8),
             onRefresh: () => model.fetch(
               context,
               forceRefresh: true,
@@ -610,7 +610,7 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: const ColorScheme.light(
-            primary: Color(0xFFE07A2F),
+            primary: Color(0xFF00BCF8),
             onPrimary: Colors.white,
             surface: Colors.white,
             onSurface: Colors.black,
@@ -637,7 +637,7 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: const ColorScheme.light(
-            primary: Color(0xFFE07A2F),
+            primary: Color(0xFF00BCF8),
             onPrimary: Colors.white,
             surface: Colors.white,
             onSurface: Colors.black,
@@ -737,7 +737,7 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
           ),
           Expanded(
             child: RefreshIndicator(
-              color: const Color(0xFFE07A2F),
+              color: const Color(0xFF00BCF8),
               onRefresh: _onRefresh,
               child: _loadingBills && invoices.isEmpty
                   ? ListView(
@@ -747,7 +747,7 @@ class _EmployeeBillsListPageState extends State<EmployeeBillsListPage>
                           height: 220,
                           child: Center(
                             child: CircularProgressIndicator(
-                              color: Color(0xFFE07A2F),
+                              color: Color(0xFF00BCF8),
                             ),
                           ),
                         ),
@@ -855,7 +855,7 @@ class _DateRangeFilterBar extends StatelessWidget {
                 TextButton(
                   onPressed: onClear,
                   style: TextButton.styleFrom(
-                    foregroundColor: const Color(0xFFE07A2F),
+                    foregroundColor: const Color(0xFF00BCF8),
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -1093,7 +1093,7 @@ class _EmployeeInvoiceOpenPageState extends State<EmployeeInvoiceOpenPage>
       ),
       body: ResponsiveBody(
         child: RefreshIndicator(
-        color: const Color(0xFFE07A2F),
+        color: const Color(0xFF00BCF8),
         onRefresh: _reload,
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -1227,7 +1227,7 @@ class _EmployeeBillDetailsPageState extends State<EmployeeBillDetailsPage>
       ),
       body: ResponsiveBody(
         child: RefreshIndicator(
-        color: const Color(0xFFE07A2F),
+        color: const Color(0xFF00BCF8),
         onRefresh: _reload,
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -1520,7 +1520,7 @@ class _EmployeeKpiDetailPage extends StatelessWidget {
       ),
       body: ResponsiveBody(
         child: RefreshIndicator(
-        color: const Color(0xFFE07A2F),
+        color: const Color(0xFF00BCF8),
         onRefresh: () async {},
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -1593,7 +1593,7 @@ class _EmployeeKpiDetailPage extends StatelessWidget {
                           Text(
                             row.value,
                             style: const TextStyle(
-                              color: Color(0xFFE07A2F),
+                              color: Color(0xFF00BCF8),
                               fontWeight: FontWeight.w800,
                               fontSize: 20,
                             ),
@@ -1837,7 +1837,7 @@ class _InvoiceListCard extends StatelessWidget {
               FilledButton(
                 onPressed: onViewTap,
                 style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFE07A2F),
+                  backgroundColor: const Color(0xFF00BCF8),
                   foregroundColor: Colors.white,
                   minimumSize: const Size(0, 36),
                   padding: const EdgeInsets.symmetric(horizontal: 12),

@@ -140,7 +140,7 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
   Widget _buildPreview() {
     if (_initializing) {
       return const Center(
-        child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
+        child: CircularProgressIndicator(color: Color(0xFF00BCF8)),
       );
     }
 
@@ -187,7 +187,7 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
             height: frame.height,
             decoration: BoxDecoration(
               border: Border.all(
-                color: const Color(0xFFE07A2F).withValues(alpha: 0.85),
+                color: const Color(0xFF00BCF8).withValues(alpha: 0.85),
                 width: 2,
               ),
               borderRadius: BorderRadius.circular(12),
@@ -214,7 +214,7 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
           Container(
             color: Colors.black.withValues(alpha: 0.35),
             child: const Center(
-              child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
+              child: CircularProgressIndicator(color: Color(0xFF00BCF8)),
             ),
           ),
       ],
@@ -269,7 +269,7 @@ class _LabelCameraPageState extends State<LabelCameraPage> {
                       height: 58,
                       decoration: const BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Color(0xFFE07A2F),
+                        color: Color(0xFF00BCF8),
                       ),
                     ),
             ),

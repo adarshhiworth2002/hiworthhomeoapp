@@ -450,7 +450,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                     child:
                     Padding(
                       padding: const EdgeInsets.all(3.0),
-                      child: const Icon(Icons.refresh, color: const Color(0xFFE07A2F)),
+                      child: const Icon(Icons.refresh, color: const Color(0xFF00BCF8)),
                     ),
 
 
@@ -485,7 +485,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                     child:
                     Padding(
                       padding: const EdgeInsets.all(3.0),
-                      child: const Icon(Icons.stop_circle, color: const Color(0xFFE07A2F)),
+                      child: const Icon(Icons.stop_circle, color: const Color(0xFF00BCF8)),
                     ),
 
 
@@ -529,7 +529,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                                   height: min(height * 0.28, 220),
                                   child: const Center(
                                     child: CircularProgressIndicator(
-                                      color: Color(0xFFE07A2F),
+                                      color: Color(0xFF00BCF8),
                                       strokeWidth: 4,
                                     ),
                                   ),
@@ -596,7 +596,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                             color: Colors.black.withValues(alpha: 0.45),
                             borderRadius: BorderRadius.circular(20),
                             border: Border.all(
-                              color: const Color(0xFFE07A2F).withValues(alpha: 0.8),
+                              color: const Color(0xFF00BCF8).withValues(alpha: 0.8),
                             ),
                           ),
                           child: const Row(
@@ -604,7 +604,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                             children: [
                               Icon(
                                 Icons.document_scanner_outlined,
-                                color: Color(0xFFE07A2F),
+                                color: Color(0xFF00BCF8),
                                 size: 18,
                               ),
                               SizedBox(width: 8),
@@ -721,7 +721,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
         height: 200,
         child: const Padding(
           padding: EdgeInsets.all(30),
-          child: Center(child: CircularProgressIndicator(color: const Color(0xFFE07A2F), strokeWidth: 4)),
+          child: Center(child: CircularProgressIndicator(color: const Color(0xFF00BCF8), strokeWidth: 4)),
         ),
       );
     }
@@ -922,7 +922,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (icon != null) ...[
-                Icon(icon, size: 20, color: const Color(0xFFE07A2F).withValues(alpha: .8)),
+                Icon(icon, size: 20, color: const Color(0xFF00BCF8).withValues(alpha: .8)),
                 const SizedBox(width: 11),
               ],
               Expanded(
@@ -965,7 +965,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
             Icon(
               icon,
               size: 22,
-              color: const Color(0xFFE07A2F).withValues(alpha: .8),
+              color: const Color(0xFF00BCF8).withValues(alpha: .8),
             ),
             const SizedBox(width: 12),
           ],
@@ -996,7 +996,7 @@ class _AddToCustomerPageState extends State<AddToCustomerPage> {
                   borderSide: BorderSide(color: sectionCardBorder),
                 ),
                 focusedBorder: UnderlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFFE07A2F)),
+                  borderSide: BorderSide(color: Color(0xFF00BCF8)),
                 ),
               ),
             ),
@@ -1285,7 +1285,7 @@ class _LabelDropdown extends StatelessWidget {
               Icon(
                 icon,
                 size: 20,
-                color: const Color(0xFFE07A2F).withValues(alpha: 0.85),
+                color: const Color(0xFF00BCF8).withValues(alpha: 0.85),
               ),
               const SizedBox(width: 8),
               Text(

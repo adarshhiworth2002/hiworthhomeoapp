@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../../models/payment_book_model.dart';
 
@@ -216,7 +216,7 @@ class InvoiceStatusFilterChips extends StatelessWidget {
                   ),
                   selected: _isSelected(tab.$1),
                   showCheckmark: true,
-                  checkmarkColor: const Color(0xFFE07A2F),
+                  checkmarkColor: const Color(0xFF00BCF8),
                   onSelected: (_) => onSelected(tab.$1),
                   selectedColor: Colors.white,
                   backgroundColor: Colors.white,
@@ -224,12 +224,12 @@ class InvoiceStatusFilterChips extends StatelessWidget {
                   labelPadding: const EdgeInsets.symmetric(horizontal: 6),
                   side: BorderSide(
                     color: _isSelected(tab.$1)
-                        ? const Color(0xFFE07A2F)
+                        ? const Color(0xFF00BCF8)
                         : Colors.black.withValues(alpha: 0.2),
                   ),
                   labelStyle: TextStyle(
                     color: _isSelected(tab.$1)
-                        ? const Color(0xFFE07A2F)
+                        ? const Color(0xFF00BCF8)
                         : Colors.black,
                     fontWeight: FontWeight.w700,
                   ),
@@ -255,7 +255,7 @@ class _ChipLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final titleColor =
-        selected ? const Color(0xFFE07A2F) : Colors.black;
+        selected ? const Color(0xFF00BCF8) : Colors.black;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [

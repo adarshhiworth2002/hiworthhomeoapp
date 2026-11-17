@@ -507,7 +507,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
         return Theme(
           data: Theme.of(context).copyWith(
             colorScheme: const ColorScheme.dark(
-              primary: Color(0xFFE07A2F),
+              primary: Color(0xFF00BCF8),
               surface: Color(0xFF1E4D5C),
             ),
           ),
@@ -630,7 +630,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: isSelected
-                                    ? const Color(0xFFE07A2F)
+                                    ? const Color(0xFF00BCF8)
                                     : sectionText,
                                 fontWeight: isSelected
                                     ? FontWeight.w700
@@ -640,7 +640,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                             trailing: isSelected
                                 ? const Icon(
                                     Icons.check,
-                                    color: Color(0xFFE07A2F),
+                                    color: Color(0xFF00BCF8),
                                   )
                                 : null,
                             onTap: () => Navigator.pop(ctx, opt),
@@ -804,7 +804,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
       ),
       body: _bootstrapping
           ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
+              child: CircularProgressIndicator(color: Color(0xFF00BCF8)),
             )
           : _error != null && !_bootstrapping
               ? Center(
@@ -1014,7 +1014,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                         const SizedBox(height: 10),
                         _ActionButton(
                           label: 'Confirm',
-                          color: const Color(0xFFE07A2F),
+                          color: const Color(0xFF00BCF8),
                           onPressed: _busy ? null : _onConfirm,
                         ),
                         const SizedBox(height: 10),
@@ -1032,7 +1032,7 @@ class _CustomerPaymentCreatePageState extends State<CustomerPaymentCreatePage> {
                         left: 0,
                         right: 0,
                         child: LinearProgressIndicator(
-                          color: Color(0xFFE07A2F),
+                          color: Color(0xFF00BCF8),
                           backgroundColor: Colors.transparent,
                           minHeight: 2,
                         ),
@@ -1174,7 +1174,7 @@ class _SectionCard extends StatelessWidget {
           Row(
             children: [
               if (icon != null) ...[
-                Icon(icon, color: const Color(0xFFE07A2F), size: 18),
+                Icon(icon, color: const Color(0xFF00BCF8), size: 18),
                 const SizedBox(width: 8),
               ],
               Text(
@@ -1398,7 +1398,7 @@ class _CheckRow extends StatelessWidget {
                 child: Checkbox(
                   value: value,
                   onChanged: (v) => onChanged(v ?? false),
-                  activeColor: const Color(0xFFE07A2F),
+                  activeColor: const Color(0xFF00BCF8),
                   side: BorderSide(
                     color: sectionTextMuted,
                   ),

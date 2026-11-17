@@ -89,10 +89,9 @@ class _SplashScreenState extends State<SplashScreen>
     final r = AppResponsive.of(context);
     final short = size.height < 560;
     final scale = AppResponsive.scaleClamp(size.shortestSide);
-    final iconSize = (short ? 64.0 : 90.0) * scale;
+    final logoSize = (short ? 140.0 : 180.0) * scale;
     final titleSize = (short ? 20.0 : 24.0) * scale;
     final subtitleSize = (short ? 14.0 : 16.0) * scale;
-    final iconPad = (short ? 16.0 : 25.0) * scale;
     final bottomGap = math.min(40.0, size.height * 0.06);
 
     return Scaffold(
@@ -101,7 +100,7 @@ class _SplashScreenState extends State<SplashScreen>
         height: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [appBlack, appBlackSoft, appOrangeDeep],
+            colors: [Color(0xFF063A4A), appBlueDeep, appGreenDeep],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
@@ -121,17 +120,12 @@ class _SplashScreenState extends State<SplashScreen>
                       const Spacer(flex: 3),
                       ScaleTransition(
                         scale: _scaleAnimation,
-                        child: Container(
-                          padding: EdgeInsets.all(iconPad),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withValues(alpha: 0.08),
-                          ),
-                          child: Icon(
-                            Icons.medical_services_rounded,
-                            size: iconSize,
-                            color: Colors.white,
-                          ),
+                        child: Image.asset(
+                          'assets/images/athurasramam_logo.png',
+                          width: logoSize,
+                          height: logoSize,
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.high,
                         ),
                       ),
                       SizedBox(height: short ? 16 : 28),
@@ -166,7 +160,7 @@ class _SplashScreenState extends State<SplashScreen>
                         height: 28,
                         child: CircularProgressIndicator(
                           strokeWidth: 1.5,
-                          color: appOrange,
+                          color: appBlue,
                         ),
                       ),
                       SizedBox(height: bottomGap),

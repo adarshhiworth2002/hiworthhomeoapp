@@ -60,10 +60,10 @@ class AppBackdrop extends StatelessWidget {
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       colors: [
-                        Color(0xFF1B1B1B),
-                        Color(0xFFE07A2F),
-                        Color(0xFFC43B2E),
-                        Color(0xFFE8A04A),
+                        Color(0xFF063A4A),
+                        Color(0xFF00BCF8),
+                        Color(0xFF40B448),
+                        Color(0xFF0096C7),
                       ],
                     ),
                   ),

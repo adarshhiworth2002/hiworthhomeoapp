@@ -132,7 +132,7 @@ class _PaymentBookPageState extends State<PaymentBookPage>
           builder: (context, model, _) {
             if (model.loading && model.invoices.isEmpty) {
               return const Center(
-                child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
+                child: CircularProgressIndicator(color: Color(0xFF00BCF8)),
               );
             }
             if (model.error.isNotEmpty && model.invoices.isEmpty) {
@@ -173,7 +173,7 @@ class _PaymentBookPageState extends State<PaymentBookPage>
                 ),
                 Expanded(
                   child: RefreshIndicator(
-                    color: const Color(0xFFE07A2F),
+                    color: const Color(0xFF00BCF8),
                     displacement: 28,
                     onRefresh: () => model.fetch(
                       context,
@@ -282,7 +282,7 @@ class _SummaryBar extends StatelessWidget {
             const Icon(
               Icons.filter_alt_outlined,
               size: 14,
-              color: Color(0xFFE07A2F),
+              color: Color(0xFF00BCF8),
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -530,7 +530,7 @@ class _TotalFooter extends StatelessWidget {
               Text(
                 InvoiceSummaryModel.formatMoney(total),
                 style: const TextStyle(
-                  color: Color(0xFFE07A2F),
+                  color: Color(0xFF00BCF8),
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
                 ),

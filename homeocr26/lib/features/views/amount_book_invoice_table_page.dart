@@ -150,6 +150,17 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
         .toList(growable: false);
   }
 
+  int? _partnerPaymentIdForLine(
+    AmountBookViewModel model,
+    AmountBookInvoiceLine line, {
+    int? preferred,
+  }) {
+    if (preferred != null && preferred > 0) return preferred;
+    final nestPay = widget.paymentId;
+    if (nestPay != null && nestPay > 0) return nestPay;
+    return model.paymentIdForInvoice(line.invoiceId);
+  }
+
   void _openCustomerInvoice(
     BuildContext context,
     AmountBookInvoiceLine line,
@@ -163,6 +174,7 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
             total: line.total,
           ),
         );
+    final partnerPayId = _partnerPaymentIdForLine(model, line);
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => CustomerInvoiceDetailPage(
@@ -172,24 +184,99 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
           allowScan: true,
           supplierLayout: false,
           balanceOverride: line.balance,
+          // Tax invoice share must keep ?partner_payment= from this nest.
+          partnerPaymentId: partnerPayId,
         ),
       ),
     );
   }
 
-  Future<void> _shareCustomerInvoice(
-    BuildContext context,
-    AmountBookInvoiceLine line,
-  ) async {
-    final model = context.read<AmountBookViewModel>();
-    final invoice = model.invoiceSummaryForLine(line).mergedWith(
+  InvoiceSummaryModel _invoiceForLine(AmountBookInvoiceLine line) {
+    return context.read<AmountBookViewModel>().invoiceSummaryForLine(line).mergedWith(
           InvoiceSummaryModel(customer: widget.customerName),
         );
+  }
+
+  bool get _isYouGotOrPaymentNest =>
+      widget.paymentId != null || !widget.isYouGave;
+
+  Future<void> _shareCustomerInvoice(
+    BuildContext context,
+    AmountBookInvoiceLine line, {
+    int? partnerPaymentId,
+  }) async {
+    final model = context.read<AmountBookViewModel>();
+    final payId = _partnerPaymentIdForLine(
+      model,
+      line,
+      preferred: partnerPaymentId,
+    );
+    // YOU GOT / PAY nest bill Share → always ?partner_payment= (never plain).
+    if (_isYouGotOrPaymentNest && (payId == null || payId <= 0)) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No payment linked to this bill for sharing.'),
+        ),
+      );
+      return;
+    }
     await CustomerInvoicePdfService.shareInvoice(
       context,
-      invoice: invoice,
+      invoice: _invoiceForLine(line),
       payAmount: line.youGotAmount ?? line.youGaveAmount,
       paymentName: widget.paymentName,
+      partnerPaymentId: payId,
+    );
+  }
+
+  /// Row WhatsApp → that bill's tax invoice with `partner_payment=`.
+  Future<void> _shareCustomerInvoiceToWhatsApp(
+    BuildContext context,
+    AmountBookInvoiceLine line, {
+    int? partnerPaymentId,
+  }) async {
+    final model = context.read<AmountBookViewModel>();
+    final payId = _partnerPaymentIdForLine(
+      model,
+      line,
+      preferred: partnerPaymentId,
+    );
+    if (payId == null || payId <= 0) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No payment linked to this bill for WhatsApp.'),
+        ),
+      );
+      return;
+    }
+    await CustomerInvoicePdfService.shareInvoiceToWhatsApp(
+      context,
+      invoice: _invoiceForLine(line),
+      payAmount: line.youGotAmount ?? line.youGaveAmount,
+      paymentName: widget.paymentName,
+      partnerPaymentId: payId,
+    );
+  }
+
+  /// App-bar Share → payment receipt `/partner-payments/{id}/print`.
+  Future<void> _sharePaymentReceipt(BuildContext context) async {
+    final paymentId = widget.paymentId;
+    if (paymentId == null || paymentId <= 0) return;
+    double? amount;
+    for (final p in context.read<AmountBookViewModel>().payments) {
+      if (p.id == paymentId) {
+        amount = p.amount;
+        break;
+      }
+    }
+    await CustomerInvoicePdfService.sharePayment(
+      context,
+      paymentId: paymentId,
+      paymentName: widget.paymentName,
+      customerName: widget.customerName,
+      amount: amount,
     );
   }
 
@@ -231,6 +318,18 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
         ),
         backgroundColor: sectionBg,
         elevation: 0,
+        actions: [
+          if (widget.paymentId != null && widget.paymentId! > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: Center(
+                child: _ShareGradientChip(
+                  label: 'Share',
+                  onTap: () => _sharePaymentReceipt(context),
+                ),
+              ),
+            ),
+        ],
       ),
       body: ResponsiveBody(
         child: Column(
@@ -300,14 +399,33 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
                             itemCount: rows.length,
                             separatorBuilder: (_, _) =>
                                 const SizedBox(height: 8),
-                            itemBuilder: (context, index) => _InvoiceCard(
-                              invoice: rows[index],
-                              paymentStyle: isPayment,
-                              onOpenBill: () =>
-                                  _openCustomerInvoice(context, rows[index]),
-                              onShare: () =>
-                                  _shareCustomerInvoice(context, rows[index]),
-                            ),
+                            itemBuilder: (context, index) {
+                              final line = rows[index];
+                              final partnerPayId = _partnerPaymentIdForLine(
+                                model,
+                                line,
+                              );
+                              return _InvoiceCard(
+                                invoice: line,
+                                paymentStyle: isPayment,
+                                showWhatsApp: partnerPayId != null,
+                                onOpenBill: () =>
+                                    _openCustomerInvoice(context, line),
+                                // Bill Share → tax invoice ?partner_payment=
+                                onShare: () => _shareCustomerInvoice(
+                                  context,
+                                  line,
+                                  partnerPaymentId: partnerPayId,
+                                ),
+                                onWhatsApp: partnerPayId == null
+                                    ? null
+                                    : () => _shareCustomerInvoiceToWhatsApp(
+                                          context,
+                                          line,
+                                          partnerPaymentId: partnerPayId,
+                                        ),
+                              );
+                            },
                           ),
               ),
             ),
@@ -331,13 +449,17 @@ class _InvoiceCard extends StatelessWidget {
     required this.invoice,
     required this.onOpenBill,
     required this.onShare,
+    this.onWhatsApp,
     this.paymentStyle = false,
+    this.showWhatsApp = false,
   });
 
   final AmountBookInvoiceLine invoice;
   final VoidCallback onOpenBill;
   final VoidCallback onShare;
+  final VoidCallback? onWhatsApp;
   final bool paymentStyle;
+  final bool showWhatsApp;
 
   @override
   Widget build(BuildContext context) {
@@ -416,66 +538,88 @@ class _InvoiceCard extends StatelessWidget {
             ),
           ];
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onOpenBill,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: sectionCardDecoration(),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: sectionCardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      invoice.number,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: sectionText,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 17,
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        invoice.number,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: sectionText,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 17,
+                        ),
                       ),
                     ),
-                  ),
-                  _StatusPill(
-                    paymentStyle
-                        ? (invoice.status.trim().isEmpty
-                            ? 'YOU GOT'
-                            : invoice.status.trim())
-                        : (invoice.isYouGave ? 'YOU GAVE' : 'YOU GOT'),
-                    isGot: !invoice.isYouGave,
-                  ),
-                ],
+                    IconButton(
+                      tooltip: 'Open invoice',
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 36,
+                        minHeight: 36,
+                      ),
+                      onPressed: onOpenBill,
+                      icon: Icon(
+                        Icons.open_in_new,
+                        size: 20,
+                        color: sectionAccent,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 10),
-              CompactFieldRows(
-                fields: fields,
-                trailing: IconButton(
-                  tooltip: 'Share invoice PDF',
+              _StatusPill(
+                paymentStyle
+                    ? (invoice.status.trim().isEmpty
+                        ? 'YOU GOT'
+                        : invoice.status.trim())
+                    : (invoice.isYouGave ? 'YOU GAVE' : 'YOU GOT'),
+                isGot: !invoice.isYouGave,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          CompactFieldRows(
+            fields: fields,
+            trailing: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: paymentStyle
+                      ? 'Share bill PDF'
+                      : 'Share invoice PDF',
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(
                     minWidth: 36,
                     minHeight: 36,
                   ),
-                  onPressed: () {
-                    // Absorb tap so parent InkWell does not open the bill.
-                    onShare();
-                  },
+                  onPressed: onShare,
                   icon: Icon(
                     Icons.share_outlined,
                     size: 22,
                     color: sectionAccent,
                   ),
                 ),
-              ),
-            ],
+                if (showWhatsApp && onWhatsApp != null) ...[
+                  const SizedBox(height: 2),
+                  _WhatsAppIconButton(onTap: onWhatsApp!),
+                ],
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -707,6 +851,111 @@ class _TotalBox extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// WhatsApp logo under bill Share — tax invoice with partner_payment=.
+class _WhatsAppIconButton extends StatelessWidget {
+  const _WhatsAppIconButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'WhatsApp bill PDF',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: ClipOval(
+              child: Image.asset(
+                'assets/images/whatsapp_logo.png',
+                width: 22,
+                height: 22,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.medium,
+                errorBuilder: (_, _, _) => const Icon(
+                  Icons.chat,
+                  size: 18,
+                  color: Color(0xFF25D366),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact Share control — brand blue→green gradient with icon + label.
+class _ShareGradientChip extends StatelessWidget {
+  const _ShareGradientChip({
+    required this.label,
+    required this.onTap,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+
+  static const _gradient = LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [
+      Color(0xFF00BCF8),
+      Color(0xFF0096C7),
+      Color(0xFF40B448),
+    ],
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            gradient: _gradient,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: appBlue.withValues(alpha: 0.28),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.share_outlined,
+                size: 16,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

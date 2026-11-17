@@ -20,7 +20,7 @@ class _LoginPageState extends State<LoginPage> {
 
   static const _ink = Color(0xFF1C1A17);
   static const _muted = Color(0xFF5C534A);
-  static const _accent = Color(0xFFE07A2F);
+  static const _accent = Color(0xFF00BCF8);
 
   @override
   void dispose() {

@@ -1,6 +1,8 @@
 package com.example.homeocr26
 
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.media.AudioAttributes
 import android.os.Build
 import android.os.Bundle
@@ -9,15 +11,18 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
+import androidx.core.content.FileProvider
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val hapticsChannel = "com.example.homeocr26/haptics"
     private val lifecycleChannel = "com.example.homeocr26/lifecycle"
+    private val shareChannel = "com.example.homeocr26/share"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -56,6 +61,53 @@ class MainActivity : FlutterActivity() {
                     result.notImplemented()
                 }
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, shareChannel)
+            .setMethodCallHandler { call, result ->
+                if (call.method == "sharePdfToWhatsApp") {
+                    val path = call.argument<String>("path")
+                    if (path.isNullOrBlank()) {
+                        result.error("bad_args", "path required", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        result.success(sharePdfToWhatsApp(path))
+                    } catch (e: Exception) {
+                        Log.e(TAG, "sharePdfToWhatsApp failed", e)
+                        result.error("share_failed", e.message, null)
+                    }
+                } else {
+                    result.notImplemented()
+                }
+            }
+    }
+
+    /**
+     * Opens WhatsApp (or Business) with a PDF attached.
+     * Returns true when an activity was started.
+     */
+    private fun sharePdfToWhatsApp(path: String): Boolean {
+        val file = File(path)
+        if (!file.exists() || !file.isFile) {
+            throw IllegalArgumentException("PDF file missing: $path")
+        }
+        val authority = "${applicationContext.packageName}.fileprovider"
+        val uri = FileProvider.getUriForFile(this, authority, file)
+        val packages = listOf("com.whatsapp", "com.whatsapp.w4b")
+        for (pkg in packages) {
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/pdf"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                setPackage(pkg)
+            }
+            try {
+                startActivity(intent)
+                return true
+            } catch (_: ActivityNotFoundException) {
+                // try next package
+            }
+        }
+        return false
     }
 
     /** Returns true when the OS accepted a vibrate request. */

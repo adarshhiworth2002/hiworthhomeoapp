@@ -122,8 +122,8 @@ class AmountBookViewModel extends ChangeNotifier {
     return log;
   }
 
-  // Laravel invoice/payment dates often have no clock. We persist the
-  // wall-clock when each id first appears in the app so order stays stable.
+  // Prefer Laravel create_date (IST). Local first-seen is only a fallback
+  // when create_date is null / date-only so order stays stable offline.
   static bool _hasEstablishedInvoiceBaseline = false;
   static final Set<int> _knownInvoiceIds = {};
   static final Map<int, DateTime> _saleSeenAt = {};
@@ -155,12 +155,24 @@ class AmountBookViewModel extends ChangeNotifier {
     unawaited(CashBookSeenAtStore.persist());
   }
 
+  static DateTime? _apiCreateClock(NetAmountRow row) {
+    final created = CalendarDate.parseApiCreateDate(row.createdAt);
+    if (created != null && CalendarDate.hasClockTime(created)) return created;
+    return null;
+  }
+
   static void _trackNewlySeenInvoices(List<NetAmountRow> rows) {
     final currentIds = <int>{};
     for (final row in rows) {
       final id = row.id;
       if (id == null || row.sectionKey == 'cancel') continue;
       currentIds.add(id);
+      // Always mirror Laravel create_date into memory when present.
+      final api = _apiCreateClock(row);
+      if (api != null) {
+        _saleSeenAt[id] = api;
+        _knownInvoiceIds.add(id);
+      }
     }
 
     if (!_hasEstablishedInvoiceBaseline) {
@@ -168,24 +180,35 @@ class AmountBookViewModel extends ChangeNotifier {
       _hasEstablishedInvoiceBaseline = true;
       final ordered = [...rows]
         ..removeWhere((r) => r.id == null || r.sectionKey == 'cancel')
-        ..sort((a, b) => (a.id ?? 0).compareTo(b.id ?? 0));
+        ..sort((a, b) {
+          final ca = _apiCreateClock(a);
+          final cb = _apiCreateClock(b);
+          if (ca != null && cb != null) {
+            final cmp = ca.compareTo(cb);
+            if (cmp != 0) return cmp;
+          } else if (ca != null) {
+            return 1;
+          } else if (cb != null) {
+            return -1;
+          }
+          return (a.id ?? 0).compareTo(b.id ?? 0);
+        });
       final base = DateTime.now().subtract(Duration(seconds: ordered.length + 1));
       for (var i = 0; i < ordered.length; i++) {
         final id = ordered[i].id!;
+        if (_apiCreateClock(ordered[i]) != null) continue;
         if (_saleSeenAt.containsKey(id)) continue;
-        final created = CalendarDate.parseDateTime(ordered[i].createdAt);
-        if (created != null && CalendarDate.hasClockTime(created)) {
-          _rememberSaleSeen(id, created);
-        } else {
-          // Stable synthetic clock so date-only Laravel rows do not reshuffle.
-          _rememberSaleSeen(id, base.add(Duration(seconds: i + 1)));
-        }
+        // No create_date — stable local fallback only.
+        _rememberSaleSeen(id, base.add(Duration(seconds: i + 1)));
       }
       return;
     }
 
     final now = DateTime.now();
-    for (final id in currentIds) {
+    for (final row in rows) {
+      final id = row.id;
+      if (id == null || row.sectionKey == 'cancel') continue;
+      if (_apiCreateClock(row) != null) continue;
       if (_knownInvoiceIds.add(id) && !_saleSeenAt.containsKey(id)) {
         _rememberSaleSeen(id, now);
       }
@@ -200,14 +223,16 @@ class AmountBookViewModel extends ChangeNotifier {
     if (invoiceId == null) {
       return [PaymentLogEntry(amount: totalAmount, time: fallbackDate)];
     }
+    // Laravel create_date wins whenever the API supplied a real clock.
+    if (CalendarDate.hasClockTime(fallbackDate)) {
+      _saleSeenAt[invoiceId] = fallbackDate;
+      return [PaymentLogEntry(amount: totalAmount, time: fallbackDate)];
+    }
+    // create_date null / date-only → local first-seen fallback.
     final seenAt = _saleSeenAt[invoiceId] ?? CashBookSeenAtStore.saleAt(invoiceId);
     if (seenAt != null) {
       _saleSeenAt[invoiceId] = seenAt;
       return [PaymentLogEntry(amount: totalAmount, time: seenAt)];
-    }
-    if (CalendarDate.hasClockTime(fallbackDate)) {
-      _rememberSaleSeen(invoiceId, fallbackDate);
-      return [PaymentLogEntry(amount: totalAmount, time: fallbackDate)];
     }
     final stamped = DateTime.now();
     _rememberSaleSeen(invoiceId, stamped);
@@ -222,18 +247,23 @@ class AmountBookViewModel extends ChangeNotifier {
     if (!_paymentBaselineReady) {
       final ordered = [...rows]
         ..removeWhere((p) => p.id == null)
-        ..sort((a, b) => (a.id ?? 0).compareTo(b.id ?? 0));
+        ..sort((a, b) {
+          if (a.hasApiCreateClock && b.hasApiCreateClock) {
+            final cmp = a.dateTime!.compareTo(b.dateTime!);
+            if (cmp != 0) return cmp;
+          }
+          return (a.id ?? 0).compareTo(b.id ?? 0);
+        });
       final base = DateTime.now().subtract(Duration(seconds: ordered.length + 1));
       for (var i = 0; i < ordered.length; i++) {
         final payment = ordered[i];
         final id = payment.id!;
-        if (_paymentSeenAt.containsKey(id)) continue;
-        final apiTime = payment.dateTime;
-        if (apiTime != null && CalendarDate.hasClockTime(apiTime)) {
-          _rememberPaymentSeen(id, apiTime);
-        } else {
-          _rememberPaymentSeen(id, base.add(Duration(seconds: i + 1)));
+        if (payment.hasApiCreateClock) {
+          _paymentSeenAt[id] = payment.dateTime!;
+          continue;
         }
+        if (_paymentSeenAt.containsKey(id)) continue;
+        _rememberPaymentSeen(id, base.add(Duration(seconds: i + 1)));
       }
       _paymentBaselineReady = true;
     }
@@ -250,6 +280,11 @@ class AmountBookViewModel extends ChangeNotifier {
   ) {
     final id = payment.id;
     if (id == null) return payment;
+    // Prefer Laravel create_date — never overwrite with local stamp.
+    if (payment.hasApiCreateClock) {
+      _paymentSeenAt[id] = payment.dateTime!;
+      return payment;
+    }
     final seen = _paymentSeenAt[id] ?? CashBookSeenAtStore.paymentAt(id);
     if (seen == null) {
       _rememberPaymentSeen(id, now);
@@ -270,6 +305,20 @@ class AmountBookViewModel extends ChangeNotifier {
   bool _fetchBusy = false;
   bool _enrichBusy = false;
   bool _prefetchBalancesBusy = false;
+
+  /// One ledger build per notify — open/list was rebuilding this 5–10× / frame.
+  List<AmountBookCustomerSummary>? _allSummariesCache;
+  List<AmountBookCustomerSummary>? _filteredSummariesCache;
+  final Map<String, List<AmountBookLedgerEntry>> _ledgerByCustomer = {};
+  final Map<String, AmountBookCustomerFooter> _footerByCustomer = {};
+  final Map<String, Future<void>> _balanceInFlight = {};
+
+  void _invalidateLedgerCaches() {
+    _allSummariesCache = null;
+    _filteredSummariesCache = null;
+    _ledgerByCustomer.clear();
+    _footerByCustomer.clear();
+  }
 
   bool get hasData =>
       youGotInvoices.isNotEmpty || payments.isNotEmpty;
@@ -292,6 +341,7 @@ class AmountBookViewModel extends ChangeNotifier {
   }
 
   void _safeNotify() {
+    _invalidateLedgerCaches();
     if (!_disposed) notifyListeners();
   }
 
@@ -507,7 +557,7 @@ class AmountBookViewModel extends ChangeNotifier {
   }
 
   List<AmountBookCustomerSummary> get allCustomerSummaries =>
-      AmountBookLedgerBuilder.buildCustomerSummaries(
+      _allSummariesCache ??= AmountBookLedgerBuilder.buildCustomerSummaries(
         youGotRows: youGotInvoices,
         youGaveRows: youGaveBills,
         paymentEventsFor: _paymentEventsFor,
@@ -515,15 +565,18 @@ class AmountBookViewModel extends ChangeNotifier {
         payments: payments,
       );
 
-  List<AmountBookCustomerSummary> get customerSummaries =>
-      AmountBookLedgerBuilder.buildCustomerSummaries(
-        youGotRows: youGotInvoices,
-        youGaveRows: youGaveBills,
-        filter: filter,
-        paymentEventsFor: _paymentEventsFor,
-        saleEventsFor: _saleEventsFor,
-        payments: payments,
-      );
+  List<AmountBookCustomerSummary> get customerSummaries {
+    if (!filter.isActive) return allCustomerSummaries;
+    return _filteredSummariesCache ??=
+        AmountBookLedgerBuilder.buildCustomerSummaries(
+      youGotRows: youGotInvoices,
+      youGaveRows: youGaveBills,
+      filter: filter,
+      paymentEventsFor: _paymentEventsFor,
+      saleEventsFor: _saleEventsFor,
+      payments: payments,
+    );
+  }
 
   double get allYouGot {
     var sum = 0.0;
@@ -662,8 +715,8 @@ class AmountBookViewModel extends ChangeNotifier {
 
       if (_disposed) return;
 
-      await _ensureSeenAtHydrated();
-      if (_disposed) return;
+      // Don't block first paint on SharedPreferences — create_date is enough.
+      unawaited(_ensureSeenAtHydrated());
 
       CustomerInvoiceViewModel.seedFromPaymentHistory();
 
@@ -738,6 +791,35 @@ class AmountBookViewModel extends ChangeNotifier {
     final key = _normName(customerName);
     if (key.isEmpty) return;
 
+    // List + detail both fire this — share one in-flight request.
+    final pending = _balanceInFlight[key];
+    if (pending != null) {
+      await pending;
+      return;
+    }
+
+    final run = _ensureBalancesForCustomerBody(
+      context,
+      customerName,
+      key: key,
+      force: force,
+    );
+    _balanceInFlight[key] = run;
+    try {
+      await run;
+    } finally {
+      if (identical(_balanceInFlight[key], run)) {
+        _balanceInFlight.remove(key);
+      }
+    }
+  }
+
+  Future<void> _ensureBalancesForCustomerBody(
+    BuildContext context,
+    String customerName, {
+    required String key,
+    required bool force,
+  }) async {
     final existing = _balancesByCustomer[key];
     final hasMasterId = _masterCustomerIdByName[key] != null;
 
@@ -1220,13 +1302,17 @@ class AmountBookViewModel extends ChangeNotifier {
   }
 
   List<AmountBookLedgerEntry> ledgerForCustomer(String customerName) {
-    return AmountBookLedgerBuilder.entriesForCustomer(
-      customerName: customerName,
-      youGotRows: youGotInvoices,
-      youGaveRows: youGaveBills,
-      paymentEventsFor: _paymentEventsFor,
-      saleEventsFor: _saleEventsFor,
-      payments: payments,
+    final key = _normName(customerName);
+    return _ledgerByCustomer.putIfAbsent(
+      key,
+      () => AmountBookLedgerBuilder.entriesForCustomer(
+        customerName: customerName,
+        youGotRows: youGotInvoices,
+        youGaveRows: youGaveBills,
+        paymentEventsFor: _paymentEventsFor,
+        saleEventsFor: _saleEventsFor,
+        payments: payments,
+      ),
     );
   }
 
@@ -1261,6 +1347,23 @@ class AmountBookViewModel extends ChangeNotifier {
   static bool _looksLikePaymentNumber(String number) {
     final n = number.trim().toUpperCase();
     return n.startsWith('PAY/') || n.startsWith('PMT/');
+  }
+
+  /// Newest payment voucher that includes [invoiceId] (for `?partner_payment=`).
+  int? paymentIdForInvoice(int? invoiceId) {
+    if (invoiceId == null || invoiceId <= 0) return null;
+    int? best;
+    for (final payment in payments) {
+      final pid = payment.id;
+      if (pid == null || pid <= 0) continue;
+      for (final inv in payment.invoices) {
+        if (inv.invoiceId == invoiceId) {
+          if (best == null || pid > best) best = pid;
+          break;
+        }
+      }
+    }
+    return best;
   }
 
   AmountBookInvoiceLine _paymentBillLine(
@@ -1469,29 +1572,32 @@ class AmountBookViewModel extends ChangeNotifier {
   }
 
   AmountBookCustomerFooter footerForCustomer(String customerName) {
-    final base = AmountBookLedgerBuilder.footerForCustomer(
-      customerName: customerName,
-      invoiceRows: youGotInvoices,
-      filter: filter,
-      paymentEventsFor: _paymentEventsFor,
-      saleEventsFor: _saleEventsFor,
-      payments: payments,
-    );
-    final bal = _balancesByCustomer[_normName(customerName)];
-    // Masters cache wins over invoice/payment zeros (avoids footer glitch).
-    if (bal != null && bal.hasUseful) {
+    final key = _normName(customerName);
+    return _footerByCustomer.putIfAbsent(key, () {
+      final base = AmountBookLedgerBuilder.footerForCustomer(
+        customerName: customerName,
+        invoiceRows: youGotInvoices,
+        filter: filter,
+        paymentEventsFor: _paymentEventsFor,
+        saleEventsFor: _saleEventsFor,
+        payments: payments,
+      );
+      final bal = _balancesByCustomer[key];
+      // Masters cache wins over invoice/payment zeros (avoids footer glitch).
+      if (bal != null && bal.hasUseful) {
+        return AmountBookCustomerFooter(
+          advance: bal.advance ?? 0,
+          oldBalance: bal.oldBalance ?? 0,
+          balance: base.balance,
+        );
+      }
+      if (bal == null || !bal.hasAny) return base;
       return AmountBookCustomerFooter(
-        advance: bal.advance ?? 0,
-        oldBalance: bal.oldBalance ?? 0,
+        advance: bal.advance ?? base.advance,
+        oldBalance: bal.oldBalance ?? base.oldBalance,
         balance: base.balance,
       );
-    }
-    if (bal == null || !bal.hasAny) return base;
-    return AmountBookCustomerFooter(
-      advance: bal.advance ?? base.advance,
-      oldBalance: bal.oldBalance ?? base.oldBalance,
-      balance: base.balance,
-    );
+    });
   }
 
   /// Resolve a cash-book line to the customer invoice used by detail screen.

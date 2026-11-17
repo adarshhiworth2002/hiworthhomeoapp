@@ -227,7 +227,7 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
   ) {
     if (model.loading && model.items.isEmpty) {
       return const Center(
-        child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
+        child: CircularProgressIndicator(color: Color(0xFF00BCF8)),
       );
     }
     if (model.error.isNotEmpty && model.items.isEmpty) {
@@ -239,7 +239,7 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
 
     if (model.items.isEmpty) {
       return RefreshIndicator(
-        color: const Color(0xFFE07A2F),
+        color: const Color(0xFF00BCF8),
         displacement: 28,
         onRefresh: () => model.fetch(context, forceRefresh: true, silent: true),
         child: ListView(
@@ -260,7 +260,7 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
     }
     if (filtered.isEmpty) {
       return RefreshIndicator(
-        color: const Color(0xFFE07A2F),
+        color: const Color(0xFF00BCF8),
         displacement: 28,
         onRefresh: () => model.fetch(context, forceRefresh: true, silent: true),
         child: ListView(
@@ -280,7 +280,7 @@ class _CustomerInvoiceListPageState extends State<CustomerInvoiceListPage>
       );
     }
     return RefreshIndicator(
-      color: const Color(0xFFE07A2F),
+      color: const Color(0xFF00BCF8),
       displacement: 28,
       onRefresh: () => model.fetch(context, forceRefresh: true, silent: true),
       child: ListView.separated(
@@ -374,7 +374,7 @@ class _InvoiceListTotals extends StatelessWidget {
               Text(
                 InvoiceSummaryModel.formatMoney(total),
                 style: const TextStyle(
-                  color: Color(0xFFE07A2F),
+                  color: Color(0xFF00BCF8),
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
                 ),
@@ -400,11 +400,11 @@ class _NewBillGradientButton extends StatelessWidget {
     begin: Alignment.centerLeft,
     end: Alignment.centerRight,
     colors: [
-      Color(0xFFE07A2F),
-      Color(0xFFE8A04A),
-      Color(0xFFC43B2E),
+      Color(0xFF00BCF8),
+      Color(0xFF0096C7),
+      Color(0xFF40B448),
     ],
-    stops: [0.0, 0.45, 1.0],
+    stops: [0.0, 0.48, 1.0],
   );
 
   @override
@@ -423,9 +423,9 @@ class _NewBillGradientButton extends StatelessWidget {
                     begin: Alignment.centerLeft,
                     end: Alignment.centerRight,
                     colors: [
-                      const Color(0xFFE07A2F).withValues(alpha: 0.45),
-                      const Color(0xFFE8A04A).withValues(alpha: 0.45),
-                      const Color(0xFFC43B2E).withValues(alpha: 0.45),
+                      const Color(0xFF00BCF8).withValues(alpha: 0.45),
+                      const Color(0xFF0096C7).withValues(alpha: 0.45),
+                      const Color(0xFF40B448).withValues(alpha: 0.45),
                     ],
                   )
                 : _gradient,
@@ -434,7 +434,7 @@ class _NewBillGradientButton extends StatelessWidget {
                 ? null
                 : [
                     BoxShadow(
-                      color: const Color(0xFFE07A2F).withValues(alpha: 0.35),
+                      color: const Color(0xFF00BCF8).withValues(alpha: 0.35),
                       blurRadius: 12,
                       offset: const Offset(0, 4),
                     ),
@@ -497,7 +497,7 @@ class _InvoiceFilterChips extends StatelessWidget {
           const Icon(
             Icons.filter_alt_outlined,
             size: 14,
-            color: Color(0xFFE07A2F),
+            color: Color(0xFF00BCF8),
           ),
           const SizedBox(width: 8),
           Expanded(

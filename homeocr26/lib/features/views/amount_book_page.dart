@@ -101,14 +101,7 @@ class _AmountBookPageState extends State<AmountBookPage>
   }
 
   void _openCustomerDetail(AmountBookCustomerSummary summary) {
-    // Force re-read during transition so website edits are not stuck in cache.
-    unawaited(
-      _viewModel.ensureBalancesForCustomer(
-        context,
-        summary.customerName,
-        force: true,
-      ),
-    );
+    // Detail page loads balances once (deduped) — avoid a second scrape here.
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ChangeNotifierProvider.value(
@@ -516,7 +509,13 @@ class _CustomerTab extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<AmountBookViewModel>(
       builder: (context, model, _) {
+        // Resolve once per rebuild — getters share one cached ledger pass.
         final summaries = model.customerSummaries;
+        final youGot = model.summaryYouGot;
+        final youGave = model.summaryYouGave;
+        final filteredYouGot = model.filteredYouGot;
+        final filteredYouGave = model.filteredYouGave;
+        final filteredBalance = model.filteredBalance;
 
         if (model.loading && model.youGotInvoices.isEmpty) {
           return const Center(
@@ -524,55 +523,83 @@ class _CustomerTab extends StatelessWidget {
           );
         }
 
+        // Header slots before the lazy customer rows.
+        final headerCount = 1 + // summary card block
+            1 + // section title
+            (model.filter.isActive ? 1 : 0) +
+            (model.error.isNotEmpty ? 1 : 0) +
+            (summaries.isEmpty ? 1 : 0);
+
         return Column(
           children: [
             Expanded(
               child: RefreshIndicator(
                 color: sectionAccent,
                 onRefresh: () => model.fetch(context, forceRefresh: true),
-                child: ListView(
+                child: ListView.builder(
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: SystemSafe.listPadding(context, extraBottom: 12),
-                  children: [
-                    const SizedBox(height: 8),
-                    _SummaryCard(
-                      youGot: model.summaryYouGot,
-                      youGave: model.summaryYouGave,
-                      loading: model.loading,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      model.filter.isActive
-                          ? 'Filtered customers'
-                          : 'All customers',
-                      style: TextStyle(
-                        color: sectionTextMuted,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    if (model.filter.isActive)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: _FilterChipBar(
-                          filter: model.filter,
-                          onClear: model.clearFilter,
-                        ),
-                      ),
-                    if (model.error.isNotEmpty)
-                      Padding(
+                  itemCount: headerCount + summaries.length,
+                  itemBuilder: (context, index) {
+                    if (index == 0) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const SizedBox(height: 8),
+                          _SummaryCard(
+                            youGot: youGot,
+                            youGave: youGave,
+                            loading: model.loading,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                      );
+                    }
+                    if (index == 1) {
+                      return Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: Text(
-                          model.error,
-                          style: const TextStyle(
+                          model.filter.isActive
+                              ? 'Filtered customers'
+                              : 'All customers',
+                          style: TextStyle(
                             color: sectionTextMuted,
                             fontSize: 15,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                      ),
-                    if (summaries.isEmpty)
-                      SizedBox(
+                      );
+                    }
+                    var cursor = 2;
+                    if (model.filter.isActive) {
+                      if (index == cursor) {
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _FilterChipBar(
+                            filter: model.filter,
+                            onClear: model.clearFilter,
+                          ),
+                        );
+                      }
+                      cursor++;
+                    }
+                    if (model.error.isNotEmpty) {
+                      if (index == cursor) {
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            model.error,
+                            style: const TextStyle(
+                              color: sectionTextMuted,
+                              fontSize: 15,
+                            ),
+                          ),
+                        );
+                      }
+                      cursor++;
+                    }
+                    if (summaries.isEmpty) {
+                      return SizedBox(
                         height: MediaQuery.sizeOf(context).height * 0.35,
                         child: Center(
                           child: Text(
@@ -582,25 +609,24 @@ class _CustomerTab extends StatelessWidget {
                             style: const TextStyle(color: sectionTextMuted),
                           ),
                         ),
-                      )
-                    else
-                      ...summaries.map(
-                        (summary) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: _CustomerCard(
-                            summary: summary,
-                            onTap: () => onOpenCustomer(summary),
-                          ),
-                        ),
+                      );
+                    }
+                    final summary = summaries[index - cursor];
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: _CustomerCard(
+                        summary: summary,
+                        onTap: () => onOpenCustomer(summary),
                       ),
-                  ],
+                    );
+                  },
                 ),
               ),
             ),
             _FilteredTotalsFooter(
-              youGot: model.filteredYouGot,
-              youGave: model.filteredYouGave,
-              balance: model.filteredBalance,
+              youGot: filteredYouGot,
+              youGave: filteredYouGave,
+              balance: filteredBalance,
               filtered: model.filter.isActive,
             ),
           ],

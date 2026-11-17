@@ -303,7 +303,7 @@ class _CustomerPaymentFromChequePageState
               left: 0,
               right: 0,
               child: LinearProgressIndicator(
-                color: Color(0xFFE07A2F),
+                color: Color(0xFF00BCF8),
                 backgroundColor: Colors.transparent,
                 minHeight: 2,
               ),
@@ -325,9 +325,9 @@ class _NewPaymentGradientButton extends StatelessWidget {
     begin: Alignment.centerLeft,
     end: Alignment.centerRight,
     colors: [
-      Color(0xFFE07A2F),
-      Color(0xFFE8A04A),
-      Color(0xFFC43B2E),
+      Color(0xFF00BCF8),
+      Color(0xFF0096C7),
+      Color(0xFF40B448),
     ],
   );
 
@@ -347,9 +347,9 @@ class _NewPaymentGradientButton extends StatelessWidget {
                     begin: Alignment.centerLeft,
                     end: Alignment.centerRight,
                     colors: [
-                      const Color(0xFFE07A2F).withValues(alpha: 0.45),
-                      const Color(0xFFE8A04A).withValues(alpha: 0.45),
-                      const Color(0xFFC43B2E).withValues(alpha: 0.45),
+                      const Color(0xFF00BCF8).withValues(alpha: 0.45),
+                      const Color(0xFF0096C7).withValues(alpha: 0.45),
+                      const Color(0xFF40B448).withValues(alpha: 0.45),
                     ],
                   )
                 : _gradient,
@@ -358,7 +358,7 @@ class _NewPaymentGradientButton extends StatelessWidget {
                 ? null
                 : [
                     BoxShadow(
-                      color: const Color(0xFFE07A2F).withValues(alpha: 0.35),
+                      color: const Color(0xFF00BCF8).withValues(alpha: 0.35),
                       blurRadius: 12,
                       offset: const Offset(0, 4),
                     ),
@@ -413,7 +413,7 @@ class _SectionCard extends StatelessWidget {
           Row(
             children: [
               if (icon != null) ...[
-                Icon(icon, color: const Color(0xFFE07A2F), size: 18),
+                Icon(icon, color: const Color(0xFF00BCF8), size: 18),
                 const SizedBox(width: 8),
               ],
               Text(

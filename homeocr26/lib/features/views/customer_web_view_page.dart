@@ -814,7 +814,7 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const CircularProgressIndicator(
-                        color: Color(0xFFE07A2F),
+                        color: Color(0xFF00BCF8),
                       ),
                       const SizedBox(height: 16),
                       Text(

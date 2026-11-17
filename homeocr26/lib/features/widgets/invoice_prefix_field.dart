@@ -160,7 +160,7 @@ class _InvoicePrefixFieldState extends State<InvoicePrefixField> {
 
   Color _statusColor(InvoiceSuggestion suggestion) {
     if (suggestion.isPaid) return Colors.redAccent;
-    if (!suggestion.isDraft) return Colors.orangeAccent;
+    if (!suggestion.isDraft) return const Color(0xFF00BCF8);
     return Colors.lightGreenAccent;
   }
 
@@ -220,7 +220,7 @@ class _InvoicePrefixFieldState extends State<InvoicePrefixField> {
                     ),
                   ),
                   focusedBorder: const UnderlineInputBorder(
-                    borderSide: BorderSide(color: const Color(0xFFE07A2F)),
+                    borderSide: BorderSide(color: const Color(0xFF00BCF8)),
                   ),
                 ),
                 onTap: () {
@@ -295,7 +295,7 @@ class _SuggestionsPanel extends StatelessWidget {
         color: const Color(0xFF1A2638),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: const Color(0xFFE07A2F).withValues(alpha: 0.55),
+          color: const Color(0xFF00BCF8).withValues(alpha: 0.55),
         ),
         boxShadow: [
           BoxShadow(
@@ -314,7 +314,7 @@ class _SuggestionsPanel extends StatelessWidget {
                   width: 22,
                   child: CircularProgressIndicator(
                     strokeWidth: 2.5,
-                    color: const Color(0xFFE07A2F),
+                    color: const Color(0xFF00BCF8),
                   ),
                 ),
               ),
@@ -346,7 +346,7 @@ class _SuggestionsPanel extends StatelessWidget {
                     ? Colors.redAccent.withValues(alpha: 0.9)
                     : suggestion.isDraft
                     ? Colors.greenAccent.withValues(alpha: 0.85)
-                    : Colors.orangeAccent.withValues(alpha: 0.9);
+                    : const Color(0xFF00BCF8).withValues(alpha: 0.9);
                 return Material(
                   color: Colors.transparent,
                   child: InkWell(
@@ -361,7 +361,7 @@ class _SuggestionsPanel extends StatelessWidget {
                           Icon(
                             Icons.receipt_long,
                             size: 18,
-                            color: const Color(0xFFE07A2F).withValues(alpha: 0.9),
+                            color: const Color(0xFF00BCF8).withValues(alpha: 0.9),
                           ),
                           const SizedBox(width: 10),
                           Expanded(

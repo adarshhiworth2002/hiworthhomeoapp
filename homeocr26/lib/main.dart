@@ -36,12 +36,13 @@ class MyApp extends StatelessWidget {
           brightness: Brightness.light,
           scaffoldBackgroundColor: appCream,
           colorScheme: ColorScheme.fromSeed(
-            seedColor: appOrange,
+            seedColor: appBlue,
             brightness: Brightness.light,
-            primary: appOrange,
-            secondary: appOrange,
+            primary: appBlue,
+            secondary: appGreen,
             surface: appWhite,
             onPrimary: appWhite,
+            onSecondary: appWhite,
             onSurface: appInk,
           ),
           appBarTheme: const AppBarTheme(
@@ -56,22 +57,44 @@ class MyApp extends StatelessWidget {
             ),
           ),
           progressIndicatorTheme: const ProgressIndicatorThemeData(
-            color: appOrange,
+            color: appBlue,
           ),
           floatingActionButtonTheme: const FloatingActionButtonThemeData(
-            backgroundColor: appOrange,
+            backgroundColor: appBlue,
             foregroundColor: appWhite,
           ),
           filledButtonTheme: FilledButtonThemeData(
             style: FilledButton.styleFrom(
-              backgroundColor: appOrange,
+              backgroundColor: appBlue,
+              foregroundColor: appWhite,
+            ),
+          ),
+          elevatedButtonTheme: ElevatedButtonThemeData(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: appBlue,
               foregroundColor: appWhite,
             ),
           ),
           tabBarTheme: const TabBarThemeData(
-            labelColor: appOrange,
+            labelColor: appBlue,
             unselectedLabelColor: appMuted,
-            indicatorColor: appOrange,
+            indicatorColor: appGreen,
+          ),
+          checkboxTheme: CheckboxThemeData(
+            fillColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) return appGreen;
+              return null;
+            }),
+          ),
+          switchTheme: SwitchThemeData(
+            thumbColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) return appWhite;
+              return null;
+            }),
+            trackColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) return appGreen;
+              return null;
+            }),
           ),
         ),
         debugShowCheckedModeBanner: false,

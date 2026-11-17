@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../models/qr_model.dart';
 import '../services/calendar_date.dart';
+import '../services/customer_invoice_pdf_service.dart';
 import '../services/invoice_calc_helper.dart';
 import '../services/invoice_detail_service.dart';
 import '../widgets/app_responsive.dart';
@@ -24,6 +25,7 @@ class CustomerInvoiceDetailPage extends StatefulWidget {
     this.allowScan = true,
     this.supplierLayout = false,
     this.balanceOverride,
+    this.partnerPaymentId,
   });
 
   final InvoiceSummaryModel invoice;
@@ -36,6 +38,8 @@ class CustomerInvoiceDetailPage extends StatefulWidget {
   /// When opening from a payment voucher, keep Balance after that pay
   /// (API detail often still returns pre-pay residual).
   final double? balanceOverride;
+  /// PAY nest → tax invoice print uses `?partner_payment=`.
+  final int? partnerPaymentId;
 
   @override
   State<CustomerInvoiceDetailPage> createState() =>
@@ -317,6 +321,17 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
         backgroundColor: sectionBg,
         elevation: 0,
         actions: [
+          if (!widget.supplierLayout)
+            IconButton(
+              tooltip: 'Share invoice PDF',
+              onPressed: () => CustomerInvoicePdfService.shareInvoice(
+                context,
+                invoice: _invoice,
+                // Set when opened from a PAY nest / linked payment.
+                partnerPaymentId: widget.partnerPaymentId,
+              ),
+              icon: const Icon(Icons.share_outlined, color: sectionText),
+            ),
           if (canEdit)
             IconButton(
               tooltip: 'Edit bill',
@@ -333,7 +348,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
       ),
       body: ResponsiveBody(
         child: RefreshIndicator(
-        color: const Color(0xFFE07A2F),
+        color: const Color(0xFF00BCF8),
         onRefresh: () async {
           setState(() => _loadingLines = true);
           await _loadDetail();
@@ -421,7 +436,7 @@ class _CustomerInvoiceDetailPageState extends State<CustomerInvoiceDetailPage>
                         height: 22,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: Color(0xFFE07A2F),
+                          color: Color(0xFF00BCF8),
                         ),
                       ),
                     ),

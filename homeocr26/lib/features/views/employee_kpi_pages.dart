@@ -114,7 +114,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage>
     return Theme(
       data: Theme.of(context).copyWith(
         colorScheme: const ColorScheme.light(
-          primary: Color(0xFFE07A2F),
+          primary: Color(0xFF00BCF8),
           onPrimary: Colors.white,
           surface: Colors.white,
           onSurface: Colors.black,
@@ -223,7 +223,7 @@ class _CompletedTodayPageState extends State<CompletedTodayPage>
           ),
           Expanded(
             child: RefreshIndicator(
-              color: const Color(0xFFE07A2F),
+              color: const Color(0xFF00BCF8),
               onRefresh: _onRefresh,
               child: _results.isEmpty
                   ? ListView(
@@ -415,11 +415,11 @@ class _ActiveSessionsTimerLogsPageState
       ),
       body: _loading
           ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
+              child: CircularProgressIndicator(color: Color(0xFF00BCF8)),
             )
           : ResponsiveBody(
               child: RefreshIndicator(
-              color: const Color(0xFFE07A2F),
+              color: const Color(0xFF00BCF8),
               onRefresh: () => _load(forceRefresh: true),
               child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
@@ -617,7 +617,7 @@ class _ActiveSessionBillDetailPageState
         children: [
           Expanded(
             child: RefreshIndicator(
-              color: const Color(0xFFE07A2F),
+              color: const Color(0xFF00BCF8),
               onRefresh: () async {},
               child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
@@ -681,7 +681,7 @@ class _ActiveSessionBillDetailPageState
                   controller: _tabs,
                   labelColor: sectionAccent,
                   unselectedLabelColor: sectionTextMuted,
-                  indicatorColor: const Color(0xFFE07A2F),
+                  indicatorColor: const Color(0xFF00BCF8),
                   tabs: const [
                     Tab(text: 'User Timings'),
                     Tab(text: 'All Bill Sessions'),
@@ -1078,7 +1078,7 @@ class _EmployeePerformanceGraphPageState
       ),
       body: ResponsiveBody(
         child: RefreshIndicator(
-        color: const Color(0xFFE07A2F),
+        color: const Color(0xFF00BCF8),
         onRefresh: _onRefresh,
         child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),

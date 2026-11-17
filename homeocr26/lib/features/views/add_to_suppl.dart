@@ -158,7 +158,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                       padding: const EdgeInsets.all(3.0),
                       child: const Icon(
                         Icons.refresh,
-                        color: const Color(0xFFE07A2F),
+                        color: const Color(0xFF00BCF8),
                       ),
                     ),
                   ),
@@ -195,7 +195,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                       padding: const EdgeInsets.all(3.0),
                       child: const Icon(
                         Icons.stop_circle,
-                        color: const Color(0xFFE07A2F),
+                        color: const Color(0xFF00BCF8),
                       ),
                     ),
                   ),
@@ -358,7 +358,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
           padding: EdgeInsets.all(30),
           child: Center(
             child: CircularProgressIndicator(
-              color: const Color(0xFFE07A2F),
+              color: const Color(0xFF00BCF8),
               strokeWidth: 4,
             ),
           ),
@@ -468,7 +468,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                 Icon(
                   icon,
                   size: 18,
-                  color: const Color(0xFFE07A2F).withValues(alpha: .8),
+                  color: const Color(0xFF00BCF8).withValues(alpha: .8),
                 ),
                 const SizedBox(width: 12),
               ],
@@ -549,7 +549,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
             Icon(
               icon,
               size: 22,
-              color: const Color(0xFFE07A2F).withValues(alpha: .8),
+              color: const Color(0xFF00BCF8).withValues(alpha: .8),
             ),
             const SizedBox(width: 12),
           ],
@@ -575,7 +575,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                   borderSide: BorderSide(color: sectionCardBorder),
                 ),
                 focusedBorder: UnderlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFFE07A2F)),
+                  borderSide: BorderSide(color: Color(0xFF00BCF8)),
                 ),
               ),
             ),
@@ -607,7 +607,7 @@ class _AddToSupplPageState extends State<AddToSupplPage> {
                             height: 20,
                             width: 20,
                             child: CircularProgressIndicator(
-                              color: Color(0xFFE07A2F),
+                              color: Color(0xFF00BCF8),
                               strokeWidth: 3,
                             ),
                           ),

@@ -343,10 +343,10 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
                             child: DecoratedBox(
                               decoration: BoxDecoration(
                                 border: Border.all(
-                                  color: const Color(0xFFE07A2F),
+                                  color: const Color(0xFF00BCF8),
                                   width: 1.5,
                                 ),
-                                color: const Color(0xFFE07A2F)
+                                color: const Color(0xFF00BCF8)
                                     .withValues(alpha: 0.12),
                               ),
                             ),
@@ -373,7 +373,7 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(color: Color(0xFFE07A2F)),
+            CircularProgressIndicator(color: Color(0xFF00BCF8)),
             SizedBox(height: 12),
             Text(
               'Reading label text…',
@@ -412,12 +412,12 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: _selectedIds.contains(element.id)
-                    ? const Color(0xFFE07A2F).withValues(alpha: 0.55)
+                    ? const Color(0xFF00BCF8).withValues(alpha: 0.55)
                     : Colors.white.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(3),
                 border: Border.all(
                   color: _selectedIds.contains(element.id)
-                      ? const Color(0xFFE07A2F)
+                      ? const Color(0xFF00BCF8)
                       : Colors.white.withValues(alpha: 0.25),
                   width: _selectedIds.contains(element.id) ? 1.5 : 0.5,
                 ),
@@ -479,7 +479,7 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: hasText
-                    ? const Color(0xFFE07A2F).withValues(alpha: 0.7)
+                    ? const Color(0xFF00BCF8).withValues(alpha: 0.7)
                     : sectionCardBorder,
               ),
             ),
@@ -506,7 +506,7 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
                 isDense: true,
                 contentPadding: EdgeInsets.zero,
               ),
-              cursorColor: const Color(0xFFE07A2F),
+              cursorColor: const Color(0xFF00BCF8),
             ),
           ),
           const SizedBox(height: 12),
@@ -533,10 +533,10 @@ class _LabelTextSelectPageState extends State<LabelTextSelectPage> {
                 child: FilledButton(
                   onPressed: _ocrLoading ? null : _onDone,
                   style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFFE07A2F),
+                    backgroundColor: const Color(0xFF00BCF8),
                     foregroundColor: Colors.white,
                     disabledBackgroundColor:
-                        const Color(0xFFE07A2F).withValues(alpha: 0.45),
+                        const Color(0xFF00BCF8).withValues(alpha: 0.45),
                     disabledForegroundColor: Colors.white70,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),

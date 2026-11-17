@@ -37,13 +37,14 @@ class _SelectionScreenState extends State<SelectionScreen> {
   late final NetAmountViewModel _netAmountViewModel;
   late final PaymentBookViewModel _paymentBookViewModel;
 
-  static const Color _primaryOrange = Color(0xFFF57C00);
+  static const Color _primaryBlue = Color(0xFF00BCF8);
+  static const Color _accentGreen = Color(0xFF40B448);
 
-  static const Color _pageBackground = Color(0xFFFFFBF7);
+  static const Color _pageBackground = Color(0xFFF0FAFD);
 
-  static const Color _textPrimary = Color(0xFF29231F);
+  static const Color _textPrimary = Color(0xFF14252B);
 
-  static const Color _textSecondary = Color(0xFF746A63);
+  static const Color _textSecondary = Color(0xFF5A6B72);
 
   @override
   void initState() {
@@ -205,7 +206,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
             children: [
               Icon(
                 Icons.logout_rounded,
-                color: _primaryOrange,
+                color: _primaryBlue,
               ),
               SizedBox(width: 10),
               Text(
@@ -244,7 +245,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
             ),
             FilledButton(
               style: FilledButton.styleFrom(
-                backgroundColor: _primaryOrange,
+                backgroundColor: _primaryBlue,
                 foregroundColor: Colors.white,
                 elevation: 0,
                 shape: RoundedRectangleBorder(
@@ -345,9 +346,9 @@ class _SelectionScreenState extends State<SelectionScreen> {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Color(0xFFFFE4CC),
-                  Color(0xFFFFF6EC),
-                  Color(0xFFFFFBF7),
+                  Color(0xFFCFF0FC),
+                  Color(0xFFE8F7E9),
+                  Color(0xFFF0FAFD),
                 ],
                 stops: [0.0, 0.22, 0.55],
               ),
@@ -375,7 +376,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                           _,
                           ) {
                         return RefreshIndicator(
-                          color: _primaryOrange,
+                          color: _primaryBlue,
                           backgroundColor: Colors.white,
                           onRefresh: () async {
                             await HomePrefetchService
@@ -432,11 +433,11 @@ class _SelectionScreenState extends State<SelectionScreen> {
                                         'assets/images/net_amount.png',
                                         accent:
                                         const Color(
-                                          0xFFF57C00,
+                                          0xFF00BCF8,
                                         ),
                                         background:
                                         const Color(
-                                          0xFFFFF3E8,
+                                          0xFFE3F7FE,
                                         ),
                                         onTap:
                                         _openNetAmount,
@@ -454,11 +455,11 @@ class _SelectionScreenState extends State<SelectionScreen> {
                                         'assets/images/cashbook.png',
                                         accent:
                                         const Color(
-                                          0xFFFF9800,
+                                          0xFF40B448,
                                         ),
                                         background:
                                         const Color(
-                                          0xFFFFF8E8,
+                                          0xFFE8F7E9,
                                         ),
                                         onTap: () {
                                           Navigator.of(
@@ -550,9 +551,43 @@ class _SelectionScreenState extends State<SelectionScreen> {
                                           Navigator.of(
                                             context,
                                           ).push(
-                                            MaterialPageRoute(
-                                              builder: (_) =>
-                                              const CustomerInvoiceListPage(),
+                                            PageRouteBuilder(
+                                              // Let home stay painted under the fade
+                                              // so open + back both crossfade.
+                                              opaque: false,
+                                              pageBuilder: (
+                                                context,
+                                                animation,
+                                                secondaryAnimation,
+                                              ) {
+                                                return const CustomerInvoiceListPage();
+                                              },
+                                              transitionDuration:
+                                                  const Duration(
+                                                milliseconds: 400,
+                                              ),
+                                              reverseTransitionDuration:
+                                                  const Duration(
+                                                milliseconds: 400,
+                                              ),
+                                              transitionsBuilder: (
+                                                context,
+                                                animation,
+                                                secondaryAnimation,
+                                                child,
+                                              ) {
+                                                final curved =
+                                                    CurvedAnimation(
+                                                  parent: animation,
+                                                  curve: Curves.easeInOut,
+                                                  reverseCurve:
+                                                      Curves.easeInOut,
+                                                );
+                                                return FadeTransition(
+                                                  opacity: curved,
+                                                  child: child,
+                                                );
+                                              },
                                             ),
                                           );
                                         },
@@ -785,10 +820,10 @@ class _SelectionScreenState extends State<SelectionScreen> {
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.94),
                 borderRadius: BorderRadius.circular(tablet ? 22 : 18),
-                border: Border.all(color: const Color(0xFFFFDFC6)),
+                border: Border.all(color: const Color(0xFFB8E9FA)),
                 boxShadow: [
                   BoxShadow(
-                    color: _primaryOrange.withValues(alpha: 0.10),
+                    color: _primaryBlue.withValues(alpha: 0.10),
                     blurRadius: 16,
                     offset: const Offset(0, 6),
                   ),
@@ -805,9 +840,12 @@ class _SelectionScreenState extends State<SelectionScreen> {
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
-                          Color(0xFFFFF3E0),
-                          Color(0xFFFFE0B2),
+                          Color(0xFFE3F7FE),
+                          Color(0xFFE8F7E9),
                         ],
+                      ),
+                      border: Border.all(
+                        color: _accentGreen.withValues(alpha: 0.35),
                       ),
                       borderRadius: BorderRadius.circular(tablet ? 18 : 14),
                     ),
@@ -865,10 +903,10 @@ class _SelectionScreenState extends State<SelectionScreen> {
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(tablet ? 18 : 15),
-                  border: Border.all(color: const Color(0xFFFFDFC6)),
+                  border: Border.all(color: const Color(0xFFB8E9FA)),
                   boxShadow: [
                     BoxShadow(
-                      color: _primaryOrange.withValues(alpha: 0.08),
+                      color: _primaryBlue.withValues(alpha: 0.08),
                       blurRadius: 14,
                       offset: const Offset(0, 5),
                     ),
@@ -876,7 +914,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                 ),
                 child: Icon(
                   Icons.logout_rounded,
-                  color: _primaryOrange,
+                  color: _primaryBlue,
                   size: tablet ? 28 : 22,
                 ),
               ),

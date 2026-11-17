@@ -89,13 +89,87 @@ class CalendarDate {
     return DateTime(local.year, local.month, local.day);
   }
 
+  /// Parse Laravel Cash Book `create_date` as an Asia/Kolkata wall clock.
+  ///
+  /// Laravel already converts UTC→IST on output and documents that clients
+  /// must not convert again. Naive `Y-m-d H:i:s` is kept as-is (local
+  /// components), never treated as UTC.
+  static DateTime? parseApiCreateDate(String? raw) {
+    final s = (raw ?? '').trim();
+    if (s.isEmpty || s == 'false') return null;
+
+    final dateOnly = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$');
+    final dm = dateOnly.firstMatch(s);
+    if (dm != null) {
+      return DateTime(
+        int.parse(dm.group(1)!),
+        int.parse(dm.group(2)!),
+        int.parse(dm.group(3)!),
+      );
+    }
+
+    final prefixed = RegExp(
+      r'^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?',
+    );
+    final pm = prefixed.firstMatch(s);
+    if (pm != null) {
+      return DateTime(
+        int.parse(pm.group(1)!),
+        int.parse(pm.group(2)!),
+        int.parse(pm.group(3)!),
+        int.parse(pm.group(4)!),
+        int.parse(pm.group(5)!),
+        int.tryParse(pm.group(6) ?? '') ?? 0,
+      );
+    }
+
+    final slash = RegExp(
+      r'^(\d{1,2})/(\d{1,2})/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?',
+    );
+    final sm = slash.firstMatch(s);
+    if (sm != null) {
+      final a = int.parse(sm.group(1)!);
+      final b = int.parse(sm.group(2)!);
+      final y = int.parse(sm.group(3)!);
+      final hour = int.tryParse(sm.group(4) ?? '') ?? 0;
+      final minute = int.tryParse(sm.group(5) ?? '') ?? 0;
+      final second = int.tryParse(sm.group(6) ?? '') ?? 0;
+      final day = a > 12 ? a : (b > 12 ? b : a);
+      final month = a > 12 ? b : (b > 12 ? a : b);
+      return DateTime(y, month, day, hour, minute, second);
+    }
+
+    return null;
+  }
+
+  /// Clock-time portion from Laravel `create_date_display` (`d/m/Y H:i:s`).
+  ///
+  /// Display-only helper — never use [create_date_display] for sorting.
+  static String formatTimeFromDisplay(String? display) {
+    final s = (display ?? '').trim();
+    if (s.isEmpty) return '';
+    final m = RegExp(r'(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$').firstMatch(s);
+    if (m == null) return '';
+    final hour = int.tryParse(m.group(1)!) ?? 0;
+    final minute = m.group(2)!;
+    final period = hour >= 12 ? 'PM' : 'AM';
+    final hour12 = hour % 12 == 0 ? 12 : hour % 12;
+    return '$hour12:$minute $period';
+  }
+
   /// Parse API datetime strings while keeping the clock time.
   ///
   /// Use this for ledger timestamps. [parse] always returns midnight so it
   /// can never drive a visible time-of-day.
+  ///
+  /// Prefer [parseApiCreateDate] for Laravel `create_date` (IST wall clock).
   static DateTime? parseDateTime(String? raw) {
     final s = (raw ?? '').trim();
     if (s.isEmpty || s == 'false') return null;
+
+    // Laravel Cash Book create_date is IST wall-clock — never UTC-shift it.
+    final ist = parseApiCreateDate(s);
+    if (ist != null && hasClockTime(ist)) return ist;
 
     final dateOnly = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$');
     final dm = dateOnly.firstMatch(s);
@@ -125,7 +199,8 @@ class CalendarDate {
         return DateTime(y, mo, d);
       }
       if (!hasZone) {
-        return DateTime.utc(y, mo, d, hour, minute, second).toLocal();
+        // Wall clock (same as create_date) — do not treat naive as UTC.
+        return DateTime(y, mo, d, hour, minute, second);
       }
     }
 

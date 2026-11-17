@@ -90,7 +90,7 @@ class _ChequeClearancePageState extends State<ChequeClearancePage>
           builder: (context, model, _) {
             if (model.loading && model.items.isEmpty) {
               return const Center(
-                child: CircularProgressIndicator(color: Color(0xFFE07A2F)),
+                child: CircularProgressIndicator(color: Color(0xFF00BCF8)),
               );
             }
             if (model.error.isNotEmpty && model.items.isEmpty) {
@@ -101,7 +101,7 @@ class _ChequeClearancePageState extends State<ChequeClearancePage>
             }
             if (model.items.isEmpty) {
               return RefreshIndicator(
-                color: const Color(0xFFE07A2F),
+                color: const Color(0xFF00BCF8),
                 onRefresh: () => model.fetch(context, forceRefresh: true),
                 child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -133,7 +133,7 @@ class _ChequeClearancePageState extends State<ChequeClearancePage>
                 ),
                 Expanded(
                   child: RefreshIndicator(
-                    color: const Color(0xFFE07A2F),
+                    color: const Color(0xFF00BCF8),
                     onRefresh: () => model.fetch(context, forceRefresh: true),
                     child: filtered.isEmpty
                         ? ListView(

@@ -125,6 +125,7 @@ class CustomerPaymentRecord {
     this.customerName = '',
     this.amount = 0,
     this.dateTime,
+    this.createDateDisplay,
     this.paymentMode,
     this.advanceAmount,
     this.oldBalance,
@@ -135,7 +136,10 @@ class CustomerPaymentRecord {
   final String name;
   final String customerName;
   final double amount;
+  /// Parsed Laravel `create_date` (IST wall clock). Sort key when present.
   final DateTime? dateTime;
+  /// Laravel `create_date_display` — UI text only.
+  final String? createDateDisplay;
   final String? paymentMode;
   /// Partner advance on the payment form (`advance_amt`).
   final double? advanceAmount;
@@ -143,8 +147,12 @@ class CustomerPaymentRecord {
   final double? oldBalance;
   final List<CustomerPaymentInvoice> invoices;
 
+  /// True when [dateTime] came from a real API clock (not date-only).
+  bool get hasApiCreateClock => CalendarDate.hasClockTime(dateTime);
+
   CustomerPaymentRecord copyWith({
     DateTime? dateTime,
+    String? createDateDisplay,
     List<CustomerPaymentInvoice>? invoices,
     double? advanceAmount,
     double? oldBalance,
@@ -155,6 +163,7 @@ class CustomerPaymentRecord {
       customerName: customerName,
       amount: amount,
       dateTime: dateTime ?? this.dateTime,
+      createDateDisplay: createDateDisplay ?? this.createDateDisplay,
       paymentMode: paymentMode,
       advanceAmount: advanceAmount ?? this.advanceAmount,
       oldBalance: oldBalance ?? this.oldBalance,
@@ -218,17 +227,22 @@ class CustomerPaymentRecord {
           ]) ??
           '',
       amount: amount,
-      dateTime: CalendarDate.parseDateTime(
-        _paymentStr(json, const [
-          'create_date',
-          'created_at',
-          'datetime',
-          'payment_datetime',
-          'write_date',
-          'payment_date',
-          'date',
-        ]),
-      ),
+      // Prefer create_date / created_at (IST). Never use write_date for order.
+      dateTime: CalendarDate.parseApiCreateDate(
+            _paymentStr(json, const [
+              'create_date',
+              'created_at',
+              'datetime',
+              'payment_datetime',
+            ]),
+          ) ??
+          CalendarDate.parseDateTime(
+            _paymentStr(json, const [
+              'payment_date',
+              'date',
+            ]),
+          ),
+      createDateDisplay: _paymentStr(json, const ['create_date_display']),
       paymentMode: _paymentStr(json, const [
         'payment_mode',
         'journal_type',

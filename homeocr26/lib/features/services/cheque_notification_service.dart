@@ -118,7 +118,7 @@ class ChequeNotificationService {
         ),
         leading: const Icon(
           Icons.account_balance_outlined,
-          color: Color(0xFFE07A2F),
+          color: Color(0xFF00BCF8),
         ),
         actions: [
           TextButton(
@@ -128,7 +128,7 @@ class ChequeNotificationService {
             },
             child: const Text(
               'Open',
-              style: TextStyle(color: Color(0xFFE07A2F)),
+              style: TextStyle(color: Color(0xFF00BCF8)),
             ),
           ),
           TextButton(

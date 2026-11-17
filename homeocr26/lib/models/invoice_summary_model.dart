@@ -338,6 +338,7 @@ class InvoiceSummaryModel {
     this.doctor,
     this.invoiceDate,
     this.createdAt,
+    this.createDateDisplay,
     this.expiryMedicineBill = false,
     this.verifyStatus,
     this.billedBy,
@@ -384,8 +385,10 @@ class InvoiceSummaryModel {
   final String? responsiblePerson;
   final String? doctor;
   final String? invoiceDate;
-  /// Raw Odoo `create_date` (datetime with time). Not used as the bill date.
+  /// Laravel `create_date` / `created_at` (IST wall clock). Cash Book sort key.
   final String? createdAt;
+  /// Laravel `create_date_display` — UI text only, never sort with this.
+  final String? createDateDisplay;
   final bool expiryMedicineBill;
   final String? verifyStatus;
   final String? billedBy;
@@ -520,6 +523,7 @@ class InvoiceSummaryModel {
       doctor: doctor,
       invoiceDate: invoiceDate,
       createdAt: createdAt,
+      createDateDisplay: createDateDisplay,
       expiryMedicineBill: expiryMedicineBill,
       verifyStatus: verifyStatus,
       billedBy: billedBy,
@@ -573,6 +577,7 @@ class InvoiceSummaryModel {
       doctor: other.doctor ?? doctor,
       invoiceDate: other.invoiceDate ?? invoiceDate,
       createdAt: other.createdAt ?? createdAt,
+      createDateDisplay: other.createDateDisplay ?? createDateDisplay,
       expiryMedicineBill:
           other.expiryMedicineBill || expiryMedicineBill,
       verifyStatus: other.verifyStatus ?? verifyStatus,
@@ -958,6 +963,7 @@ class InvoiceSummaryModel {
         'created_at',
         'create_datetime',
       ]),
+      createDateDisplay: _str(flat, const ['create_date_display']),
       expiryMedicineBill: flat['expiry_medicine_bill'] == true ||
           flat['expiry_medicine_bill'] == 1,
       verifyStatus: _str(flat, const [
