@@ -27,6 +27,49 @@ class FlutterCustomerInvoiceWebApi {
     _cachedWebsiteCookiesAt = null;
   }
 
+  /// Warm Laravel web cookies so the next print HTML/PDF skips re-login.
+  static Future<bool> warmWebsiteSession({
+    required String email,
+    required String password,
+    String? apiToken,
+  }) async {
+    final login = email.trim();
+    final pass = password;
+    if (login.isEmpty || pass.isEmpty) return false;
+    final base = AppConfig.webViewBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    if (base.isEmpty) return false;
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 25);
+    try {
+      final bearer = (apiToken ?? AuthSessionStore.currentApiToken).trim();
+      final cookies = await _obtainWebsiteCookies(
+        client: client,
+        base: base,
+        email: login,
+        password: pass,
+        bearerToken: bearer,
+      );
+      return cookies != null && cookies.isNotEmpty;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FlutterCustomerInvoiceWebApi.warmWebsiteSession: $e');
+      }
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static void _rememberWebsiteCookies(
+    Map<String, String> cookies, {
+    required String email,
+    required String bearerToken,
+  }) {
+    if (cookies.isEmpty) return;
+    _cachedWebsiteCookies = Map<String, String>.from(cookies);
+    _cachedWebsiteCookieKey = '$email|${bearerToken.isNotEmpty}';
+    _cachedWebsiteCookiesAt = DateTime.now();
+  }
+
   /// Hard-delete a draft bill on the Laravel website so the invoice number
   /// can be reused.
   ///
@@ -968,6 +1011,11 @@ class FlutterCustomerInvoiceWebApi {
         return null;
       }
 
+      _rememberWebsiteCookies(
+        cookies,
+        email: login,
+        bearerToken: bearer,
+      );
       if (kDebugMode) {
         debugPrint(
           'FlutterCustomerInvoiceWebApi.fetchPrintHtml: OK ${body.length} bytes '
@@ -1079,6 +1127,11 @@ class FlutterCustomerInvoiceWebApi {
               bytes[1] == 0x50 &&
               bytes[2] == 0x44 &&
               bytes[3] == 0x46) {
+            _rememberWebsiteCookies(
+              cookies,
+              email: login,
+              bearerToken: bearer,
+            );
             if (kDebugMode) {
               debugPrint(
                 'FlutterCustomerInvoiceWebApi.fetchPrintPdf: OK '
@@ -1105,6 +1158,43 @@ class FlutterCustomerInvoiceWebApi {
     } catch (e) {
       if (kDebugMode) {
         debugPrint('FlutterCustomerInvoiceWebApi.fetchPrintPdf: $e');
+      }
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// Public website session for Customer Web View SSO (same login as the app).
+  static Future<Map<String, String>?> obtainWebsiteSessionCookies({
+    required String email,
+    required String password,
+    String? apiToken,
+    bool forceRefresh = false,
+  }) async {
+    final login = email.trim();
+    final pass = password;
+    if (login.isEmpty || pass.isEmpty) return null;
+    final base = AppConfig.webViewBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 25);
+    try {
+      if (forceRefresh) {
+        _cachedWebsiteCookies = null;
+        _cachedWebsiteCookieKey = null;
+        _cachedWebsiteCookiesAt = null;
+      }
+      return await _obtainWebsiteCookies(
+        client: client,
+        base: base,
+        email: login,
+        password: pass,
+        bearerToken: (apiToken ?? AuthSessionStore.currentApiToken).trim(),
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          'FlutterCustomerInvoiceWebApi.obtainWebsiteSessionCookies: $e',
+        );
       }
       return null;
     } finally {

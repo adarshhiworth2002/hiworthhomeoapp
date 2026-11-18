@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../models/amount_book_model.dart';
 import '../../models/invoice_summary_model.dart';
 import '../../viewModels/amount_book_viewmodel.dart';
+import '../../viewModels/login_viewmodel.dart';
 import '../services/customer_invoice_pdf_service.dart';
 import '../theme.dart';
 import '../widgets/app_responsive.dart';
@@ -89,12 +90,57 @@ class _AmountBookInvoiceTablePageState extends State<AmountBookInvoiceTablePage>
       if (loaded.isNotEmpty) {
         setState(() => _paymentLines = loaded);
       }
+      // Warm session + prefetch receipt / bill PDFs for faster Share.
+      if (!silent) {
+        unawaited(_prefetchSharePdfs(loaded.isNotEmpty ? loaded : null));
+      }
     } finally {
       if (mounted && showSpinner) {
         setState(() => _loadingPaymentLines = false);
       } else if (mounted && _loadingPaymentLines) {
         setState(() => _loadingPaymentLines = false);
       }
+    }
+  }
+
+  Future<void> _prefetchSharePdfs(List<AmountBookInvoiceLine>? lines) async {
+    final paymentId = widget.paymentId;
+    if (paymentId == null || paymentId <= 0 || !mounted) return;
+    final login = context.read<LoginViewmodel>();
+    await CustomerInvoicePdfService.warmPrintSession(login);
+    if (!mounted) return;
+
+    double? amount;
+    for (final p in context.read<AmountBookViewModel>().payments) {
+      if (p.id == paymentId) {
+        amount = p.amount;
+        break;
+      }
+    }
+    unawaited(
+      CustomerInvoicePdfService.prefetchPayment(
+        login,
+        paymentId: paymentId,
+        paymentName: widget.paymentName,
+        customerName: widget.customerName,
+        amount: amount,
+      ),
+    );
+
+    final rows = lines ?? _resolveRows(context.read<AmountBookViewModel>());
+    // Prefetch first few bills (partner_payment) — enough for typical nest.
+    for (final line in rows.take(3)) {
+      final invoice = _invoiceForLine(line);
+      if (invoice.id == null || invoice.id! <= 0) continue;
+      unawaited(
+        CustomerInvoicePdfService.prefetchInvoice(
+          login,
+          invoice: invoice,
+          payAmount: line.youGotAmount ?? line.youGaveAmount,
+          paymentName: widget.paymentName,
+          partnerPaymentId: paymentId,
+        ),
+      );
     }
   }
 

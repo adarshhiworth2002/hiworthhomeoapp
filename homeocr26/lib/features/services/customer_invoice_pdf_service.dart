@@ -38,6 +38,13 @@ class CustomerInvoicePdfService {
     marginAll: 0,
   );
 
+  /// In-memory PDF cache so Share / WhatsApp reuse the same bytes.
+  static final Map<String, _CachedPdf> _pdfCache = {};
+  static final Map<String, Future<({Uint8List? bytes, String? filename, bool usedLocalFallback})>>
+      _pdfInFlight = {};
+  static const Duration _pdfCacheTtl = Duration(minutes: 12);
+  static const int _pdfCacheMaxEntries = 24;
+
   static Future<void> shareInvoice(
     BuildContext context, {
     required InvoiceSummaryModel invoice,
@@ -154,8 +161,164 @@ class CustomerInvoicePdfService {
     }
   }
 
+  static String _invoiceCacheKey(int? invoiceId, int? partnerPaymentId) =>
+      'inv:${invoiceId ?? 0}:pay:${partnerPaymentId ?? 0}';
+
+  static String _paymentCacheKey(int paymentId) => 'pmt:$paymentId';
+
+  static _CachedPdf? _cachedPdf(String key) {
+    final hit = _pdfCache[key];
+    if (hit == null) return null;
+    if (DateTime.now().difference(hit.at) > _pdfCacheTtl) {
+      _pdfCache.remove(key);
+      return null;
+    }
+    return hit;
+  }
+
+  static void _putPdfCache(
+    String key, {
+    required Uint8List bytes,
+    String? filename,
+    required bool usedLocalFallback,
+  }) {
+    if (bytes.isEmpty) return;
+    // Drop oldest when over capacity.
+    while (_pdfCache.length >= _pdfCacheMaxEntries) {
+      final oldestKey = _pdfCache.entries
+          .reduce((a, b) => a.value.at.isBefore(b.value.at) ? a : b)
+          .key;
+      _pdfCache.remove(oldestKey);
+    }
+    _pdfCache[key] = _CachedPdf(
+      bytes: bytes,
+      filename: filename,
+      usedLocalFallback: usedLocalFallback,
+      at: DateTime.now(),
+    );
+  }
+
+  /// Prefetch bill PDF (Share + WhatsApp reuse). Safe to call in background.
+  static Future<void> prefetchInvoice(
+    LoginViewmodel login, {
+    required InvoiceSummaryModel invoice,
+    double? payAmount,
+    String? paymentName,
+    int? partnerPaymentId,
+  }) async {
+    final id = invoice.id;
+    if (id == null || id <= 0) return;
+    final key = _invoiceCacheKey(id, partnerPaymentId);
+    if (_cachedPdf(key) != null) return;
+    try {
+      await _buildInvoicePdfBytes(
+        login: login,
+        invoice: invoice,
+        payAmount: payAmount,
+        paymentName: paymentName,
+        partnerPaymentId: partnerPaymentId,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('CustomerInvoicePdfService.prefetchInvoice: $e');
+      }
+    }
+  }
+
+  /// Prefetch payment receipt PDF for app-bar Share / WhatsApp.
+  static Future<void> prefetchPayment(
+    LoginViewmodel login, {
+    required int paymentId,
+    int? invoiceId,
+    String? paymentName,
+    String? customerName,
+    double? amount,
+  }) async {
+    if (paymentId <= 0) return;
+    final key = _paymentCacheKey(paymentId);
+    if (_cachedPdf(key) != null) return;
+    try {
+      await _buildPaymentPdfBytes(
+        login: login,
+        paymentId: paymentId,
+        invoiceId: invoiceId,
+        paymentName: paymentName,
+        customerName: customerName,
+        amount: amount,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('CustomerInvoicePdfService.prefetchPayment: $e');
+      }
+    }
+  }
+
+  /// Warm website cookies (no PDF build) so first share skips login.
+  static Future<void> warmPrintSession(LoginViewmodel login) async {
+    final creds = await _printCredentials(login);
+    if (creds == null) return;
+    await FlutterCustomerInvoiceWebApi.warmWebsiteSession(
+      email: creds.email,
+      password: creds.password,
+      apiToken: _bearerToken(login),
+    );
+  }
+
   static Future<({Uint8List? bytes, String? filename, bool usedLocalFallback})>
       _buildInvoicePdfBytes({
+    required LoginViewmodel login,
+    required InvoiceSummaryModel invoice,
+    double? payAmount,
+    String? paymentName,
+    int? partnerPaymentId,
+  }) async {
+    final id = invoice.id;
+    final cacheKey = _invoiceCacheKey(id, partnerPaymentId);
+    final cached = _cachedPdf(cacheKey);
+    if (cached != null) {
+      if (kDebugMode) {
+        debugPrint(
+          'CustomerInvoicePdfService: cache hit $cacheKey '
+          '(${cached.bytes.length} bytes)',
+        );
+      }
+      return (
+        bytes: cached.bytes,
+        filename: cached.filename,
+        usedLocalFallback: cached.usedLocalFallback,
+      );
+    }
+
+    final inflight = _pdfInFlight[cacheKey];
+    if (inflight != null) return inflight;
+
+    final future = _buildInvoicePdfBytesUncached(
+      login: login,
+      invoice: invoice,
+      payAmount: payAmount,
+      paymentName: paymentName,
+      partnerPaymentId: partnerPaymentId,
+    );
+    _pdfInFlight[cacheKey] = future;
+    try {
+      final built = await future;
+      final bytes = built.bytes;
+      if (bytes != null && bytes.isNotEmpty) {
+        _putPdfCache(
+          cacheKey,
+          bytes: bytes,
+          filename: built.filename,
+          usedLocalFallback: built.usedLocalFallback,
+        );
+      }
+      return built;
+    } finally {
+      _pdfInFlight.remove(cacheKey);
+    }
+  }
+
+  static Future<({Uint8List? bytes, String? filename, bool usedLocalFallback})>
+      _buildInvoicePdfBytesUncached({
     required LoginViewmodel login,
     required InvoiceSummaryModel invoice,
     double? payAmount,
@@ -384,6 +547,60 @@ class CustomerInvoicePdfService {
     String? customerName,
     double? amount,
   }) async {
+    final cacheKey = _paymentCacheKey(paymentId);
+    final cached = _cachedPdf(cacheKey);
+    if (cached != null) {
+      if (kDebugMode) {
+        debugPrint(
+          'CustomerInvoicePdfService: cache hit $cacheKey '
+          '(${cached.bytes.length} bytes)',
+        );
+      }
+      return (
+        bytes: cached.bytes,
+        filename: cached.filename,
+        usedLocalFallback: cached.usedLocalFallback,
+      );
+    }
+
+    final inflight = _pdfInFlight[cacheKey];
+    if (inflight != null) return inflight;
+
+    final future = _buildPaymentPdfBytesUncached(
+      login: login,
+      paymentId: paymentId,
+      invoiceId: invoiceId,
+      paymentName: paymentName,
+      customerName: customerName,
+      amount: amount,
+    );
+    _pdfInFlight[cacheKey] = future;
+    try {
+      final built = await future;
+      final bytes = built.bytes;
+      if (bytes != null && bytes.isNotEmpty) {
+        _putPdfCache(
+          cacheKey,
+          bytes: bytes,
+          filename: built.filename,
+          usedLocalFallback: built.usedLocalFallback,
+        );
+      }
+      return built;
+    } finally {
+      _pdfInFlight.remove(cacheKey);
+    }
+  }
+
+  static Future<({Uint8List? bytes, String? filename, bool usedLocalFallback})>
+      _buildPaymentPdfBytesUncached({
+    required LoginViewmodel login,
+    required int paymentId,
+    int? invoiceId,
+    String? paymentName,
+    String? customerName,
+    double? amount,
+  }) async {
     Uint8List? bytes;
     String? serverName;
     var usedLocalFallback = false;
@@ -589,11 +806,12 @@ class CustomerInvoicePdfService {
   }
 
   /// Re-wrap any Letter/odd PDF onto A4 so Android print isn't letterboxed.
+  /// DPI 110 keeps share readable while cutting raster time vs 144.
   static Future<Uint8List> _normalizeToA4(Uint8List bytes) async {
     try {
       final doc = pw.Document();
       var pages = 0;
-      await for (final page in Printing.raster(bytes, dpi: 144)) {
+      await for (final page in Printing.raster(bytes, dpi: 110)) {
         pages++;
         final png = await page.toPng();
         final image = pw.MemoryImage(png);
@@ -1018,4 +1236,18 @@ table {
       SnackBar(content: Text(message)),
     );
   }
+}
+
+class _CachedPdf {
+  const _CachedPdf({
+    required this.bytes,
+    required this.filename,
+    required this.usedLocalFallback,
+    required this.at,
+  });
+
+  final Uint8List bytes;
+  final String? filename;
+  final bool usedLocalFallback;
+  final DateTime at;
 }

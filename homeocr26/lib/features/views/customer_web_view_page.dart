@@ -7,13 +7,21 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
+// Android CookieManager needs a real URL + raw cookie values; the public
+// WebViewCookie helper encodes values and passes a bare host, which breaks
+// Laravel session cookies (and SSO) on IP hosts.
+// ignore: implementation_imports
+import 'package:webview_flutter_android/src/android_webkit.g.dart'
+    as android_webkit;
 
 import '../../models/invoice_summary_model.dart';
 import '../../viewModels/login_viewmodel.dart';
 import '../services/WebApi/web_api_impl.dart';
 import '../services/api_request_helper.dart';
 import '../services/appConfig.dart';
+import '../services/auth_session_store.dart';
 import '../services/endPoints.dart';
+import '../services/flutter_customer_invoice_web_api.dart';
 import 'add_to_customer.dart';
 import '../theme.dart';
 
@@ -41,6 +49,9 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
 
   bool _isLoading = true;
   bool _signingIn = true;
+  /// Hybrid composition draws above Flutter overlays — keep the platform
+  /// WebView out of the tree until SSO has landed off /login.
+  bool _webViewVisible = false;
   bool _busy = false;
   String? _error;
   String _status = 'Signing in…';
@@ -119,11 +130,20 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
           debugPrint('[CustomerWebView] finish: $url');
           setState(() => _isLoading = false);
           _completePageIfWaiting(url);
+          // Avoid bridge/JS work during hidden SSO — it races hybrid composition
+          // teardown and can throw on the JavaScriptChannel pigeon handler.
+          if (_signingIn || !_webViewVisible) {
+            await _tryAutoLoginIfNeeded(url);
+            return;
+          }
           await _injectInvoiceTracker();
-          await _tryAutoLoginIfNeeded(url);
         },
         onWebResourceError: (error) {
           if (!mounted || error.isForMainFrame != true) return;
+          if (_signingIn) {
+            debugPrint('[CustomerWebView] load error during SSO: ${error.description}');
+            return;
+          }
           setState(() {
             _error = error.description;
             _isLoading = false;
@@ -150,6 +170,10 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
 
     if (!mounted) return;
     setState(() => _controller = controller);
+    // Let the 1×1 platform view attach before the first navigation.
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    if (!mounted) return;
     await _openInvoices();
   }
 
@@ -642,44 +666,98 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
   String? _autoLoginPassword;
   bool _autoLoginAttempted = false;
 
+  bool _isLoginPageUrl(String url) {
+    final lower = url.toLowerCase();
+    return lower.contains('/login');
+  }
+
+  String _cookieValueForWebView(String raw) {
+    // Prefer the decoded form browsers store/send. Raw Set-Cookie lines may
+    // still be percent-encoded from the HTTP jar.
+    if (!raw.contains('%')) return raw;
+    try {
+      return Uri.decodeComponent(raw);
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  Future<void> _applyWebsiteCookies(Map<String, String> cookies) async {
+    final origin = CustomerWebViewPage.cookieOrigin;
+    final host = Uri.tryParse(CustomerWebViewPage.baseUrl)?.host;
+    if (host == null || host.isEmpty) return;
+
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      final cm = android_webkit.CookieManager.instance;
+      for (final entry in cookies.entries) {
+        if (entry.key.isEmpty) continue;
+        final value = _cookieValueForWebView(entry.value);
+        try {
+          // Full URL required; do not re-encode Laravel cookie payloads.
+          await cm.setCookie(origin, '${entry.key}=$value; Path=/');
+        } catch (e) {
+          debugPrint('[CustomerWebView] setCookie ${entry.key}: $e');
+        }
+      }
+      // Let CookieManager settle before the first authenticated navigation.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      return;
+    }
+
+    for (final entry in cookies.entries) {
+      if (entry.key.isEmpty) continue;
+      try {
+        await _cookieManager.setCookie(
+          WebViewCookie(
+            name: entry.key,
+            value: _cookieValueForWebView(entry.value),
+            domain: host,
+            path: '/',
+          ),
+        );
+      } catch (e) {
+        debugPrint('[CustomerWebView] setCookie ${entry.key}: $e');
+      }
+    }
+  }
+
   Future<void> _tryAutoLoginIfNeeded(String url) async {
     final controller = _controller;
     final email = (_autoLoginEmail ?? '').trim();
     final password = _autoLoginPassword ?? '';
-    if (controller == null || email.isEmpty || password.isEmpty) return;
-    if (_autoLoginAttempted) return;
+    if (controller == null) return;
 
-    final lower = url.toLowerCase();
-    final onLogin = lower.contains('/login') ||
-        lower == CustomerWebViewPage.homeUrl.toLowerCase() ||
-        lower == '${CustomerWebViewPage.baseUrl.toLowerCase()}/';
-    if (!onLogin) {
-      // Already inside the authenticated site.
+    // Authenticated — keep WebView hidden until _openInvoices reveals it.
+    if (!_isLoginPageUrl(url)) {
       if (mounted && _signingIn) {
-        setState(() {
-          _signingIn = false;
-          _status = 'Website ready';
-        });
+        setState(() => _status = 'Website ready');
       }
       return;
     }
 
+    // Still on /login — fill+submit while WebView is 1×1 (no flash).
+    if (email.isEmpty || password.isEmpty || _autoLoginAttempted) return;
     _autoLoginAttempted = true;
     final emailJs = jsonEncode(email);
     final passwordJs = jsonEncode(password);
     try {
       await controller.runJavaScript('''
-(function () {
+(function tryLogin(attempt) {
   var email = document.querySelector('input[name="email"], #email');
   var password = document.querySelector('input[name="password"], #password');
-  var form = document.querySelector('form.login-form, form[action*="login"]');
-  if (!email || !password || !form) return;
+  var form = document.querySelector('form.login-form, form[action*="login"], form');
+  if (!email || !password || !form) {
+    if (attempt < 25) setTimeout(function () { tryLogin(attempt + 1); }, 120);
+    return;
+  }
+  email.focus();
   email.value = $emailJs;
   password.value = $passwordJs;
   email.dispatchEvent(new Event('input', { bubbles: true }));
   password.dispatchEvent(new Event('input', { bubbles: true }));
-  form.submit();
-})();
+  var btn = form.querySelector('button[type="submit"], input[type="submit"], button');
+  if (btn) { btn.click(); } else { form.submit(); }
+})(0);
 ''');
       if (mounted) {
         setState(() => _status = 'Signing in to website…');
@@ -690,6 +768,42 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
     }
   }
 
+  Future<bool> _waitUntilAuthenticated({
+    required WebViewController controller,
+    required bool allowFormFallback,
+  }) async {
+    for (var i = 0; i < 40; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (!mounted) return false;
+      final current = await controller.currentUrl() ?? '';
+      if (current.isNotEmpty && !_isLoginPageUrl(current)) {
+        return true;
+      }
+      if (allowFormFallback && (i == 1 || i == 8 || i == 16)) {
+        _autoLoginAttempted = false;
+        await _tryAutoLoginIfNeeded(
+          current.isEmpty ? CustomerWebViewPage.loginUrl : current,
+        );
+      }
+    }
+    final landed = await controller.currentUrl() ?? '';
+    return landed.isNotEmpty && !_isLoginPageUrl(landed);
+  }
+
+  Future<void> _revealWebView() async {
+    if (!mounted) return;
+    setState(() {
+      _signingIn = false;
+      _webViewVisible = true;
+      _status = 'Website ready';
+    });
+    // One more frame so layout expands 1×1 → full before injecting trackers.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    await _injectInvoiceTracker();
+    unawaited(_prefetchInvoiceNumbers());
+  }
+
   Future<void> _openInvoices() async {
     final controller = _controller;
     if (controller == null || !mounted || _busy) return;
@@ -697,9 +811,10 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
 
     setState(() {
       _signingIn = true;
+      _webViewVisible = false;
       _isLoading = true;
       _error = null;
-      _status = 'Opening website…';
+      _status = 'Signing in to website…';
       _onInvoiceForm = false;
       _currentMoveId = null;
       _currentInvoiceNumber = null;
@@ -707,8 +822,13 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
     });
 
     final vm = context.read<LoginViewmodel>();
-    final login = (vm.loginEmail ?? '').trim();
-    final password = vm.loginPassword ?? '';
+    var login = (vm.loginEmail ?? '').trim();
+    var password = vm.loginPassword ?? '';
+    if (login.isEmpty || password.isEmpty) {
+      final saved = await AuthSessionStore.load();
+      login = (saved?.email ?? login).trim();
+      if (password.isEmpty) password = saved?.password ?? '';
+    }
     _autoLoginEmail = login;
     _autoLoginPassword = password;
     _autoLoginAttempted = false;
@@ -716,29 +836,75 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
     try {
       await _cookieManager.clearCookies();
 
-      // Load login first so we can auto-fill app credentials, then enter site.
-      final target = login.isNotEmpty && password.isNotEmpty
+      // Cookie SSO is best-effort on Android IP hosts; form login in a 1×1
+      // WebView is the reliable path and never paints the login screen.
+      var cookieSso = false;
+      if (login.isNotEmpty && password.isNotEmpty) {
+        final cookies =
+            await FlutterCustomerInvoiceWebApi.obtainWebsiteSessionCookies(
+          email: login,
+          password: password,
+          apiToken: AuthSessionStore.currentApiToken.isNotEmpty
+              ? AuthSessionStore.currentApiToken
+              : vm.sessionId,
+          forceRefresh: true,
+        );
+        if (cookies != null && cookies.isNotEmpty) {
+          await _applyWebsiteCookies(cookies);
+          cookieSso = true;
+          if (kDebugMode) {
+            debugPrint(
+              '[CustomerWebView] SSO cookies applied (${cookies.keys.join(', ')})',
+            );
+          }
+        }
+      }
+
+      if (cookieSso) {
+        if (mounted) setState(() => _status = 'Opening website…');
+        final waitHome = _waitForPage(CustomerWebViewPage.baseUrl);
+        await controller.loadRequest(Uri.parse(CustomerWebViewPage.homeUrl));
+        await waitHome;
+        if (!mounted) return;
+        final current = await controller.currentUrl() ?? '';
+        if (current.isNotEmpty && !_isLoginPageUrl(current)) {
+          await _revealWebView();
+          return;
+        }
+        if (kDebugMode) {
+          debugPrint(
+            '[CustomerWebView] cookie SSO bounced to login — form login in 1x1',
+          );
+        }
+      }
+
+      // Hidden form login with the same app credentials.
+      _autoLoginAttempted = false;
+      if (mounted) setState(() => _status = 'Signing in to website…');
+      final loginTarget = login.isNotEmpty && password.isNotEmpty
           ? CustomerWebViewPage.loginUrl
           : CustomerWebViewPage.homeUrl;
-      final wait = _waitForPage(CustomerWebViewPage.baseUrl);
-      await controller.loadRequest(Uri.parse(target));
-      await wait;
+      final waitLogin = _waitForPage(CustomerWebViewPage.baseUrl);
+      await controller.loadRequest(Uri.parse(loginTarget));
+      await waitLogin;
+      if (!mounted) return;
 
+      await _tryAutoLoginIfNeeded(loginTarget);
+      final ok = await _waitUntilAuthenticated(
+        controller: controller,
+        allowFormFallback: login.isNotEmpty && password.isNotEmpty,
+      );
       if (!mounted) return;
-      // If auto-login did not navigate away quickly, still show the page.
-      await Future<void>.delayed(const Duration(milliseconds: 800));
-      if (!mounted) return;
-      setState(() {
-        _signingIn = false;
-        _status = 'Website ready';
-      });
-      await _injectInvoiceTracker();
-      unawaited(_prefetchInvoiceNumbers());
+      if (kDebugMode) {
+        debugPrint('[CustomerWebView] auth ok=$ok url=${await controller.currentUrl()}');
+      }
+      await _revealWebView();
     } catch (e, st) {
       debugPrint('[CustomerWebView] failed: $e\n$st');
       if (!mounted) return;
       setState(() {
         _signingIn = false;
+        _webViewVisible = true;
         _isLoading = false;
         _error = e.toString();
       });
@@ -804,8 +970,20 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
         top: false,
         child: Stack(
           children: [
-          if (_error == null && controller != null) _buildWebView(controller),
-          if (_signingIn)
+          // Hybrid composition paints above Flutter widgets and often ignores
+          // negative offsets — keep a 1×1 attached WebView during SSO so /login
+          // cannot flash, then expand to full size after /home.
+          if (_error == null && controller != null)
+            Positioned(
+              left: 0,
+              top: 0,
+              width: _webViewVisible ? MediaQuery.sizeOf(context).width : 1,
+              height: _webViewVisible
+                  ? MediaQuery.sizeOf(context).height
+                  : 1,
+              child: _buildWebView(controller),
+            ),
+          if (_signingIn || (!_webViewVisible && _error == null))
             Positioned.fill(
               child: ColoredBox(
                 color: Colors.white,
@@ -827,7 +1005,7 @@ class _CustomerWebViewPageState extends State<CustomerWebViewPage> {
                 ),
               ),
             ),
-          if (!_signingIn && _isLoading && _error == null)
+          if (!_signingIn && _webViewVisible && _isLoading && _error == null)
             const Positioned(
               top: 0,
               left: 0,
